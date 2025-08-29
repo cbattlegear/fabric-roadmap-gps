@@ -1,28 +1,24 @@
-import os
 import json
+import os
+import urllib.parse
 import threading
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional, List
 
 from flask import Flask, request, Response, jsonify
 from html import escape
-import urllib.parse
 from email.utils import format_datetime
 import time as _time
 import hashlib
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
-try:
-    import redis as _redis
-except Exception:
-    _redis = None
+from db.redis_cache import RedisCache
 
-from db_sqlserver import make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values
+
+from db.db_sqlserver import make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values
 
 
 app = Flask(__name__)
-
-# Lazily create engine and redis on first use to avoid connecting at import time
 ENGINE = None
 REDIS = None
 
@@ -31,95 +27,8 @@ _TTL_SECONDS = 24 * 60 * 60  # 24 hours fresh
 _STALE_TTL_SECONDS = _TTL_SECONDS  # additional stale window
 _LOCK_TTL_SECONDS = 60  # lock TTL to avoid stampede during refresh
 
-
-def get_redis():
-    """Return a Redis client, configured from env.
-
-    Env options (in priority order):
-    - REDIS_URL (e.g., redis://:pass@host:6379/0)
-    - REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
-    """
-    global REDIS
-    if REDIS is None:
-        if _redis is None:
-            return None
-        url = os.getenv("REDIS_URL")
-        if url:
-            REDIS = _redis.Redis.from_url(url, decode_responses=True)
-        else:
-            host = os.getenv("REDIS_HOST", "localhost")
-            port = int(os.getenv("REDIS_PORT", "6379"))
-            db = int(os.getenv("REDIS_DB", "0"))
-            password = os.getenv("REDIS_PASSWORD")
-            REDIS = _redis.Redis(host=host, port=port, db=db, password=password, decode_responses=True)
-    return REDIS
-
-
-def _key_id(parts: tuple[str, ...]) -> str:
-    """Create a stable short key id from tuple of parts."""
-    joined = "\u0001".join([p or "" for p in parts])
-    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
-
-
-def _cache_key(prefix: str, parts: tuple[str, ...]) -> tuple[str, str]:
-    """Return (data_key, lock_key) for a given prefix and parameter tuple."""
-    kid = _key_id(parts)
-    return f"cache:{prefix}:{kid}", f"lock:{prefix}:{kid}"
-
-
-def _cache_get(prefix: str, parts: tuple[str, ...]) -> Optional[dict]:
-    """Get cached entry JSON from Redis. Returns dict or None.
-    Entry schema: { body, etag, built_iso, fresh_until_ts, stale_until_ts }
-    """
-    try:
-        r = get_redis()
-        key, _ = _cache_key(prefix, parts)
-        raw = r.get(key)
-        if not raw:
-            return None
-        return json.loads(raw)
-    except Exception:
-        return None
-
-
-def _cache_set(prefix: str, parts: tuple[str, ...], body: str, etag: str, built_dt: datetime):
-    now = _time.time()
-    fresh_until = now + _TTL_SECONDS
-    stale_until = fresh_until + _STALE_TTL_SECONDS
-    entry = {
-        "body": body,
-        "etag": etag,
-        "built_iso": built_dt.astimezone(timezone.utc).isoformat(),
-        "fresh_until_ts": fresh_until,
-        "stale_until_ts": stale_until,
-    }
-    ttl = int(_TTL_SECONDS + _STALE_TTL_SECONDS)
-    try:
-        r = get_redis()
-        key, _ = _cache_key(prefix, parts)
-        r.setex(key, ttl, json.dumps(entry, separators=(",", ":")))
-    except Exception:
-        # Best-effort; if Redis is unavailable we simply don't cache
-        pass
-
-
-def _try_acquire_lock(prefix: str, parts: tuple[str, ...]) -> bool:
-    try:
-        r = get_redis()
-        _, lkey = _cache_key(prefix, parts)
-        # NX + EX for a simple, safe lock
-        return bool(r.set(lkey, "1", nx=True, ex=_LOCK_TTL_SECONDS))
-    except Exception:
-        return False
-
-
-def _release_lock(prefix: str, parts: tuple[str, ...]):
-    try:
-        r = get_redis()
-        _, lkey = _cache_key(prefix, parts)
-        r.delete(lkey)
-    except Exception:
-        pass
+# Redis cache instance (fresh = 24h, stale = 24h)
+CACHE = RedisCache(ttl_seconds=_TTL_SECONDS, lock_ttl_seconds=_LOCK_TTL_SECONDS, stale_ttl_seconds=_STALE_TTL_SECONDS)
 
 
 def get_engine():
@@ -161,14 +70,23 @@ def _build_index_html() -> str:
     release_types = get_distinct_values(engine, 'release_type')
     release_statuses = get_distinct_values(engine, 'release_status')
 
-    def _mk_examples(base: str, values: list[str], param: str, is_rss: bool = True):
+    def _mk_examples(base: str, values: list[str], param: str, is_rss: bool = True, label: str = "RSS"):
         examples = []
         for v in values[:5]:
             qv = urllib.parse.quote_plus(v)
             url = f"{base}?{param}={qv}"
             if is_rss:
                 url += "&limit=10"
-            examples.append(f"<li><a href=\"{url}\">{escape(v)}</a></li>")
+            examples.append(f"<li><strong>{escape(label)}</strong>: <a href=\"{url}\">{escape(v)}</a></li>")
+        return "\n".join(examples) or "<li>(none)</li>"
+
+    def _mk_examples_days(base: str, days_values: list[int], is_rss: bool = True, label: str = "RSS"):
+        examples = []
+        for d in days_values:
+            url = f"{base}?modified_within_days={d}"
+            if is_rss:
+                url += "&limit=10"
+            examples.append(f"<li><strong>{escape(label)}</strong>: <a href=\"{url}\">modified_within_days={d}</a></li>")
         return "\n".join(examples) or "<li>(none)</li>"
 
     html = [
@@ -179,18 +97,21 @@ def _build_index_html() -> str:
         "  <li>RSS: <a href=\"/rss\">/rss</a> (<a href=\"/rss.xml\">/rss.xml</a>)</li>",
         "  <li>API: <a href=\"/api/releases\">/api/releases</a></li>",
         "</ul>",
-        "<p>Filters (exact match): product_name, release_type, release_status</p>",
+    "<p>Filters (exact match): product_name, release_type, release_status.</p>",
+    "<p>JSON-only filter: modified_within_days (integer)</p>",
         "<p>Responses are cached for 24 hours with background refresh on expiry.</p>",
         "<h2>Filter options (sample)</h2>",
         "<h3>product_name</h3>",
-        "<ul>", _mk_examples("/rss", product_names, "product_name"), "</ul>",
-        "<ul>", _mk_examples("/api/releases", product_names, "product_name", is_rss=False), "</ul>",
+    "<ul>", _mk_examples("/rss", product_names, "product_name", is_rss=True, label="RSS"), "</ul>",
+    "<ul>", _mk_examples("/api/releases", product_names, "product_name", is_rss=False, label="JSON"), "</ul>",
         "<h3>release_type</h3>",
-        "<ul>", _mk_examples("/rss", release_types, "release_type"), "</ul>",
-        "<ul>", _mk_examples("/api/releases", release_types, "release_type", is_rss=False), "</ul>",
+    "<ul>", _mk_examples("/rss", release_types, "release_type", is_rss=True, label="RSS"), "</ul>",
+    "<ul>", _mk_examples("/api/releases", release_types, "release_type", is_rss=False, label="JSON"), "</ul>",
         "<h3>release_status</h3>",
-        "<ul>", _mk_examples("/rss", release_statuses, "release_status"), "</ul>",
-        "<ul>", _mk_examples("/api/releases", release_statuses, "release_status", is_rss=False), "</ul>",
+    "<ul>", _mk_examples("/rss", release_statuses, "release_status", is_rss=True, label="RSS"), "</ul>",
+    "<ul>", _mk_examples("/api/releases", release_statuses, "release_status", is_rss=False, label="JSON"), "</ul>",
+    "<h3>modified_within_days</h3>",
+    "<ul>", _mk_examples_days("/api/releases", [7,14,30], is_rss=False, label="JSON"), "</ul>",
         "</body></html>",
     ]
     return "".join(html)
@@ -259,7 +180,7 @@ def rss_feed():
 
     # Redis-backed cache key from parameters
     parts = (product_name or "", release_type or "", release_status or "", str(limit))
-    cached = _cache_get("rss", parts)
+    cached = CACHE.get("rss", parts)
     now_ts = _time.time()
     if cached:
         fresh_until = cached.get("fresh_until_ts", 0)
@@ -279,7 +200,7 @@ def rss_feed():
         # stale but within serveable window
         if now_ts <= stale_until:
             # Attempt to acquire refresh lock and refresh in background
-            if _try_acquire_lock("rss", parts):
+            if CACHE.try_acquire_lock("rss", parts):
                 def _refresh_rss_bg():
                     try:
                         rows_bg = get_recently_modified_releases(
@@ -292,9 +213,9 @@ def rss_feed():
                         xml_bg = build_rss_xml(rows_bg, description=f"Up to {parts[3]} most recently modified releases")
                         built_bg = datetime.now(timezone.utc)
                         etag_bg = 'W/"' + hashlib.sha256(xml_bg.encode('utf-8')).hexdigest() + '"'
-                        _cache_set("rss", parts, xml_bg, etag_bg, built_bg)
+                        CACHE.set("rss", parts, xml_bg, etag_bg, built_bg)
                     finally:
-                        _release_lock("rss", parts)
+                        CACHE.release_lock("rss", parts)
 
                 threading.Thread(target=_refresh_rss_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="application/rss+xml; charset=utf-8")
@@ -315,7 +236,7 @@ def rss_feed():
     xml = build_rss_xml(rows, description=f"Up to {limit} most recently modified releases")
     built_dt = datetime.now(timezone.utc)
     etag = 'W/"' + hashlib.sha256(xml.encode('utf-8')).hexdigest() + '"'
-    _cache_set("rss", parts, xml, etag, built_dt)
+    CACHE.set("rss", parts, xml, etag, built_dt)
     resp = Response(xml, mimetype="application/rss+xml; charset=utf-8")
     resp.headers['ETag'] = etag
     resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
@@ -326,7 +247,7 @@ def rss_feed():
 @app.get("/")
 def index():
     parts = ("index",)
-    cached = _cache_get("index", parts)
+    cached = CACHE.get("index", parts)
     now_ts = _time.time()
     if cached:
         fresh_until = cached.get("fresh_until_ts", 0)
@@ -343,15 +264,15 @@ def index():
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
         if now_ts <= stale_until:
-            if _try_acquire_lock("index", parts):
+            if CACHE.try_acquire_lock("index", parts):
                 def _refresh_index_bg():
                     try:
                         html_bg = _build_index_html()
                         etag_bg = 'W/"' + hashlib.sha256(html_bg.encode('utf-8')).hexdigest() + '"'
                         built_bg = datetime.now(timezone.utc)
-                        _cache_set("index", parts, html_bg, etag_bg, built_bg)
+                        CACHE.set("index", parts, html_bg, etag_bg, built_bg)
                     finally:
-                        _release_lock("index", parts)
+                        CACHE.release_lock("index", parts)
 
                 threading.Thread(target=_refresh_index_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="text/html; charset=utf-8")
@@ -365,7 +286,7 @@ def index():
     html = _build_index_html()
     etag = 'W/"' + hashlib.sha256(html.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
-    _cache_set("index", parts, html, etag, built_dt)
+    CACHE.set("index", parts, html, etag, built_dt)
     resp = Response(html, mimetype="text/html; charset=utf-8")
     resp.headers['ETag'] = etag
     resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
@@ -379,9 +300,14 @@ def api_releases():
     product_name = request.args.get("product_name")
     release_type = request.args.get("release_type")
     release_status = request.args.get("release_status")
+    modified_within_days = request.args.get("modified_within_days", type=int)
+
+    if modified_within_days is not None:
+        modified_within_days = max(1, min(modified_within_days, 30))
+
     # Redis-backed cache key and lookup
-    parts = (product_name or "", release_type or "", release_status or "")
-    cached = _cache_get("api", parts)
+    parts = (product_name or "", release_type or "", release_status or "", modified_within_days)
+    cached = CACHE.get("api", parts)
     now_ts = _time.time()
 
 
@@ -413,7 +339,7 @@ def api_releases():
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
         if now_ts <= stale_until:
-            if _try_acquire_lock("api", parts):
+            if CACHE.try_acquire_lock("api", parts):
                 def _refresh_api_bg():
                     try:
                         rows = get_recently_modified_releases(
@@ -421,15 +347,16 @@ def api_releases():
                             product_name=product_name,
                             release_type=release_type,
                             release_status=release_status,
+                            modified_within_days=modified_within_days,
                         )
                         data = [_row_to_dict(r) for r in rows]
 
                         json_bg = json.dumps(data, sort_keys=True, separators=(",", ":"))
                         etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
                         built_bg = datetime.now(timezone.utc)
-                        _cache_set("api", parts, json_bg, etag_bg, built_bg)
+                        CACHE.set("api", parts, json_bg, etag_bg, built_bg)
                     finally:
-                        _release_lock("api", parts)
+                        CACHE.release_lock("api", parts)
 
                 threading.Thread(target=_refresh_api_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
@@ -444,6 +371,7 @@ def api_releases():
         product_name=product_name,
         release_type=release_type,
         release_status=release_status,
+        modified_within_days=modified_within_days,
     )
     data = [_row_to_dict(r) for r in rows]
 
@@ -451,7 +379,7 @@ def api_releases():
     json_str = json.dumps(data, sort_keys=True, separators=(",", ":"))
     etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
-    _cache_set("api", parts, json_str, etag, built_dt)
+    CACHE.set("api", parts, json_str, etag, built_dt)
     resp = Response(json_str, mimetype="application/json; charset=utf-8")
     resp.headers['ETag'] = etag
     resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"

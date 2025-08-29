@@ -5,8 +5,8 @@ import json
 
 from unidecode import unidecode
 
-from release_item import ReleaseItem
-from db_sqlserver import get_recently_modified_releases, make_engine, init_db, save_releases
+from lib.release_item import ReleaseItem
+from db.db_sqlserver import get_recently_modified_releases, make_engine, init_db, save_releases
 
 def extract_product_families(js_text):
     # match blocks like:
