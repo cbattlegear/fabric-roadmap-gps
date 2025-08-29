@@ -5,7 +5,7 @@ import threading
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional, List
 
-from flask import Flask, request, Response, jsonify
+from flask import Flask, request, Response, jsonify, render_template
 from html import escape
 from email.utils import format_datetime
 import time as _time
@@ -13,7 +13,6 @@ import hashlib
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 from db.redis_cache import RedisCache
-
 
 from db.db_sqlserver import make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values
 
@@ -53,7 +52,6 @@ def _to_rfc2822(dt_or_date: Optional[date]) -> Optional[str]:
 
 
 def _item_link(row: ReleaseItemModel) -> str:
-    # Prefer VSO link if present; otherwise fall back to roadmap site with GUID
     return f"https://roadmap.fabric.microsoft.com/?product={escape(urllib.parse.quote_plus(row.product_name.lower().replace(' ', '')))}"
 
 def _description(row: ReleaseItemModel) -> str:
@@ -63,58 +61,6 @@ def _description(row: ReleaseItemModel) -> str:
     if row.feature_description:
         desc += f"<p>{escape(row.feature_description)}</p>"
     return desc or "(no description)"
-def _build_index_html() -> str:
-    # Fetch distinct options (limited for brevity)
-    engine = get_engine()
-    product_names = get_distinct_values(engine, 'product_name')
-    release_types = get_distinct_values(engine, 'release_type')
-    release_statuses = get_distinct_values(engine, 'release_status')
-
-    def _mk_examples(base: str, values: list[str], param: str, is_rss: bool = True, label: str = "RSS"):
-        examples = []
-        for v in values[:5]:
-            qv = urllib.parse.quote_plus(v)
-            url = f"{base}?{param}={qv}"
-            if is_rss:
-                url += "&limit=10"
-            examples.append(f"<li><strong>{escape(label)}</strong>: <a href=\"{url}\">{escape(v)}</a></li>")
-        return "\n".join(examples) or "<li>(none)</li>"
-
-    def _mk_examples_days(base: str, days_values: list[int], is_rss: bool = True, label: str = "RSS"):
-        examples = []
-        for d in days_values:
-            url = f"{base}?modified_within_days={d}"
-            if is_rss:
-                url += "&limit=10"
-            examples.append(f"<li><strong>{escape(label)}</strong>: <a href=\"{url}\">modified_within_days={d}</a></li>")
-        return "\n".join(examples) or "<li>(none)</li>"
-
-    html = [
-        "<html><body>",
-        "<h1>Fabric GPS Feeds</h1>",
-        "<h2>Endpoints</h2>",
-        "<ul>",
-        "  <li>RSS: <a href=\"/rss\">/rss</a> (<a href=\"/rss.xml\">/rss.xml</a>)</li>",
-        "  <li>API: <a href=\"/api/releases\">/api/releases</a></li>",
-        "</ul>",
-    "<p>Filters (exact match): product_name, release_type, release_status.</p>",
-    "<p>JSON-only filter: modified_within_days (integer)</p>",
-        "<p>Responses are cached for 24 hours with background refresh on expiry.</p>",
-        "<h2>Filter options (sample)</h2>",
-        "<h3>product_name</h3>",
-    "<ul>", _mk_examples("/rss", product_names, "product_name", is_rss=True, label="RSS"), "</ul>",
-    "<ul>", _mk_examples("/api/releases", product_names, "product_name", is_rss=False, label="JSON"), "</ul>",
-        "<h3>release_type</h3>",
-    "<ul>", _mk_examples("/rss", release_types, "release_type", is_rss=True, label="RSS"), "</ul>",
-    "<ul>", _mk_examples("/api/releases", release_types, "release_type", is_rss=False, label="JSON"), "</ul>",
-        "<h3>release_status</h3>",
-    "<ul>", _mk_examples("/rss", release_statuses, "release_status", is_rss=True, label="RSS"), "</ul>",
-    "<ul>", _mk_examples("/api/releases", release_statuses, "release_status", is_rss=False, label="JSON"), "</ul>",
-    "<h3>modified_within_days</h3>",
-    "<ul>", _mk_examples_days("/api/releases", [7,14,30], is_rss=False, label="JSON"), "</ul>",
-        "</body></html>",
-    ]
-    return "".join(html)
 
 
 
@@ -246,8 +192,15 @@ def rss_feed():
 
 @app.get("/")
 def index():
-    parts = ("index",)
-    cached = CACHE.get("index", parts)
+    """Modern homepage with Microsoft Fabric design language"""
+    return render_template('index.html')
+
+
+@app.get("/endpoints")
+def endpoints():
+    """API documentation page (moved from old index)"""
+    parts = ("endpoints",)
+    cached = CACHE.get("endpoints", parts)
     now_ts = _time.time()
     if cached:
         fresh_until = cached.get("fresh_until_ts", 0)
@@ -258,40 +211,102 @@ def index():
             inm = request.headers.get("If-None-Match")
             if inm and inm == cached.get("etag"):
                 return Response(status=304)
-            resp = Response(cached.get("body", ""), mimetype="text/html; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            return resp
+            return Response(cached.get("body", ""), mimetype="text/html; charset=utf-8", headers={
+                'ETag': cached.get("etag", ""),
+                'Cache-Control': f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}",
+                'Last-Modified': format_datetime(built_dt)
+            })
         if now_ts <= stale_until:
-            if CACHE.try_acquire_lock("index", parts):
-                def _refresh_index_bg():
+            if CACHE.try_acquire_lock("endpoints", parts):
+                def _refresh_endpoints_bg():
                     try:
-                        html_bg = _build_index_html()
+                        html_bg = _build_endpoints_html()
                         etag_bg = 'W/"' + hashlib.sha256(html_bg.encode('utf-8')).hexdigest() + '"'
                         built_bg = datetime.now(timezone.utc)
-                        CACHE.set("index", parts, html_bg, etag_bg, built_bg)
+                        CACHE.set("endpoints", parts, html_bg, etag_bg, built_bg)
                     finally:
-                        CACHE.release_lock("index", parts)
+                        CACHE.release_lock("endpoints", parts)
 
-                threading.Thread(target=_refresh_index_bg, daemon=True).start()
-            resp = Response(cached.get("body", ""), mimetype="text/html; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            resp.headers['X-Cache'] = 'STALE'
-            return resp
+                threading.Thread(target=_refresh_endpoints_bg, daemon=True).start()
+            return Response(cached.get("body", ""), mimetype="text/html; charset=utf-8", headers={
+                'ETag': cached.get("etag", ""),
+                'Cache-Control': f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}",
+                'Last-Modified': format_datetime(built_dt),
+                'X-Cache': 'STALE'
+            })
 
     # No cache or expired beyond stale window: build synchronously
-    html = _build_index_html()
+    html = _build_endpoints_html()
     etag = 'W/"' + hashlib.sha256(html.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
-    CACHE.set("index", parts, html, etag, built_dt)
-    resp = Response(html, mimetype="text/html; charset=utf-8")
-    resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
-    resp.headers['Last-Modified'] = format_datetime(built_dt)
-    return resp
+    CACHE.set("endpoints", parts, html, etag, built_dt)
+    return Response(html, mimetype="text/html; charset=utf-8", headers={
+        'ETag': etag,
+        'Cache-Control': f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}",
+        'Last-Modified': format_datetime(built_dt)
+    })
+
+
+def _build_endpoints_html() -> str:
+    """Build the endpoints documentation page with examples"""
+    # Fetch distinct options (limited for brevity)
+    engine = get_engine()
+    product_names = get_distinct_values(engine, 'product_name')
+    release_types = get_distinct_values(engine, 'release_type')
+    release_statuses = get_distinct_values(engine, 'release_status')
+
+    def _mk_examples_data(base: str, values: list[str], param: str, is_rss: bool = True, label: str = "RSS"):
+        """Generate data structure for examples instead of HTML"""
+        examples = []
+        for v in values[:5]:
+            qv = urllib.parse.quote_plus(v)
+            url = f"{base}?{param}={qv}"
+            if is_rss:
+                url += "&limit=10"
+            examples.append({
+                'label': label,
+                'title': v,
+                'url': url,
+                'param': param
+            })
+        return examples
+
+    def _mk_examples_days_data(base: str, days_values: list[int], is_rss: bool = True, label: str = "RSS"):
+        """Generate data structure for days filter examples instead of HTML"""
+        examples = []
+        for d in days_values:
+            url = f"{base}?modified_within_days={d}"
+            if is_rss:
+                url += "&limit=10"
+            examples.append({
+                'label': label,
+                'title': f'modified_within_days={d}',
+                'url': url,
+                'param': 'modified_within_days',
+                'value': d
+            })
+        return examples
+
+    # Build RSS examples data
+    rss_examples_data = {
+        'product_name': _mk_examples_data("/rss", product_names, "product_name", is_rss=True, label="RSS"),
+        'release_type': _mk_examples_data("/rss", release_types, "release_type", is_rss=True, label="RSS"),
+        'release_status': _mk_examples_data("/rss", release_statuses, "release_status", is_rss=True, label="RSS")
+    }
+
+    # Build API examples data
+    api_examples_data = {
+        'product_name': _mk_examples_data("/api/releases", product_names, "product_name", is_rss=False, label="JSON"),
+        'release_type': _mk_examples_data("/api/releases", release_types, "release_type", is_rss=False, label="JSON"),
+        'release_status': _mk_examples_data("/api/releases", release_statuses, "release_status", is_rss=False, label="JSON"),
+        'modified_within_days': _mk_examples_days_data("/api/releases", [7, 14, 30], is_rss=False, label="JSON")
+    }
+
+    # Render template with data structures
+    with app.app_context():
+        return render_template('endpoints.html', 
+                             rss_examples=rss_examples_data,
+                             api_examples=api_examples_data)
 
 
 @app.get("/api/releases")

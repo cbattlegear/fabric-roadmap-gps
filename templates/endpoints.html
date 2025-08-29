@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>API Documentation - Fabric GPS</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🗺️%3C/text%3E%3C/svg%3E">
+    <style>
+        .endpoint-section {
+            background: white;
+            border-radius: 8px;
+            padding: var(--spacing-l);
+            margin-bottom: var(--spacing-l);
+            box-shadow: var(--elevation-2);
+        }
+        .method-badge {
+            display: inline-block;
+            padding: var(--spacing-xs) var(--spacing-s);
+            border-radius: 4px;
+            font-size: var(--font-size-caption);
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        .method-get { background-color: var(--fabric-semantic-success); color: white; }
+        .example-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: var(--spacing-m);
+            margin-top: var(--spacing-m);
+        }
+        .example-item {
+            background: var(--fabric-neutral-grey-20);
+            padding: var(--spacing-m);
+            border-radius: 4px;
+            border-left: 4px solid var(--fabric-primary);
+            overflow-wrap: break-word;
+        }
+        .example-item h4 {
+            margin: 0 0 var(--spacing-s) 0;
+            color: var(--fabric-neutral-grey-160);
+        }
+        .example-item a {
+            color: var(--fabric-primary);
+            text-decoration: none;
+            font-family: monospace;
+            font-size: 0.8rem;
+        }
+        .example-item a:hover {
+            text-decoration: underline;
+        }
+        code {
+            background: var(--fabric-neutral-grey-30);
+            padding: 2px 4px;
+            border-radius: 3px;
+            font-size: 0.9em;
+        }
+        .nav-link {
+            color: var(--fabric-primary);
+            text-decoration: none;
+            font-weight: 500;
+        }
+        .nav-link:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <h1 style="margin: 0; font-size: 1.5rem; color: var(--fabric-neutral-grey-160);">
+                <a href="/" class="nav-link">🗺️ Fabric GPS</a> / API Documentation
+            </h1>
+        </div>
+    </header>
+
+    <main>
+        <div class="container">
+            <section class="hero-section" style="margin-bottom: var(--spacing-xl); background: white; color: var(--fabric-neutral-grey-160); box-shadow: var(--elevation-2); border-radius: 8px;">
+                <h1 class="hero-title" style="color: var(--fabric-neutral-grey-160);">API Documentation</h1>
+                <p class="hero-subtitle" style="color: var(--fabric-neutral-grey-90);">
+                    Comprehensive guide to accessing Microsoft Fabric roadmap data through our RSS and JSON endpoints.
+                </p>
+            </section>
+
+            <section class="endpoint-section">
+                <h2><span class="method-badge method-get">GET</span> RSS Feed</h2>
+                <p><strong>Endpoints:</strong> <code>/rss</code> and <code>/rss.xml</code></p>
+                <p><strong>Description:</strong> Returns an RSS 2.0 feed of recently modified releases with optional filtering.</p>
+                
+                <h3>Parameters</h3>
+                <ul>
+                    <li><code>product_name</code> - Filter by exact product name (case-sensitive)</li>
+                    <li><code>release_type</code> - Filter by exact release type</li>
+                    <li><code>release_status</code> - Filter by exact release status</li>
+                    <li><code>limit</code> - Maximum number of items (1-25, default: 25)</li>
+                </ul>
+
+                <h3>Examples</h3>
+                <div class="example-grid">
+                    {% for param_type, examples in rss_examples.items() %}
+                        {% for example in examples %}
+                            <div class="example-item">
+                                <h4>{{ example.label }}: {{ example.title }}</h4>
+                                <a href="{{ example.url }}">{{ example.url }}</a>
+                            </div>
+                        {% endfor %}
+                    {% endfor %}
+                    {% if not rss_examples or not (rss_examples.product_name or rss_examples.release_type or rss_examples.release_status) %}
+                        <div class="example-item">
+                            <h4>No examples available</h4>
+                        </div>
+                    {% endif %}
+                </div>
+            </section>
+
+            <section class="endpoint-section">
+                <h2><span class="method-badge method-get">GET</span> JSON API</h2>
+                <p><strong>Endpoint:</strong> <code>/api/releases</code></p>
+                <p><strong>Description:</strong> Returns JSON array of releases with optional filtering. No limit applied.</p>
+                
+                <h3>Parameters</h3>
+                <ul>
+                    <li><code>product_name</code> - Filter by exact product name (case-sensitive)</li>
+                    <li><code>release_type</code> - Filter by exact release type</li>
+                    <li><code>release_status</code> - Filter by exact release status</li>
+                    <li><code>modified_within_days</code> - Show items modified within N days (1-30)</li>
+                </ul>
+
+                <h3>Examples</h3>
+                <div class="example-grid">
+                    {% for param_type, examples in api_examples.items() %}
+                        {% for example in examples %}
+                            <div class="example-item">
+                                <h4>{{ example.label }}: {{ example.title }}</h4>
+                                <a href="{{ example.url }}">{{ example.url }}</a>
+                            </div>
+                        {% endfor %}
+                    {% endfor %}
+                    {% if not api_examples or not (api_examples.product_name or api_examples.release_type or api_examples.release_status or api_examples.modified_within_days) %}
+                        <div class="example-item">
+                            <h4>No examples available</h4>
+                        </div>
+                    {% endif %}
+                </div>
+            </section>
+
+            <section class="endpoint-section">
+                <h2>Response Format</h2>
+                <p>All responses include proper HTTP caching headers:</p>
+                <ul>
+                    <li><strong>ETag:</strong> Conditional requests supported (304 Not Modified)</li>
+                    <li><strong>Cache-Control:</strong> 24-hour fresh cache with stale-while-revalidate</li>
+                    <li><strong>Last-Modified:</strong> RFC 2822 formatted timestamp</li>
+                </ul>
+
+                <h3>JSON Response Schema</h3>
+                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>[
+  {
+    "release_item_id": "uuid",
+    "feature_name": "string",
+    "release_date": "YYYY-MM-DD",
+    "release_type": "string",
+    "release_status": "string", 
+    "product_id": "uuid",
+    "product_name": "string",
+    "feature_description": "string",
+    "last_modified": "YYYY-MM-DD"
+  }
+]</code></pre>
+            </section>
+
+            <section class="endpoint-section">
+                <h2>Caching & Performance</h2>
+                <p>Our system uses Redis-backed caching with stale-while-revalidate strategy:</p>
+                <ul>
+                    <li><strong>Fresh Window:</strong> 24 hours - served immediately from cache</li>
+                    <li><strong>Stale Window:</strong> Additional 24 hours - served from cache while refreshing in background</li>
+                    <li><strong>Cache Keys:</strong> Unique per filter combination for optimal performance</li>
+                    <li><strong>Background Refresh:</strong> Prevents stampeding and ensures fresh data</li>
+                </ul>
+            </section>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>
+                <a href="/" class="nav-link">← Back to Home</a> |
+                &copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap.
+            </p>
+        </div>
+    </footer>
+</body>
+</html>
