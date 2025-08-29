@@ -17,6 +17,7 @@ Enable Redis via environment variables (any of the following):
 - REDIS_PORT (default `6379`)
 - REDIS_DB (default `0`)
 - REDIS_PASSWORD (optional)
+- APP_CACHE_NS (optional key namespace, default `fabric-gps`)
 
 If Redis is not configured/reachable, the app gracefully falls back to no-cache for that request.
 
