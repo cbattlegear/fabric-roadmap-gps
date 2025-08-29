@@ -1,12 +1,12 @@
-import os
 import json
+import os
+import urllib.parse
 import threading
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional, List
 
 from flask import Flask, request, Response, jsonify
 from html import escape
-import urllib.parse
 from email.utils import format_datetime
 import time as _time
 import hashlib
@@ -19,8 +19,6 @@ from db.db_sqlserver import make_engine, get_recently_modified_releases, init_db
 
 
 app = Flask(__name__)
-
-# Lazily create engine and redis on first use to avoid connecting at import time
 ENGINE = None
 REDIS = None
 
@@ -72,14 +70,23 @@ def _build_index_html() -> str:
     release_types = get_distinct_values(engine, 'release_type')
     release_statuses = get_distinct_values(engine, 'release_status')
 
-    def _mk_examples(base: str, values: list[str], param: str, is_rss: bool = True):
+    def _mk_examples(base: str, values: list[str], param: str, is_rss: bool = True, label: str = "RSS"):
         examples = []
         for v in values[:5]:
             qv = urllib.parse.quote_plus(v)
             url = f"{base}?{param}={qv}"
             if is_rss:
                 url += "&limit=10"
-            examples.append(f"<li><a href=\"{url}\">{escape(v)}</a></li>")
+            examples.append(f"<li><strong>{escape(label)}</strong>: <a href=\"{url}\">{escape(v)}</a></li>")
+        return "\n".join(examples) or "<li>(none)</li>"
+
+    def _mk_examples_days(base: str, days_values: list[int], is_rss: bool = True, label: str = "RSS"):
+        examples = []
+        for d in days_values:
+            url = f"{base}?modified_within_days={d}"
+            if is_rss:
+                url += "&limit=10"
+            examples.append(f"<li><strong>{escape(label)}</strong>: <a href=\"{url}\">modified_within_days={d}</a></li>")
         return "\n".join(examples) or "<li>(none)</li>"
 
     html = [
@@ -90,18 +97,21 @@ def _build_index_html() -> str:
         "  <li>RSS: <a href=\"/rss\">/rss</a> (<a href=\"/rss.xml\">/rss.xml</a>)</li>",
         "  <li>API: <a href=\"/api/releases\">/api/releases</a></li>",
         "</ul>",
-        "<p>Filters (exact match): product_name, release_type, release_status</p>",
+    "<p>Filters (exact match): product_name, release_type, release_status.</p>",
+    "<p>JSON-only filter: modified_within_days (integer)</p>",
         "<p>Responses are cached for 24 hours with background refresh on expiry.</p>",
         "<h2>Filter options (sample)</h2>",
         "<h3>product_name</h3>",
-        "<ul>", _mk_examples("/rss", product_names, "product_name"), "</ul>",
-        "<ul>", _mk_examples("/api/releases", product_names, "product_name", is_rss=False), "</ul>",
+    "<ul>", _mk_examples("/rss", product_names, "product_name", is_rss=True, label="RSS"), "</ul>",
+    "<ul>", _mk_examples("/api/releases", product_names, "product_name", is_rss=False, label="JSON"), "</ul>",
         "<h3>release_type</h3>",
-        "<ul>", _mk_examples("/rss", release_types, "release_type"), "</ul>",
-        "<ul>", _mk_examples("/api/releases", release_types, "release_type", is_rss=False), "</ul>",
+    "<ul>", _mk_examples("/rss", release_types, "release_type", is_rss=True, label="RSS"), "</ul>",
+    "<ul>", _mk_examples("/api/releases", release_types, "release_type", is_rss=False, label="JSON"), "</ul>",
         "<h3>release_status</h3>",
-        "<ul>", _mk_examples("/rss", release_statuses, "release_status"), "</ul>",
-        "<ul>", _mk_examples("/api/releases", release_statuses, "release_status", is_rss=False), "</ul>",
+    "<ul>", _mk_examples("/rss", release_statuses, "release_status", is_rss=True, label="RSS"), "</ul>",
+    "<ul>", _mk_examples("/api/releases", release_statuses, "release_status", is_rss=False, label="JSON"), "</ul>",
+    "<h3>modified_within_days</h3>",
+    "<ul>", _mk_examples_days("/api/releases", [7,14,30], is_rss=False, label="JSON"), "</ul>",
         "</body></html>",
     ]
     return "".join(html)
@@ -290,8 +300,13 @@ def api_releases():
     product_name = request.args.get("product_name")
     release_type = request.args.get("release_type")
     release_status = request.args.get("release_status")
+    modified_within_days = request.args.get("modified_within_days", type=int)
+
+    if modified_within_days is not None:
+        modified_within_days = max(1, min(modified_within_days, 30))
+
     # Redis-backed cache key and lookup
-    parts = (product_name or "", release_type or "", release_status or "")
+    parts = (product_name or "", release_type or "", release_status or "", modified_within_days)
     cached = CACHE.get("api", parts)
     now_ts = _time.time()
 
@@ -332,6 +347,7 @@ def api_releases():
                             product_name=product_name,
                             release_type=release_type,
                             release_status=release_status,
+                            modified_within_days=modified_within_days,
                         )
                         data = [_row_to_dict(r) for r in rows]
 
@@ -355,6 +371,7 @@ def api_releases():
         product_name=product_name,
         release_type=release_type,
         release_status=release_status,
+        modified_within_days=modified_within_days,
     )
     data = [_row_to_dict(r) for r in rows]
 

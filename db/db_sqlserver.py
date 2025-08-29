@@ -2,7 +2,7 @@ import os
 import json
 import uuid
 import hashlib
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Iterable, Any, Tuple, Dict
 import urllib.parse
 import time
@@ -315,6 +315,7 @@ def get_recently_modified_releases(
     product_name: Optional[str] = None,
     release_type: Optional[str] = None,
     release_status: Optional[str] = None,
+    modified_within_days: Optional[int] = None,
 ) -> List[ReleaseItemModel]:
     """
     Return up to `limit` releases most recently modified (by last_modified desc).
@@ -332,6 +333,9 @@ def get_recently_modified_releases(
         filters.append(ReleaseItemModel.release_type == release_type)
     if release_status is not None:
         filters.append(ReleaseItemModel.release_status == release_status)
+    if modified_within_days is not None:
+        modified_since = datetime.now() - timedelta(days=modified_within_days)
+        filters.append(ReleaseItemModel.last_modified >= modified_since)
 
     if filters:
         stmt = stmt.where(*filters)
