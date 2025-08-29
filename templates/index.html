@@ -59,6 +59,56 @@
                 </div>
             </section>
 
+            <section class="recent-changes-section">
+                <h2 class="section-title">Recent Changes</h2>
+                <div class="recent-changes-content">
+                    <div class="filters-container">
+                        <div class="filter-group">
+                            <label for="product-filter">Product:</label>
+                            <select id="product-filter" class="filter-select">
+                                <option value="">All Products</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="type-filter">Release Type:</label>
+                            <select id="type-filter" class="filter-select">
+                                <option value="">All Types</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="status-filter">Status:</label>
+                            <select id="status-filter" class="filter-select">
+                                <option value="">All Statuses</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
+                            <label for="days-filter">Modified Within:</label>
+                            <select id="days-filter" class="filter-select">
+                                <option value="">All Time</option>
+                                <option value="7">Last 7 days</option>
+                                <option value="14">Last 14 days</option>
+                                <option value="30">Last 30 days</option>
+                            </select>
+                        </div>
+                        <button id="apply-filters" class="button button-primary">Apply Filters</button>
+                        <button id="clear-filters" class="button button-secondary">Clear</button>
+                    </div>
+                    
+                    <div class="loading-indicator" id="loading-indicator" style="display: none;">
+                        <div class="spinner"></div>
+                        <span>Loading recent changes...</span>
+                    </div>
+                    
+                    <div class="changes-grid" id="changes-grid">
+                        <!-- Changes will be populated by JavaScript -->
+                    </div>
+                    
+                    <div class="no-results" id="no-results" style="display: none;">
+                        <p>No changes found matching your filters. Try adjusting your criteria.</p>
+                    </div>
+                </div>
+            </section>
+
             <section class="features-section">
                 <div class="why-build-section">
                     <h2 class="section-title">Why Build Fabric GPS?</h2>
@@ -130,5 +180,211 @@
             <p>&copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap. Updated every 24 hours.</p>
         </div>
     </footer>
+
+    <script>
+        // Recent Changes functionality
+        class RecentChanges {
+            constructor() {
+                this.filterOptions = {};
+                this.currentData = [];
+                this.init();
+            }
+
+            async init() {
+                await this.loadFilterOptions();
+                await this.loadRecentChanges();
+                this.bindEvents();
+            }
+
+            async loadFilterOptions() {
+                try {
+                    const response = await fetch('/api/filter-options');
+                    this.filterOptions = await response.json();
+                    this.populateFilterSelects();
+                } catch (error) {
+                    console.error('Error loading filter options:', error);
+                }
+            }
+
+            populateFilterSelects() {
+                const productSelect = document.getElementById('product-filter');
+                const typeSelect = document.getElementById('type-filter');
+                const statusSelect = document.getElementById('status-filter');
+
+                // Populate product names
+                this.filterOptions.product_names.forEach(product => {
+                    const option = document.createElement('option');
+                    option.value = product;
+                    option.textContent = product;
+                    productSelect.appendChild(option);
+                });
+
+                // Populate release types
+                this.filterOptions.release_types.forEach(type => {
+                    const option = document.createElement('option');
+                    option.value = type;
+                    option.textContent = type;
+                    typeSelect.appendChild(option);
+                });
+
+                // Populate release statuses
+                this.filterOptions.release_statuses.forEach(status => {
+                    const option = document.createElement('option');
+                    option.value = status;
+                    option.textContent = status;
+                    statusSelect.appendChild(option);
+                });
+            }
+
+            async loadRecentChanges(filters = {}) {
+                this.showLoading(true);
+                try {
+                    const params = new URLSearchParams();
+                    if (filters.product_name) params.append('product_name', filters.product_name);
+                    if (filters.release_type) params.append('release_type', filters.release_type);
+                    if (filters.release_status) params.append('release_status', filters.release_status);
+                    if (filters.modified_within_days) params.append('modified_within_days', filters.modified_within_days);
+
+                    const response = await fetch(`/api/releases?${params.toString()}`);
+                    this.currentData = await response.json();
+                    
+                    // Limit to 15 items and sort by last_modified
+                    this.currentData.sort((a, b) => new Date(b.last_modified) - new Date(a.last_modified));
+                    this.currentData = this.currentData.slice(0, 15);
+                    
+                    this.renderChanges();
+                } catch (error) {
+                    console.error('Error loading recent changes:', error);
+                    this.showError();
+                } finally {
+                    this.showLoading(false);
+                }
+            }
+
+            renderChanges() {
+                const container = document.getElementById('changes-grid');
+                const noResults = document.getElementById('no-results');
+
+                if (this.currentData.length === 0) {
+                    container.innerHTML = '';
+                    noResults.style.display = 'block';
+                    return;
+                }
+
+                noResults.style.display = 'none';
+                container.innerHTML = this.currentData.map(item => this.createChangeItem(item)).join('');
+            }
+
+            createChangeItem(item) {
+                const date = new Date(item.last_modified).toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                });
+
+                const releaseDate = item.release_date ? new Date(item.release_date).toLocaleDateString('en-US', {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                }) : 'TBD';
+
+                return `
+                    <div class="change-item">
+                        <div class="change-header">
+                            <h3 class="change-title">${this.escapeHtml(item.feature_name || 'Unnamed Feature')}</h3>
+                            <div class="change-badges">
+                                <span class="change-badge badge-product">${this.escapeHtml(item.product_name || 'Unknown')}</span>
+                                <span class="change-badge badge-type">${this.escapeHtml(item.release_type || 'Unknown')}</span>
+                                <span class="change-badge badge-status">${this.escapeHtml(item.release_status || 'Unknown')}</span>
+                            </div>
+                        </div>
+                        <div class="change-meta">
+                            <span class="change-date">Last Modified: ${date}</span>
+                            <span class="release-date">Release Date: ${releaseDate}</span>
+                        </div>
+                        <p class="change-description">
+                            ${this.escapeHtml(item.feature_description || 'No description available.')}
+                        </p>
+                    </div>
+                `;
+            }
+
+            bindEvents() {
+                const applyBtn = document.getElementById('apply-filters');
+                const clearBtn = document.getElementById('clear-filters');
+
+                applyBtn.addEventListener('click', () => {
+                    const filters = this.getActiveFilters();
+                    this.loadRecentChanges(filters);
+                });
+
+                clearBtn.addEventListener('click', () => {
+                    this.clearFilters();
+                    this.loadRecentChanges();
+                });
+
+                // Allow Enter key to apply filters
+                document.querySelectorAll('.filter-select').forEach(select => {
+                    select.addEventListener('keypress', (e) => {
+                        if (e.key === 'Enter') {
+                            const filters = this.getActiveFilters();
+                            this.loadRecentChanges(filters);
+                        }
+                    });
+                });
+            }
+
+            getActiveFilters() {
+                return {
+                    product_name: document.getElementById('product-filter').value,
+                    release_type: document.getElementById('type-filter').value,
+                    release_status: document.getElementById('status-filter').value,
+                    modified_within_days: document.getElementById('days-filter').value
+                };
+            }
+
+            clearFilters() {
+                document.getElementById('product-filter').value = '';
+                document.getElementById('type-filter').value = '';
+                document.getElementById('status-filter').value = '';
+                document.getElementById('days-filter').value = '';
+            }
+
+            showLoading(show) {
+                const loader = document.getElementById('loading-indicator');
+                const grid = document.getElementById('changes-grid');
+                const noResults = document.getElementById('no-results');
+                
+                if (show) {
+                    loader.style.display = 'flex';
+                    grid.style.display = 'none';
+                    noResults.style.display = 'none';
+                } else {
+                    loader.style.display = 'none';
+                    grid.style.display = 'grid';
+                }
+            }
+
+            showError() {
+                const container = document.getElementById('changes-grid');
+                const noResults = document.getElementById('no-results');
+                
+                container.innerHTML = '';
+                noResults.innerHTML = '<p>Error loading changes. Please try again later.</p>';
+                noResults.style.display = 'block';
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        }
+
+        // Initialize when DOM is loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            new RecentChanges();
+        });
+    </script>
 </body>
 </html>

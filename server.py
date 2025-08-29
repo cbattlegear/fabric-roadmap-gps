@@ -402,6 +402,78 @@ def api_releases():
     return resp
 
 
+@app.get("/api/filter-options")
+def api_filter_options():
+    """Return JSON object with all available filter options"""
+    # Redis-backed cache key for filter options
+    parts = ("filter-options",)
+    cached = CACHE.get("filter-options", parts)
+    now_ts = _time.time()
+    
+    if cached:
+        fresh_until = cached.get("fresh_until_ts", 0)
+        stale_until = cached.get("stale_until_ts", 0)
+        built_iso = cached.get("built_iso")
+        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
+        
+        # Fresh cache
+        if now_ts <= fresh_until:
+            inm = request.headers.get("If-None-Match")
+            if inm and inm == cached.get("etag"):
+                return Response(status=304)
+            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            return resp
+        
+        # Stale but serveable
+        if now_ts <= stale_until:
+            if CACHE.try_acquire_lock("filter-options", parts):
+                def _refresh_filter_options_bg():
+                    try:
+                        engine_bg = get_engine()
+                        filter_data_bg = {
+                            "product_names": get_distinct_values(engine_bg, 'product_name'),
+                            "release_types": get_distinct_values(engine_bg, 'release_type'),
+                            "release_statuses": get_distinct_values(engine_bg, 'release_status')
+                        }
+                        json_bg = json.dumps(filter_data_bg, separators=(',', ':'))
+                        etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
+                        built_bg = datetime.now(timezone.utc)
+                        CACHE.set("filter-options", parts, json_bg, etag_bg, built_bg)
+                    finally:
+                        CACHE.release_lock("filter-options", parts)
+
+                threading.Thread(target=_refresh_filter_options_bg, daemon=True).start()
+            
+            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            resp.headers['X-Cache'] = 'STALE'
+            return resp
+
+    # No cache or expired: build synchronously
+    engine = get_engine()
+    filter_data = {
+        "product_names": get_distinct_values(engine, 'product_name'),
+        "release_types": get_distinct_values(engine, 'release_type'),
+        "release_statuses": get_distinct_values(engine, 'release_status')
+    }
+    
+    json_str = json.dumps(filter_data, separators=(',', ':'))
+    etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
+    built_dt = datetime.now(timezone.utc)
+    CACHE.set("filter-options", parts, json_str, etag, built_dt)
+    
+    resp = Response(json_str, mimetype="application/json; charset=utf-8")
+    resp.headers['ETag'] = etag
+    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+    resp.headers['Last-Modified'] = format_datetime(built_dt)
+    return resp
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "8000"))
     # For local dev; in production, run with gunicorn/uvicorn, etc.
