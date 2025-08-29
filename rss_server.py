@@ -12,24 +12,114 @@ import time as _time
 import hashlib
 from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
+try:
+    import redis as _redis
+except Exception:
+    _redis = None
 
 from db_sqlserver import make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values
 
 
 app = Flask(__name__)
 
-# Lazily create engine on first use to avoid connecting at import time
+# Lazily create engine and redis on first use to avoid connecting at import time
 ENGINE = None
+REDIS = None
 
-# Simple in-memory cache for RSS XML: key -> { 'xml': str, 'expires': float, 'etag': str, 'built': datetime }
-_RSS_CACHE = {}
-_API_CACHE = {}
-_INDEX_CACHE = {}
-_TTL_SECONDS = 24 * 60 * 60  # 24 hours
-_CACHE_LOCK = threading.Lock()
-_RSS_REFRESHING = set()
-_API_REFRESHING = set()
-_INDEX_REFRESHING = set()
+# Cache settings: 24h fresh + 24h stale-while-revalidate window
+_TTL_SECONDS = 24 * 60 * 60  # 24 hours fresh
+_STALE_TTL_SECONDS = _TTL_SECONDS  # additional stale window
+_LOCK_TTL_SECONDS = 60  # lock TTL to avoid stampede during refresh
+
+
+def get_redis():
+    """Return a Redis client, configured from env.
+
+    Env options (in priority order):
+    - REDIS_URL (e.g., redis://:pass@host:6379/0)
+    - REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD
+    """
+    global REDIS
+    if REDIS is None:
+        if _redis is None:
+            return None
+        url = os.getenv("REDIS_URL")
+        if url:
+            REDIS = _redis.Redis.from_url(url, decode_responses=True)
+        else:
+            host = os.getenv("REDIS_HOST", "localhost")
+            port = int(os.getenv("REDIS_PORT", "6379"))
+            db = int(os.getenv("REDIS_DB", "0"))
+            password = os.getenv("REDIS_PASSWORD")
+            REDIS = _redis.Redis(host=host, port=port, db=db, password=password, decode_responses=True)
+    return REDIS
+
+
+def _key_id(parts: tuple[str, ...]) -> str:
+    """Create a stable short key id from tuple of parts."""
+    joined = "\u0001".join([p or "" for p in parts])
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def _cache_key(prefix: str, parts: tuple[str, ...]) -> tuple[str, str]:
+    """Return (data_key, lock_key) for a given prefix and parameter tuple."""
+    kid = _key_id(parts)
+    return f"cache:{prefix}:{kid}", f"lock:{prefix}:{kid}"
+
+
+def _cache_get(prefix: str, parts: tuple[str, ...]) -> Optional[dict]:
+    """Get cached entry JSON from Redis. Returns dict or None.
+    Entry schema: { body, etag, built_iso, fresh_until_ts, stale_until_ts }
+    """
+    try:
+        r = get_redis()
+        key, _ = _cache_key(prefix, parts)
+        raw = r.get(key)
+        if not raw:
+            return None
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
+def _cache_set(prefix: str, parts: tuple[str, ...], body: str, etag: str, built_dt: datetime):
+    now = _time.time()
+    fresh_until = now + _TTL_SECONDS
+    stale_until = fresh_until + _STALE_TTL_SECONDS
+    entry = {
+        "body": body,
+        "etag": etag,
+        "built_iso": built_dt.astimezone(timezone.utc).isoformat(),
+        "fresh_until_ts": fresh_until,
+        "stale_until_ts": stale_until,
+    }
+    ttl = int(_TTL_SECONDS + _STALE_TTL_SECONDS)
+    try:
+        r = get_redis()
+        key, _ = _cache_key(prefix, parts)
+        r.setex(key, ttl, json.dumps(entry, separators=(",", ":")))
+    except Exception:
+        # Best-effort; if Redis is unavailable we simply don't cache
+        pass
+
+
+def _try_acquire_lock(prefix: str, parts: tuple[str, ...]) -> bool:
+    try:
+        r = get_redis()
+        _, lkey = _cache_key(prefix, parts)
+        # NX + EX for a simple, safe lock
+        return bool(r.set(lkey, "1", nx=True, ex=_LOCK_TTL_SECONDS))
+    except Exception:
+        return False
+
+
+def _release_lock(prefix: str, parts: tuple[str, ...]):
+    try:
+        r = get_redis()
+        _, lkey = _cache_key(prefix, parts)
+        r.delete(lkey)
+    except Exception:
+        pass
 
 
 def get_engine():
@@ -167,57 +257,52 @@ def rss_feed():
         limit = 25
     limit = max(1, min(limit, 25))
 
-    # cache key from parameters
-    cache_key = (product_name or "", release_type or "", release_status or "", str(limit))
+    # Redis-backed cache key from parameters
+    parts = (product_name or "", release_type or "", release_status or "", str(limit))
+    cached = _cache_get("rss", parts)
     now_ts = _time.time()
-    # Read cache under lock
-    with _CACHE_LOCK:
-        cached = _RSS_CACHE.get(cache_key)
     if cached:
-        # Valid cache: serve fresh
-        if cached.get('expires', 0) > now_ts:
+        fresh_until = cached.get("fresh_until_ts", 0)
+        stale_until = cached.get("stale_until_ts", 0)
+        built_iso = cached.get("built_iso")
+        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
+        # fresh
+        if now_ts <= fresh_until:
             inm = request.headers.get("If-None-Match")
-            if inm and inm == cached['etag']:
+            if inm and inm == cached.get("etag"):
                 return Response(status=304)
-            resp = Response(cached['xml'], mimetype="application/rss+xml; charset=utf-8")
-            resp.headers['ETag'] = cached['etag']
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}"
-            resp.headers['Last-Modified'] = format_datetime(cached['built'].astimezone(timezone.utc))
+            resp = Response(cached.get("body", ""), mimetype="application/rss+xml; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
-        # Expired: trigger background refresh and serve stale
-        def _refresh_rss():
-            try:
-                rows_bg = get_recently_modified_releases(
-                    get_engine(),
-                    limit=int(cache_key[3]),
-                    product_name=cache_key[0] or None,
-                    release_type=cache_key[1] or None,
-                    release_status=cache_key[2] or None,
-                )
-                xml_bg = build_rss_xml(rows_bg, description=f"Up to {cache_key[3]} most recently modified releases")
-                built_bg = datetime.now(timezone.utc)
-                etag_bg = 'W/"' + hashlib.sha256(xml_bg.encode('utf-8')).hexdigest() + '"'
-                with _CACHE_LOCK:
-                    _RSS_CACHE[cache_key] = {
-                        'xml': xml_bg,
-                        'expires': _time.time() + _TTL_SECONDS,
-                        'etag': etag_bg,
-                        'built': built_bg,
-                    }
-            finally:
-                with _CACHE_LOCK:
-                    _RSS_REFRESHING.discard(cache_key)
+        # stale but within serveable window
+        if now_ts <= stale_until:
+            # Attempt to acquire refresh lock and refresh in background
+            if _try_acquire_lock("rss", parts):
+                def _refresh_rss_bg():
+                    try:
+                        rows_bg = get_recently_modified_releases(
+                            get_engine(),
+                            limit=int(parts[3]),
+                            product_name=parts[0] or None,
+                            release_type=parts[1] or None,
+                            release_status=parts[2] or None,
+                        )
+                        xml_bg = build_rss_xml(rows_bg, description=f"Up to {parts[3]} most recently modified releases")
+                        built_bg = datetime.now(timezone.utc)
+                        etag_bg = 'W/"' + hashlib.sha256(xml_bg.encode('utf-8')).hexdigest() + '"'
+                        _cache_set("rss", parts, xml_bg, etag_bg, built_bg)
+                    finally:
+                        _release_lock("rss", parts)
 
-        with _CACHE_LOCK:
-            if cache_key not in _RSS_REFRESHING:
-                _RSS_REFRESHING.add(cache_key)
-                threading.Thread(target=_refresh_rss, daemon=True).start()
-        resp = Response(cached['xml'], mimetype="application/rss+xml; charset=utf-8")
-        resp.headers['ETag'] = cached['etag']
-        resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_TTL_SECONDS}"
-        resp.headers['Last-Modified'] = format_datetime(cached['built'].astimezone(timezone.utc))
-        resp.headers['X-Cache'] = 'STALE'
-        return resp
+                threading.Thread(target=_refresh_rss_bg, daemon=True).start()
+            resp = Response(cached.get("body", ""), mimetype="application/rss+xml; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            resp.headers['X-Cache'] = 'STALE'
+            return resp
 
     # No cache: build synchronously
     rows = get_recently_modified_releases(
@@ -230,78 +315,60 @@ def rss_feed():
     xml = build_rss_xml(rows, description=f"Up to {limit} most recently modified releases")
     built_dt = datetime.now(timezone.utc)
     etag = 'W/"' + hashlib.sha256(xml.encode('utf-8')).hexdigest() + '"'
-    with _CACHE_LOCK:
-        _RSS_CACHE[cache_key] = {
-            'xml': xml,
-            'expires': now_ts + _TTL_SECONDS,
-            'etag': etag,
-            'built': built_dt,
-        }
+    _cache_set("rss", parts, xml, etag, built_dt)
     resp = Response(xml, mimetype="application/rss+xml; charset=utf-8")
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}"
+    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
 
 
 @app.get("/")
 def index():
-    cache_key = ("index",)
+    parts = ("index",)
+    cached = _cache_get("index", parts)
     now_ts = _time.time()
-    with _CACHE_LOCK:
-        cached = _INDEX_CACHE.get(cache_key)
     if cached:
-        if cached.get('expires', 0) > now_ts:
+        fresh_until = cached.get("fresh_until_ts", 0)
+        stale_until = cached.get("stale_until_ts", 0)
+        built_iso = cached.get("built_iso")
+        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
+        if now_ts <= fresh_until:
             inm = request.headers.get("If-None-Match")
-            if inm and inm == cached['etag']:
+            if inm and inm == cached.get("etag"):
                 return Response(status=304)
-            resp = Response(cached['html'], mimetype="text/html; charset=utf-8")
-            resp.headers['ETag'] = cached['etag']
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}"
-            resp.headers['Last-Modified'] = format_datetime(cached['built'].astimezone(timezone.utc))
+            resp = Response(cached.get("body", ""), mimetype="text/html; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
-        # Expired: refresh in background and serve stale
-        def _refresh_index():
-            try:
-                html_bg = _build_index_html()
-                etag_bg = 'W/"' + hashlib.sha256(html_bg.encode('utf-8')).hexdigest() + '"'
-                built_bg = datetime.now(timezone.utc)
-                with _CACHE_LOCK:
-                    _INDEX_CACHE[cache_key] = {
-                        'html': html_bg,
-                        'expires': _time.time() + _TTL_SECONDS,
-                        'etag': etag_bg,
-                        'built': built_bg,
-                    }
-            finally:
-                with _CACHE_LOCK:
-                    _INDEX_REFRESHING.discard(cache_key)
+        if now_ts <= stale_until:
+            if _try_acquire_lock("index", parts):
+                def _refresh_index_bg():
+                    try:
+                        html_bg = _build_index_html()
+                        etag_bg = 'W/"' + hashlib.sha256(html_bg.encode('utf-8')).hexdigest() + '"'
+                        built_bg = datetime.now(timezone.utc)
+                        _cache_set("index", parts, html_bg, etag_bg, built_bg)
+                    finally:
+                        _release_lock("index", parts)
 
-        with _CACHE_LOCK:
-            if cache_key not in _INDEX_REFRESHING:
-                _INDEX_REFRESHING.add(cache_key)
-                threading.Thread(target=_refresh_index, daemon=True).start()
-        resp = Response(cached['html'], mimetype="text/html; charset=utf-8")
-        resp.headers['ETag'] = cached['etag']
-        resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_TTL_SECONDS}"
-        resp.headers['Last-Modified'] = format_datetime(cached['built'].astimezone(timezone.utc))
-        resp.headers['X-Cache'] = 'STALE'
-        return resp
+                threading.Thread(target=_refresh_index_bg, daemon=True).start()
+            resp = Response(cached.get("body", ""), mimetype="text/html; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            resp.headers['X-Cache'] = 'STALE'
+            return resp
 
-    # No cache: build synchronously
+    # No cache or expired beyond stale window: build synchronously
     html = _build_index_html()
     etag = 'W/"' + hashlib.sha256(html.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
-    with _CACHE_LOCK:
-        _INDEX_CACHE[cache_key] = {
-            'html': html,
-            'expires': now_ts + _TTL_SECONDS,
-            'etag': etag,
-            'built': built_dt,
-        }
+    _cache_set("index", parts, html, etag, built_dt)
     resp = Response(html, mimetype="text/html; charset=utf-8")
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}"
+    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
 
@@ -312,81 +379,11 @@ def api_releases():
     product_name = request.args.get("product_name")
     release_type = request.args.get("release_type")
     release_status = request.args.get("release_status")
-    # Cache key and lookup
-    cache_key = (product_name or "", release_type or "", release_status or "")
+    # Redis-backed cache key and lookup
+    parts = (product_name or "", release_type or "", release_status or "")
+    cached = _cache_get("api", parts)
     now_ts = _time.time()
-    with _CACHE_LOCK:
-        cached = _API_CACHE.get(cache_key)
-    if cached:
-        if cached.get('expires', 0) > now_ts:
-            inm = request.headers.get("If-None-Match")
-            if inm and inm == cached['etag']:
-                return Response(status=304)
-            resp = Response(cached['json'], mimetype="application/json; charset=utf-8")
-            resp.headers['ETag'] = cached['etag']
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}"
-            resp.headers['Last-Modified'] = format_datetime(cached['built'].astimezone(timezone.utc))
-            return resp
-        # Expired: trigger background refresh and serve stale
-        def _refresh_api():
-            try:
-                SessionLocal = sessionmaker(bind=get_engine(), future=True)
-                stmt = select(ReleaseItemModel)
-                if cache_key[0]:
-                    stmt = stmt.where(ReleaseItemModel.feature_name == cache_key[0])
-                if cache_key[1]:
-                    stmt = stmt.where(ReleaseItemModel.release_type == cache_key[1])
-                if cache_key[2]:
-                    stmt = stmt.where(ReleaseItemModel.release_status == cache_key[2])
-                stmt = stmt.order_by(ReleaseItemModel.last_modified.desc(), ReleaseItemModel.release_date.desc())
-                with SessionLocal() as session:
-                    rows = session.scalars(stmt).all()
-                    data = [{
-                        "release_item_id": r.release_item_id,
-                        "feature_name": r.feature_name,
-                        "release_date": r.release_date.isoformat() if r.release_date else None,
-                        "release_type": r.release_type,
-                        "release_status": r.release_status,
-                        "product_id": r.product_id,
-                        "product_name": r.product_name,
-                        "feature_description": r.feature_description,
-                        "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
-                    } for r in rows]
-                json_bg = json.dumps(data, sort_keys=True, separators=(",", ":"))
-                etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
-                built_bg = datetime.now(timezone.utc)
-                with _CACHE_LOCK:
-                    _API_CACHE[cache_key] = {
-                        'json': json_bg,
-                        'expires': _time.time() + _TTL_SECONDS,
-                        'etag': etag_bg,
-                        'built': built_bg,
-                    }
-            finally:
-                with _CACHE_LOCK:
-                    _API_REFRESHING.discard(cache_key)
 
-        with _CACHE_LOCK:
-            if cache_key not in _API_REFRESHING:
-                _API_REFRESHING.add(cache_key)
-                threading.Thread(target=_refresh_api, daemon=True).start()
-        resp = Response(cached['json'], mimetype="application/json; charset=utf-8")
-        resp.headers['ETag'] = cached['etag']
-        resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_TTL_SECONDS}"
-        resp.headers['Last-Modified'] = format_datetime(cached['built'].astimezone(timezone.utc))
-        resp.headers['X-Cache'] = 'STALE'
-        return resp
-
-    SessionLocal = sessionmaker(bind=get_engine(), future=True)
-    stmt = select(ReleaseItemModel)
-    if product_name is not None:
-        stmt = stmt.where(ReleaseItemModel.product_name == product_name)
-    if release_type is not None:
-        stmt = stmt.where(ReleaseItemModel.release_type == release_type)
-    if release_status is not None:
-        stmt = stmt.where(ReleaseItemModel.release_status == release_status)
-
-    stmt = stmt.order_by(ReleaseItemModel.last_modified.desc(), ReleaseItemModel.release_date.desc())
 
     def _row_to_dict(r: ReleaseItemModel):
         return {
@@ -401,26 +398,63 @@ def api_releases():
             "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
         }
 
-    with SessionLocal() as session:
-        rows = session.scalars(stmt).all()
-        data = [_row_to_dict(r) for r in rows]
+    if cached:
+        fresh_until = cached.get("fresh_until_ts", 0)
+        stale_until = cached.get("stale_until_ts", 0)
+        built_iso = cached.get("built_iso")
+        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
+        if now_ts <= fresh_until:
+            inm = request.headers.get("If-None-Match")
+            if inm and inm == cached.get("etag"):
+                return Response(status=304)
+            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            return resp
+        if now_ts <= stale_until:
+            if _try_acquire_lock("api", parts):
+                def _refresh_api_bg():
+                    try:
+                        rows = get_recently_modified_releases(
+                            get_engine(),
+                            product_name=product_name,
+                            release_type=release_type,
+                            release_status=release_status,
+                        )
+                        data = [_row_to_dict(r) for r in rows]
+
+                        json_bg = json.dumps(data, sort_keys=True, separators=(",", ":"))
+                        etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
+                        built_bg = datetime.now(timezone.utc)
+                        _cache_set("api", parts, json_bg, etag_bg, built_bg)
+                    finally:
+                        _release_lock("api", parts)
+
+                threading.Thread(target=_refresh_api_bg, daemon=True).start()
+            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            resp.headers['X-Cache'] = 'STALE'
+            return resp
+
+    rows = get_recently_modified_releases(
+        get_engine(),
+        product_name=product_name,
+        release_type=release_type,
+        release_status=release_status,
+    )
+    data = [_row_to_dict(r) for r in rows]
 
     # Serialize to stable JSON for ETag
     json_str = json.dumps(data, sort_keys=True, separators=(",", ":"))
     etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
-
-    with _CACHE_LOCK:
-        _API_CACHE[cache_key] = {
-            'json': json_str,
-            'expires': now_ts + _TTL_SECONDS,
-            'etag': etag,
-            'built': built_dt,
-        }
-
+    _cache_set("api", parts, json_str, etag, built_dt)
     resp = Response(json_str, mimetype="application/json; charset=utf-8")
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}"
+    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
 
