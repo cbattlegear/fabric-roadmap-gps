@@ -636,6 +636,76 @@ body {
   margin: 0;
 }
 
+/* Email Subscription Styles */
+.subscription-item {
+  background: rgba(255, 255, 255, 0.15) !important;
+}
+
+.subscription-form {
+  display: flex;
+  gap: var(--spacing-s);
+  margin-top: var(--spacing-m);
+  flex-wrap: wrap;
+}
+
+.subscription-input {
+  flex: 1;
+  min-width: 200px;
+  padding: var(--spacing-s);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--fabric-neutral-grey-160);
+  font-size: var(--font-size-body);
+}
+
+.subscription-input:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.8);
+  background: white;
+}
+
+.subscription-input::placeholder {
+  color: var(--fabric-neutral-grey-90);
+}
+
+.subscription-btn {
+  white-space: nowrap;
+  background: rgba(255, 255, 255, 0.2) !important;
+  border: 1px solid rgba(255, 255, 255, 0.3) !important;
+  color: white !important;
+}
+
+.subscription-btn:hover {
+  background: rgba(255, 255, 255, 0.3) !important;
+  border-color: rgba(255, 255, 255, 0.5) !important;
+}
+
+.subscription-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.subscription-message {
+  margin-top: var(--spacing-s);
+  padding: var(--spacing-s);
+  border-radius: 4px;
+  font-size: var(--font-size-caption);
+  text-align: center;
+}
+
+.subscription-message.success {
+  background: rgba(16, 124, 16, 0.1);
+  border: 1px solid rgba(16, 124, 16, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.subscription-message.error {
+  background: rgba(196, 43, 28, 0.1);
+  border: 1px solid rgba(196, 43, 28, 0.3);
+  color: rgba(255, 255, 255, 0.9);
+}
+
 /* Focus indicators */
 .button:focus-visible,
 a:focus-visible {

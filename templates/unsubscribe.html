@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Unsubscribe - Fabric GPS</title>
+    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🗺️%3C/text%3E%3C/svg%3E">
+    <style>
+        .unsubscribe-container {
+            max-width: 600px;
+            margin: 2rem auto;
+            padding: var(--spacing-xl);
+            background: white;
+            border-radius: 12px;
+            box-shadow: var(--elevation-2);
+            text-align: center;
+        }
+        .success-icon {
+            font-size: 4rem;
+            margin-bottom: var(--spacing-l);
+        }
+        .error-icon {
+            font-size: 4rem;
+            margin-bottom: var(--spacing-l);
+        }
+        .success-message {
+            color: var(--fabric-semantic-success);
+        }
+        .error-message {
+            color: var(--fabric-semantic-error);
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <h1 style="margin: 0; font-size: 1.5rem; color: var(--fabric-neutral-grey-160);">
+                <a href="/" style="color: inherit; text-decoration: none;">🗺️ Fabric GPS</a>
+            </h1>
+        </div>
+    </header>
+
+    <main>
+        <div class="container">
+            <div class="unsubscribe-container">
+                {% if success %}
+                    <div class="success-icon">✅</div>
+                    <h1 class="success-message">Successfully Unsubscribed</h1>
+                    <p>You have been unsubscribed from Fabric GPS weekly updates. We're sorry to see you go!</p>
+                    <p>You can subscribe again at any time from our homepage.</p>
+                    <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+                {% elif error %}
+                    <div class="error-icon">❌</div>
+                    <h1 class="error-message">Unsubscribe Failed</h1>
+                    <p>{{ error }}</p>
+                    <p>The unsubscribe link may be invalid or expired. If you continue to receive emails, please contact support.</p>
+                    <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+                {% else %}
+                    <div class="error-icon">❓</div>
+                    <h1 class="error-message">Invalid Request</h1>
+                    <p>No unsubscribe token provided.</p>
+                    <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+                {% endif %}
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap.</p>
+        </div>
+    </footer>
+</body>
+</html>
