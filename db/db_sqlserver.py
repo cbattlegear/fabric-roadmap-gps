@@ -16,13 +16,13 @@ from sqlalchemy import (
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-import sqlalchemy
-
 # SQLAlchemy-specific exceptions we may inspect
 from sqlalchemy.exc import DBAPIError, OperationalError, DisconnectionError
 
 Base = declarative_base()
-logger = logging.getLogger(__name__)
+logger_name = __name__
+opentelemetery_logger_name = f'{logger_name}.opentelemetry'
+logger = logging.getLogger(opentelemetery_logger_name)
 
 
 class ReleaseItemModel(Base):

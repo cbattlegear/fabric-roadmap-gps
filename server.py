@@ -15,6 +15,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
 from db.redis_cache import RedisCache
 
+import logging
+# Import the `configure_azure_monitor()` function from the
+# `azure.monitor.opentelemetry` package.
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry.instrumentation.flask import FlaskInstrumentor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+#FlaskInstrumentor().instrument(enable_commenter=True, commenter_options={})
 # Azure Communication Services for email
 try:
     from azure.communication.email import EmailClient
@@ -26,13 +34,26 @@ except ImportError:
 from db.db_sqlserver import (
     make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values,
     EmailSubscriptionModel, EmailVerificationModel, create_email_subscription, 
-    verify_email_subscription, unsubscribe_email, get_active_subscriptions,
-    get_weekly_changes_for_subscription
+    verify_email_subscription, unsubscribe_email
 )
 
 
 app = Flask(__name__)
-logger = logging.getLogger(__name__)
+
+FlaskInstrumentor().instrument_app(app)
+
+logger_name = __name__
+opentelemetery_logger_name = f'{logger_name}.opentelemetry'
+configure_azure_monitor(
+    logger_name=opentelemetery_logger_name,
+    enable_live_metrics=True 
+)
+otelLogger= logging.getLogger(opentelemetery_logger_name)
+stream = logging.StreamHandler()
+otelLogger.addHandler(stream)
+otelLogger.setLevel(logging.INFO)
+otelLogger.info('Fabric-GPS Website started')
+
 ENGINE = None
 REDIS = None
 
@@ -59,11 +80,11 @@ def get_email_client():
         if connection_string:
             try:
                 EMAIL_CLIENT = EmailClient.from_connection_string(connection_string)
-                logger.info("Azure Communication Services email client initialized")
+                otelLogger.info("Azure Communication Services email client initialized")
             except Exception as e:
-                logger.error(f"Failed to initialize Azure email client: {e}")
+                otelLogger.error(f"Failed to initialize Azure email client: {e}")
         else:
-            logger.warning("AZURE_COMMUNICATION_CONNECTION_STRING not set. Email sending disabled.")
+            otelLogger.warning("AZURE_COMMUNICATION_CONNECTION_STRING not set. Email sending disabled.")
     return EMAIL_CLIENT
 
 
@@ -71,7 +92,7 @@ def send_verification_email(email: str, verification_token: str) -> bool:
     """Send verification email using Azure Communication Services"""
     email_client = get_email_client()
     if not email_client:
-        logger.error("Email client not available for verification email")
+        otelLogger.error("Email client not available for verification email")
         return False
     
     try:
@@ -165,14 +186,14 @@ def send_verification_email(email: str, verification_token: str) -> bool:
         result = poller.result()
         
         if result and hasattr(result, 'status'):
-            logger.info(f"Verification email sent to {email} with message ID: {result.id}")
+            otelLogger.info(f"Verification email sent to {email} with message ID: {result.id}")
             return True
         else:
-            logger.error(f"Unexpected response when sending verification email to {email}")
+            otelLogger.error(f"Unexpected response when sending verification email to {email}")
             return False
             
     except Exception as e:
-        logger.error(f"Error sending verification email to {email}: {e}")
+        otelLogger.error(f"Error sending verification email to {email}: {e}")
         return False
 
 
@@ -181,6 +202,7 @@ def get_engine():
     if ENGINE is None:
         ENGINE = make_engine()
         init_db(ENGINE)
+        SQLAlchemyInstrumentor().instrument(engine=ENGINE)
     return ENGINE
 
 
@@ -662,14 +684,14 @@ def api_subscribe():
             }), 201
         else:
             # Even if email fails, subscription was created - user can try again
-            logger.warning(f"Subscription created for {email} but verification email failed to send")
+            otelLogger.warning(f"Subscription created for {email} but verification email failed to send")
             return jsonify({
                 "message": "Subscription created, but there was an issue sending the verification email. Please try again or contact support.",
                 "verification_url": f"/verify-email?token={verification_token}"  # Fallback for testing
             }), 201
         
     except Exception as e:
-        logger.error(f"Error creating subscription: {e}")
+        otelLogger.error(f"Error creating subscription: {e}")
         return jsonify({"error": "Failed to create subscription"}), 500
 
 
@@ -690,7 +712,7 @@ def api_verify_email():
             return jsonify({"error": "Invalid or expired verification token"}), 400
             
     except Exception as e:
-        logger.error(f"Error verifying email: {e}")
+        otelLogger.error(f"Error verifying email: {e}")
         return jsonify({"error": "Failed to verify email"}), 500
 
 
@@ -711,7 +733,7 @@ def verify_email_page():
             return render_template('verify_email.html', error="Invalid or expired verification token")
             
     except Exception as e:
-        logger.error(f"Error verifying email: {e}")
+        otelLogger.error(f"Error verifying email: {e}")
         return render_template('verify_email.html', error="Failed to verify email"), 500
 
 
@@ -732,7 +754,7 @@ def unsubscribe_page():
             return render_template('unsubscribe.html', error="Invalid unsubscribe token")
             
     except Exception as e:
-        logger.error(f"Error unsubscribing: {e}")
+        otelLogger.error(f"Error unsubscribing: {e}")
         return render_template('unsubscribe.html', error="Failed to unsubscribe"), 500
 
 

@@ -2,11 +2,29 @@ import requests
 import re
 import unicodedata
 import json
+import logging
 
 from unidecode import unidecode
 
 from lib.release_item import ReleaseItem
 from db.db_sqlserver import get_recently_modified_releases, make_engine, init_db, save_releases
+
+# Import the `configure_azure_monitor()` function from the
+# `azure.monitor.opentelemetry` package.
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+
+logger_name = 'fabric-gps-refresh'
+opentelemetery_logger_name = f'{logger_name}.opentelemetry'
+configure_azure_monitor(
+    logger_name=opentelemetery_logger_name   
+)
+otelLogger= logging.getLogger(opentelemetery_logger_name)
+stream = logging.StreamHandler()
+otelLogger.addHandler(stream)
+otelLogger.setLevel(logging.INFO)
+otelLogger.info('Fabric-GPS Database Refresh started')
 
 def extract_product_families(js_text):
     # match blocks like:
@@ -90,3 +108,5 @@ if __name__ == '__main__':
     rows = get_recently_modified_releases(engine)
     for r in rows:
         print(r.release_item_id, r.feature_name, r.release_date, r.last_modified)
+
+    otelLogger.info('Fabric-GPS Database Refresh completed')
