@@ -21,19 +21,22 @@ from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
-# Configure OpenTelemetry to use Azure Monitor with the 
-# APPLICATIONINSIGHTS_CONNECTION_STRING environment variable.
-configure_azure_monitor(
-    logger_name="fabric-gps",  # Set the namespace for the logger in which you would like to collect telemetry for if you are collecting logging telemetry. This is imperative so you do not collect logging telemetry from the SDK itself.
-)
-logger = logging.getLogger("fabric-gps")  # Logging telemetry will be collected from logging calls made with this logger and all of it's children loggers.
-
 #FlaskInstrumentor().instrument(enable_commenter=True, commenter_options={})
 from db.db_sqlserver import make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values
 
 
-app = Flask('fabric-gps')
-#FlaskInstrumentor().instrument_app(app)
+app = Flask(__name__)
+
+logger_name = __name__
+opentelemetery_logger_name = f'{logger_name}.opentelemetry'
+configure_azure_monitor(
+    logger_name=opentelemetery_logger_name   
+)
+otelLogger= logging.getLogger(opentelemetery_logger_name)
+stream = logging.StreamHandler()
+otelLogger.addHandler(stream)
+otelLogger.setLevel(logging.INFO)
+otelLogger.info('Fabric-GPS Website started')
 
 ENGINE = None
 REDIS = None
