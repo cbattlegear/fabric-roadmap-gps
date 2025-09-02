@@ -22,7 +22,7 @@ import sqlalchemy
 from sqlalchemy.exc import DBAPIError, OperationalError, DisconnectionError
 
 Base = declarative_base()
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("fabric-gps")
 
 
 class ReleaseItemModel(Base):
