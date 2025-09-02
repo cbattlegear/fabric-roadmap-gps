@@ -566,12 +566,14 @@ def get_unsent_active_subscriptions(engine, time_frame: int) -> List[EmailSubscr
     """Get all active and verified email subscriptions"""
     SessionLocal = sessionmaker(bind=engine, future=True)
     #filter based on last_email_sent is 7 or more days ago
+    # limit to 100 to prevent overwhelming the email service
     with SessionLocal() as session:
         subscriptions = session.scalars(
             select(EmailSubscriptionModel)
             .where(EmailSubscriptionModel.is_active == True)
             .where(EmailSubscriptionModel.is_verified == True)
             .where(EmailSubscriptionModel.last_email_sent <= datetime.now(datetime.timezone.utc) - timedelta(days=time_frame))
+            .limit(100)
         ).all()
         
         # Detach from session to avoid lazy loading issues

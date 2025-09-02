@@ -9,7 +9,10 @@ if [[ "$MODE" == "web" ]]; then
 elif [[ "$MODE" == "fetch" ]]; then
   # Run the data fetcher script
   exec python get_current_releases.py
+elif [[ "$MODE" == "email" ]]; then
+  # Run the email sending script
+  exec python send_weekly_emails.py
 else
-  echo "Unknown APP_MODE: $MODE (expected 'web' or 'fetch')" >&2
+  echo "Unknown APP_MODE: $MODE (expected 'web', 'fetch', or 'email')" >&2
   exit 1
 fi
