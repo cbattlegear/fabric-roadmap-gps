@@ -455,6 +455,12 @@ def _build_endpoints_html() -> str:
                              api_examples=api_examples_data)
 
 
+@app.get("/subscribe")
+def subscribe():
+    """Email subscription page"""
+    return render_template("subscribe.html")
+
+
 @app.get("/api/releases")
 def api_releases():
     """Return JSON array of releases with optional exact-match filters, no limit."""

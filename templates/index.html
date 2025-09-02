@@ -6,13 +6,35 @@
     <title>Fabric GPS - Microsoft Fabric Roadmap Tracker</title>
     <link rel="stylesheet" href="/static/styles.css">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🗺️%3C/text%3E%3C/svg%3E">
+    <style>
+        @media (max-width: 768px) {
+            /* Mobile navigation */
+            header .container > div {
+                flex-direction: column !important;
+                gap: 1rem;
+                align-items: flex-start !important;
+            }
+            
+            header nav {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+    </style>
 </head>
 <body>
     <header class="header">
         <div class="container">
-            <h1 style="margin: 0; font-size: 1.5rem; color: var(--fabric-neutral-grey-160);">
-                🗺️ Fabric GPS
-            </h1>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h1 style="margin: 0; font-size: 1.5rem; color: var(--fabric-neutral-grey-160);">
+                    🗺️ Fabric GPS
+                </h1>
+                <nav style="display: flex; gap: 1rem;">
+                    <a href="/" style="color: var(--fabric-brand-60); text-decoration: none; padding: 0.25rem 0.5rem; font-weight: 600;">Home</a>
+                    <a href="/endpoints" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">API</a>
+                    <a href="/subscribe" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">Subscribe</a>
+                </nav>
+            </div>
         </div>
     </header>
 
@@ -150,11 +172,7 @@
                             <div class="roadmap-content">
                                 <h4>Weekly Email Updates</h4>
                                 <p>Get a weekly summary of Microsoft Fabric roadmap changes delivered to your inbox.</p>
-                                <div class="subscription-form">
-                                    <input type="email" id="subscription-email" placeholder="Enter your email" class="subscription-input" />
-                                    <button id="subscribe-btn" class="button button-secondary subscription-btn">Subscribe</button>
-                                </div>
-                                <div id="subscription-message" class="subscription-message" style="display: none;"></div>
+                                <a href="/subscribe" class="button button-primary">Subscribe to Email Updates</a>
                             </div>
                         </div>
                         <div class="roadmap-item">
@@ -181,7 +199,11 @@
 
     <footer class="footer">
         <div class="container">
-            <p>&copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap. Updated every 24 hours.</p>
+            <p>
+                <a href="/endpoints" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">API Documentation</a>
+                <a href="/subscribe" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">Email Notifications</a>
+                &copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap. Updated every 24 hours.
+            </p>
         </div>
     </footer>
 
@@ -388,93 +410,7 @@
         // Initialize when DOM is loaded
         document.addEventListener('DOMContentLoaded', () => {
             new RecentChanges();
-            new EmailSubscription();
         });
-
-        // Email Subscription functionality
-        class EmailSubscription {
-            constructor() {
-                this.init();
-            }
-
-            init() {
-                const subscribeBtn = document.getElementById('subscribe-btn');
-                const emailInput = document.getElementById('subscription-email');
-                
-                if (subscribeBtn && emailInput) {
-                    subscribeBtn.addEventListener('click', () => this.subscribe());
-                    emailInput.addEventListener('keypress', (e) => {
-                        if (e.key === 'Enter') {
-                            this.subscribe();
-                        }
-                    });
-                }
-            }
-
-            async subscribe() {
-                const emailInput = document.getElementById('subscription-email');
-                const subscribeBtn = document.getElementById('subscribe-btn');
-                const messageDiv = document.getElementById('subscription-message');
-                
-                const email = emailInput.value.trim();
-                
-                if (!email) {
-                    this.showMessage('Please enter your email address', 'error');
-                    return;
-                }
-
-                if (!this.isValidEmail(email)) {
-                    this.showMessage('Please enter a valid email address', 'error');
-                    return;
-                }
-
-                // Disable button and show loading
-                subscribeBtn.disabled = true;
-                subscribeBtn.textContent = 'Subscribing...';
-
-                try {
-                    const response = await fetch('/api/subscribe', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({ email: email })
-                    });
-
-                    const data = await response.json();
-
-                    if (response.ok) {
-                        this.showMessage('Check your email for a verification link!', 'success');
-                        emailInput.value = '';
-                    } else {
-                        this.showMessage(data.error || 'Failed to subscribe', 'error');
-                    }
-                } catch (error) {
-                    console.error('Subscription error:', error);
-                    this.showMessage('Network error. Please try again.', 'error');
-                } finally {
-                    subscribeBtn.disabled = false;
-                    subscribeBtn.textContent = 'Subscribe';
-                }
-            }
-
-            showMessage(text, type) {
-                const messageDiv = document.getElementById('subscription-message');
-                messageDiv.textContent = text;
-                messageDiv.className = `subscription-message ${type}`;
-                messageDiv.style.display = 'block';
-
-                // Hide message after 5 seconds
-                setTimeout(() => {
-                    messageDiv.style.display = 'none';
-                }, 5000);
-            }
-
-            isValidEmail(email) {
-                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-                return emailRegex.test(email);
-            }
-        }
     </script>
 </body>
 </html>

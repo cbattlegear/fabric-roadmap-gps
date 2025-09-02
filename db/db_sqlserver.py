@@ -560,38 +560,20 @@ def get_active_subscriptions(engine) -> List[EmailSubscriptionModel]:
         # Detach from session to avoid lazy loading issues
         session.expunge_all()
         return list(subscriptions)
-
-
-@retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
-def get_weekly_changes_for_subscription(engine, subscription: EmailSubscriptionModel, days_back: int = 7) -> List[ReleaseItemModel]:
-    """Get recent changes filtered by subscription preferences"""
+    
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_unsent_active_subscriptions(engine, time_frame: int) -> List[EmailSubscriptionModel]:
+    """Get all active and verified email subscriptions"""
     SessionLocal = sessionmaker(bind=engine, future=True)
-    
-    cutoff_date = date.today() - timedelta(days=days_back)
-    
+    #filter based on last_email_sent is 7 or more days ago
     with SessionLocal() as session:
-        stmt = (
-            select(ReleaseItemModel)
-            .where(ReleaseItemModel.last_modified >= cutoff_date)
-            .order_by(ReleaseItemModel.last_modified.desc())
-        )
+        subscriptions = session.scalars(
+            select(EmailSubscriptionModel)
+            .where(EmailSubscriptionModel.is_active == True)
+            .where(EmailSubscriptionModel.is_verified == True)
+            .where(EmailSubscriptionModel.last_email_sent <= datetime.now(datetime.timezone.utc) - timedelta(days=time_frame))
+        ).all()
         
-        # Apply filters if specified
-        if subscription.product_filter:
-            products = [p.strip() for p in subscription.product_filter.split(',') if p.strip()]
-            if products:
-                stmt = stmt.where(ReleaseItemModel.product_name.in_(products))
-        
-        if subscription.release_type_filter:
-            types = [t.strip() for t in subscription.release_type_filter.split(',') if t.strip()]
-            if types:
-                stmt = stmt.where(ReleaseItemModel.release_type.in_(types))
-        
-        if subscription.release_status_filter:
-            statuses = [s.strip() for s in subscription.release_status_filter.split(',') if s.strip()]
-            if statuses:
-                stmt = stmt.where(ReleaseItemModel.release_status.in_(statuses))
-        
-        changes = session.scalars(stmt).all()
+        # Detach from session to avoid lazy loading issues
         session.expunge_all()
-        return list(changes)
+        return list(subscriptions)

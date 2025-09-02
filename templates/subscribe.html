@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Microsoft Fabric Roadmap - Email Notifications</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <style>
+        .subscription-section {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: var(--spacing-xl) 0;
+        }
+        
+        .subscription-benefits {
+            margin-top: var(--spacing-l);
+            padding: var(--spacing-l);
+            background: var(--color-background);
+            border-radius: 8px;
+            border-left: 4px solid var(--color-primary);
+        }
+        
+        .subscription-benefits h4 {
+            margin-top: 0;
+            color: var(--color-primary);
+        }
+        
+        .subscription-benefits ul {
+            margin: var(--spacing-m) 0 0 0;
+            padding-left: var(--spacing-l);
+        }
+        
+        .subscription-benefits li {
+            margin-bottom: var(--spacing-s);
+            color: var(--color-text-secondary);
+        }
+        
+        .email-input {
+            flex: 1;
+            min-width: 200px;
+        }
+        
+        .subscription-form {
+            display: flex;
+            gap: var(--spacing-m);
+            margin: var(--spacing-l) 0;
+        }
+        
+        @media (max-width: 768px) {
+            .subscription-form {
+                flex-direction: column;
+            }
+            
+            .email-input {
+                min-width: auto;
+            }
+            
+            /* Mobile navigation */
+            header .container > div {
+                flex-direction: column !important;
+                gap: 1rem;
+                align-items: flex-start !important;
+            }
+            
+            header nav {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h1 style="margin: 0; font-size: 1.5rem; color: var(--fabric-neutral-grey-160);">
+                    <a href="/" style="color: var(--fabric-neutral-grey-160); text-decoration: none;">🗺️ Fabric GPS</a> / Email Notifications
+                </h1>
+                <nav style="display: flex; gap: 1rem;">
+                    <a href="/" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">Home</a>
+                    <a href="/endpoints" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">API</a>
+                    <a href="/subscribe" style="color: var(--fabric-brand-60); text-decoration: none; padding: 0.25rem 0.5rem; font-weight: 600;">Subscribe</a>
+                </nav>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <div class="hero-section">
+            <div class="hero-content">
+                <h2 class="hero-title">Email Notifications</h2>
+                <p class="hero-description">
+                    Stay informed about the latest Microsoft Fabric roadmap updates. 
+                    Get weekly email summaries delivered straight to your inbox.
+                </p>
+            </div>
+        </div>
+
+        <div class="container">
+            <div class="subscription-section">
+                <div class="card">
+                    <h3>Weekly Email Updates</h3>
+                    <p>Subscribe to receive weekly summaries of new roadmap items and updates.</p>
+                    
+                    <div class="subscription-item">
+                        <div class="subscription-form">
+                            <input 
+                                type="email" 
+                                id="email-input" 
+                                placeholder="Enter your email address" 
+                                class="email-input"
+                            >
+                            <button id="subscribe-btn" class="btn btn-primary">
+                                Subscribe
+                            </button>
+                        </div>
+                        <div id="subscription-message" class="subscription-message"></div>
+                    </div>
+
+                    <div class="subscription-benefits">
+                        <h4>What you'll receive:</h4>
+                        <ul>
+                            <li>Weekly summaries of new and updated roadmap items</li>
+                            <li>Zero junk mail</li>
+                            <li>Easy unsubscribe option in every email</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2024 Microsoft Fabric Roadmap. Data sourced from official Microsoft channels.</p>
+        </div>
+    </footer>
+
+    <script>
+        class EmailSubscription {
+            constructor() {
+                this.emailInput = document.getElementById('email-input');
+                this.subscribeBtn = document.getElementById('subscribe-btn');
+                this.messageDiv = document.getElementById('subscription-message');
+                this.bindEvents();
+            }
+
+            bindEvents() {
+                this.subscribeBtn.addEventListener('click', () => this.subscribe());
+                this.emailInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        this.subscribe();
+                    }
+                });
+            }
+
+            async subscribe() {
+                const email = this.emailInput.value.trim();
+                
+                if (!this.validateEmail(email)) {
+                    this.showMessage('Please enter a valid email address.', 'error');
+                    return;
+                }
+
+                this.setLoading(true);
+
+                try {
+                    const response = await fetch('/api/subscribe', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ email: email })
+                    });
+
+                    const result = await response.json();
+
+                    if (response.ok) {
+                        this.showMessage(result.message, 'success');
+                        this.emailInput.value = '';
+                    } else {
+                        this.showMessage(result.error || 'An error occurred. Please try again.', 'error');
+                    }
+                } catch (error) {
+                    this.showMessage('Network error. Please try again.', 'error');
+                } finally {
+                    this.setLoading(false);
+                }
+            }
+
+            validateEmail(email) {
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+                return emailRegex.test(email);
+            }
+
+            showMessage(message, type) {
+                this.messageDiv.textContent = message;
+                this.messageDiv.className = `subscription-message ${type}`;
+                this.messageDiv.style.display = 'block';
+
+                if (type === 'success') {
+                    setTimeout(() => {
+                        this.messageDiv.style.display = 'none';
+                    }, 5000);
+                }
+            }
+
+            setLoading(loading) {
+                this.subscribeBtn.disabled = loading;
+                this.subscribeBtn.textContent = loading ? 'Subscribing...' : 'Subscribe';
+                this.emailInput.disabled = loading;
+            }
+        }
+
+        // Initialize when DOM is loaded
+        document.addEventListener('DOMContentLoaded', () => {
+            new EmailSubscription();
+        });
+    </script>
+</body>
+</html>

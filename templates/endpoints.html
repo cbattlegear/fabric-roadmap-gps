@@ -63,14 +63,35 @@
         .nav-link:hover {
             text-decoration: underline;
         }
+        
+        @media (max-width: 768px) {
+            /* Mobile navigation */
+            header .container > div {
+                flex-direction: column !important;
+                gap: 1rem;
+                align-items: flex-start !important;
+            }
+            
+            header nav {
+                width: 100%;
+                justify-content: center;
+            }
+        }
     </style>
 </head>
 <body>
     <header class="header">
         <div class="container">
-            <h1 style="margin: 0; font-size: 1.5rem; color: var(--fabric-neutral-grey-160);">
-                <a href="/" class="nav-link">🗺️ Fabric GPS</a> / API Documentation
-            </h1>
+            <div style="display: flex; justify-content: space-between; align-items: center;">
+                <h1 style="margin: 0; font-size: 1.5rem; color: var(--fabric-neutral-grey-160);">
+                    <a href="/" style="color: var(--fabric-neutral-grey-160); text-decoration: none;">🗺️ Fabric GPS</a> / API Documentation
+                </h1>
+                <nav style="display: flex; gap: 1rem;">
+                    <a href="/" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">Home</a>
+                    <a href="/endpoints" style="color: var(--fabric-brand-60); text-decoration: none; padding: 0.25rem 0.5rem; font-weight: 600;">API</a>
+                    <a href="/subscribe" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">Subscribe</a>
+                </nav>
+            </div>
         </div>
     </header>
 
@@ -187,6 +208,7 @@
         <div class="container">
             <p>
                 <a href="/" class="nav-link">← Back to Home</a> |
+                <a href="/subscribe" class="nav-link">Subscribe</a> |
                 &copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap.
             </p>
         </div>

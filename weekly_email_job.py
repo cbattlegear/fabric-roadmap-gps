@@ -20,10 +20,11 @@ from azure.communication.email import EmailClient
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from db.db_sqlserver import (
-    make_engine, get_active_subscriptions, EmailSubscriptionModel
+    make_engine, get_unsent_active_subscriptions, EmailSubscriptionModel
 )
 
 # Configure logging
+# This will need to change to app insights once merged
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -53,7 +54,7 @@ class WeeklyEmailSender:
         """Send weekly emails to all active subscribers"""
         try:
             engine = make_engine()
-            subscriptions = get_active_subscriptions(engine)
+            subscriptions = get_unsent_active_subscriptions(engine, 7)
             
             logger.info(f"Found {len(subscriptions)} active subscriptions")
             
