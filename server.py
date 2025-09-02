@@ -22,7 +22,6 @@ from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
-#FlaskInstrumentor().instrument(enable_commenter=True, commenter_options={})
 # Azure Communication Services for email
 try:
     from azure.communication.email import EmailClient

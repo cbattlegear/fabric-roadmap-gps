@@ -16,6 +16,9 @@ from datetime import datetime, date, timedelta
 from typing import List, Dict, Any
 from azure.communication.email import EmailClient
 
+from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -24,16 +27,17 @@ from db.db_sqlserver import (
 )
 
 # Configure logging
-# This will need to change to app insights once merged
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler('weekly_email_job.log'),
-        logging.StreamHandler()
-    ]
+logger_name = 'fabric-gps-email'
+opentelemetery_logger_name = f'{logger_name}.opentelemetry'
+configure_azure_monitor(
+    logger_name=opentelemetery_logger_name,
+    enable_live_metrics=True 
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(opentelemetery_logger_name)
+stream = logging.StreamHandler()
+logger.addHandler(stream)
+logger.setLevel(logging.INFO)
+logger.info('Fabric-GPS Email Batch Job started')
 
 
 class WeeklyEmailSender:
@@ -54,6 +58,7 @@ class WeeklyEmailSender:
         """Send weekly emails to all active subscribers"""
         try:
             engine = make_engine()
+            SQLAlchemyInstrumentor().instrument(engine=engine)
             subscriptions = get_unsent_active_subscriptions(engine, 7)
             
             logger.info(f"Found {len(subscriptions)} active subscriptions")
@@ -187,6 +192,7 @@ class WeeklyEmailSender:
         """Update the last_email_sent date for a subscription"""
         try:
             engine = make_engine()
+            SQLAlchemyInstrumentor().instrument(engine=engine)
             from sqlalchemy.orm import sessionmaker
             SessionLocal = sessionmaker(bind=engine, future=True)
             with SessionLocal() as session:
