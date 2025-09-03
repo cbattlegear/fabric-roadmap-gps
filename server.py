@@ -340,13 +340,18 @@ def api_releases():
     release_type = request.args.get("release_type")
     release_status = request.args.get("release_status")
     modified_within_days = request.args.get("modified_within_days", type=int)
+    # Search query (partial/case-insensitive)
+    q = request.args.get("q")
 
     if modified_within_days is not None:
         modified_within_days = max(1, min(modified_within_days, 30))
 
+    # If a search query is provided, bypass caching to avoid filling up cache with one-off queries
+    use_cache = not (q and str(q).strip())
+
     # Redis-backed cache key and lookup
-    parts = (product_name or "", release_type or "", release_status or "", modified_within_days)
-    cached = CACHE.get("api", parts)
+    parts = (product_name or "", release_type or "", release_status or "", modified_within_days, q or "")
+    cached = CACHE.get("api", parts) if use_cache else None
     now_ts = _time.time()
 
 
@@ -387,6 +392,7 @@ def api_releases():
                             release_type=release_type,
                             release_status=release_status,
                             modified_within_days=modified_within_days,
+                            q=q,
                         )
                         data = [_row_to_dict(r) for r in rows]
 
@@ -411,6 +417,7 @@ def api_releases():
         release_type=release_type,
         release_status=release_status,
         modified_within_days=modified_within_days,
+        q=q,
     )
     data = [_row_to_dict(r) for r in rows]
 
@@ -418,7 +425,8 @@ def api_releases():
     json_str = json.dumps(data, sort_keys=True, separators=(",", ":"))
     etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
-    CACHE.set("api", parts, json_str, etag, built_dt)
+    if use_cache:
+        CACHE.set("api", parts, json_str, etag, built_dt)
     resp = Response(json_str, mimetype="application/json; charset=utf-8")
     resp.headers['ETag'] = etag
     resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"

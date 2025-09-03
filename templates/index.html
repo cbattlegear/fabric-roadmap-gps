@@ -90,6 +90,10 @@
                                 <option value="30">Last 30 days</option>
                             </select>
                         </div>
+                        <div class="filter-group">
+                            <label for="search-input">Search:</label>
+                            <input id="search-input" class="filter-select" type="search" placeholder="Search features, descriptions, products..." />
+                        </div>
                         <button id="apply-filters" class="button button-primary">Apply Filters</button>
                         <button id="clear-filters" class="button button-secondary">Clear</button>
                     </div>
@@ -187,6 +191,8 @@
             constructor() {
                 this.filterOptions = {};
                 this.currentData = [];
+                this.debounceTimer = null;
+                this.minSearchLength = 2; // minimum chars to trigger search
                 this.init();
             }
 
@@ -244,6 +250,10 @@
                     if (filters.release_type) params.append('release_type', filters.release_type);
                     if (filters.release_status) params.append('release_status', filters.release_status);
                     if (filters.modified_within_days) params.append('modified_within_days', filters.modified_within_days);
+                    // Include search query if meets minimum length
+                    if (filters.q && String(filters.q).trim().length >= this.minSearchLength) {
+                        params.append('q', String(filters.q).trim());
+                    }
 
                     const response = await fetch(`/api/releases?${params.toString()}`);
                     this.currentData = await response.json();
@@ -313,6 +323,14 @@
                 const applyBtn = document.getElementById('apply-filters');
                 const clearBtn = document.getElementById('clear-filters');
 
+                // Debounced search input handling
+                const searchInput = document.getElementById('search-input');
+                if (searchInput) {
+                    searchInput.addEventListener('input', (e) => {
+                        this.debounceSearch();
+                    });
+                }
+
                 applyBtn.addEventListener('click', () => {
                     const filters = this.getActiveFilters();
                     this.loadRecentChanges(filters);
@@ -339,7 +357,8 @@
                     product_name: document.getElementById('product-filter').value,
                     release_type: document.getElementById('type-filter').value,
                     release_status: document.getElementById('status-filter').value,
-                    modified_within_days: document.getElementById('days-filter').value
+                    modified_within_days: document.getElementById('days-filter').value,
+                    q: (document.getElementById('search-input') && document.getElementById('search-input').value) || ''
                 };
             }
 
@@ -348,6 +367,8 @@
                 document.getElementById('type-filter').value = '';
                 document.getElementById('status-filter').value = '';
                 document.getElementById('days-filter').value = '';
+                const si = document.getElementById('search-input');
+                if (si) si.value = '';
             }
 
             showLoading(show) {
@@ -378,6 +399,19 @@
                 const div = document.createElement('div');
                 div.textContent = text;
                 return div.innerHTML;
+            }
+
+            debounceSearch(delay = 300) {
+                if (this.debounceTimer) clearTimeout(this.debounceTimer);
+                this.debounceTimer = setTimeout(() => {
+                    const filters = this.getActiveFilters();
+                    // If search text is too short and non-empty, don't send 'q' param (acts like no-search)
+                    if (filters.q && String(filters.q).trim().length > 0 && String(filters.q).trim().length < this.minSearchLength) {
+                        // do not search yet
+                        return;
+                    }
+                    this.loadRecentChanges(filters);
+                }, delay);
             }
         }
 
