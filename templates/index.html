@@ -298,14 +298,17 @@
                     day: 'numeric'
                 }) : 'TBD';
 
+                const releaseTypeClass = item.release_type == 'General availability' ? 'badge-success' : 'badge-warning';
+                const releaseStatusClass = item.release_status == 'Shipped' ? 'badge-success' : 'badge-warning';
+
                 return `
                     <div class="change-item">
                         <div class="change-header">
                             <h3 class="change-title">${this.escapeHtml(item.feature_name || 'Unnamed Feature')}</h3>
                             <div class="change-badges">
                                 <span class="change-badge badge-product">${this.escapeHtml(item.product_name || 'Unknown')}</span>
-                                <span class="change-badge badge-type">${this.escapeHtml(item.release_type || 'Unknown')}</span>
-                                <span class="change-badge badge-status">${this.escapeHtml(item.release_status || 'Unknown')}</span>
+                                <span class="change-badge ${releaseTypeClass}">${this.escapeHtml(item.release_type || 'Unknown')}</span>
+                                <span class="change-badge ${releaseStatusClass}">${this.escapeHtml(item.release_status || 'Unknown')}</span>
                             </div>
                         </div>
                         <div class="change-meta">
