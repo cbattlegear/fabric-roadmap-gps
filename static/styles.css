@@ -1,8 +1,8 @@
 /* Microsoft Fabric Design Language Styles */
 :root {
   /* Color tokens inspired by Microsoft Fabric */
-  --fabric-primary: #0078d4;
-  --fabric-primary-hover: #106ebe;
+  --fabric-primary: #19433c;
+  --fabric-primary-hover: #286c61;
   --fabric-secondary: #323130;
   --fabric-neutral-grey-10: #faf9f8;
   --fabric-neutral-grey-20: #f3f2f1;
@@ -12,6 +12,8 @@
   --fabric-semantic-success: #107c10;
   --fabric-semantic-warning: #ffb900;
   --fabric-semantic-error: #d13438;
+  --fabric-background-fade-dark: #fff6dc;
+  --fabric-background-fade-light: #edf9f7;
   
   /* Typography */
   --font-family-primary: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, "Helvetica Neue", sans-serif;
@@ -44,7 +46,7 @@ body {
   font-size: var(--font-size-body);
   line-height: 1.5;
   color: var(--fabric-neutral-grey-160);
-  background-color: var(--fabric-neutral-grey-10);
+  background: linear-gradient(70deg, var(--fabric-background-fade-dark) 0%, var(--fabric-background-fade-light) 100%);
   margin: 0;
   padding: 0;
 }
@@ -66,7 +68,7 @@ body {
 .hero-section {
   text-align: center;
   padding: var(--spacing-xxl) 0;
-  background: linear-gradient(135deg, var(--fabric-primary) 0%, #005a9e 100%);
+  background: linear-gradient(135deg, var(--fabric-primary) 0%, #348c7e 100%);
   color: white;
   margin-bottom: var(--spacing-xl);
 }
@@ -554,7 +556,6 @@ body {
 .change-item:hover {
   border-color: var(--fabric-primary);
   box-shadow: var(--elevation-1);
-  transform: translateY(-1px);
 }
 
 .change-header {
@@ -585,6 +586,8 @@ body {
   display: inline-block;
   padding: var(--spacing-xs) var(--spacing-s);
   border-radius: 12px;
+  border-width: 1px;
+  border-style: solid;
   font-size: var(--font-size-caption);
   font-weight: 600;
   text-transform: uppercase;
@@ -592,18 +595,18 @@ body {
 }
 
 .badge-product {
-  background: var(--fabric-primary);
-  color: white;
+  border-color: var(--fabric-primary);
+  color: var(--fabric-neutral-grey-160);
 }
 
-.badge-type {
-  background: var(--fabric-semantic-warning);
-  color: white;
+.badge-warning {
+  border-color: var(--fabric-semantic-warning);
+  color: var(--fabric-neutral-grey-160);
 }
 
-.badge-status {
-  background: var(--fabric-semantic-success);
-  color: white;
+.badge-success {
+  border-color: var(--fabric-semantic-success);
+  color: var(--fabric-neutral-grey-160);
 }
 
 .change-meta {
