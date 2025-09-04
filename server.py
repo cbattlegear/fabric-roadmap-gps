@@ -51,6 +51,8 @@ _TTL_SECONDS = 24 * 60 * 60  # 24 hours fresh
 _STALE_TTL_SECONDS = _TTL_SECONDS  # additional stale window
 _LOCK_TTL_SECONDS = 60  # lock TTL to avoid stampede during refresh
 
+_FRONT_END_TTL = 30 * 60  # 30 minutes
+
 # Redis cache instance (fresh = 24h, stale = 24h)
 CACHE = RedisCache(ttl_seconds=_TTL_SECONDS, lock_ttl_seconds=_LOCK_TTL_SECONDS, stale_ttl_seconds=_STALE_TTL_SECONDS)
 
@@ -167,7 +169,7 @@ def rss_feed():
                 return Response(status=304)
             resp = Response(cached.get("body", ""), mimetype="application/rss+xml; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
         # stale but within serveable window
@@ -193,7 +195,7 @@ def rss_feed():
                 threading.Thread(target=_refresh_rss_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="application/rss+xml; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             resp.headers['X-Cache'] = 'STALE'
             return resp
@@ -213,7 +215,7 @@ def rss_feed():
     CACHE.set("rss", parts, xml, etag, built_dt)
     resp = Response(xml, mimetype="application/rss+xml; charset=utf-8")
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
 
@@ -356,7 +358,8 @@ def api_releases():
     use_cache = not (q and str(q).strip())
 
     # Redis-backed cache key and lookup
-    parts = (product_name or "", release_type or "", release_status or "", modified_within_days, q or "")
+    parts = (product_name or "", release_type or "", release_status or "", str(modified_within_days), q or "")
+    print(parts)
     cached = CACHE.get("api", parts) if use_cache else None
     now_ts = _time.time()
 
@@ -386,7 +389,7 @@ def api_releases():
                 return Response(status=304)
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
         if now_ts <= stale_until:
@@ -413,7 +416,7 @@ def api_releases():
                 threading.Thread(target=_refresh_api_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             resp.headers['X-Cache'] = 'STALE'
             return resp
@@ -436,7 +439,7 @@ def api_releases():
         CACHE.set("api", parts, json_str, etag, built_dt)
     resp = Response(json_str, mimetype="application/json; charset=utf-8")
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
 
@@ -462,7 +465,7 @@ def api_filter_options():
                 return Response(status=304)
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
         
@@ -488,7 +491,7 @@ def api_filter_options():
             
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             resp.headers['X-Cache'] = 'STALE'
             return resp
@@ -508,7 +511,7 @@ def api_filter_options():
     
     resp = Response(json_str, mimetype="application/json; charset=utf-8")
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
 

@@ -132,6 +132,13 @@ class RedisCache:
 
     def release_lock(self, prefix: str, parts: tuple[str, ...]):
         return self._release_lock(prefix, parts)
+    
+    def flush(self):
+        try:
+            r = self.client
+            r.flushdb()
+        except Exception:
+            pass
 
     # Health helpers
     def enabled(self) -> bool:

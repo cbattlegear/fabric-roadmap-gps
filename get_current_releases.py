@@ -7,7 +7,8 @@ import logging
 from unidecode import unidecode
 
 from lib.release_item import ReleaseItem
-from db.db_sqlserver import get_recently_modified_releases, make_engine, init_db, save_releases
+from db.db_sqlserver import make_engine, init_db, save_releases
+from db.redis_cache import RedisCache
 
 # Import the `configure_azure_monitor()` function from the
 # `azure.monitor.opentelemetry` package.
@@ -49,6 +50,7 @@ if __name__ == '__main__':
     r.raise_for_status()
     families = extract_product_families(r.text)
     product_releases = {}
+    change_count = 0
     for product in families:
         print(f"Product Family: {product['name']} (ID: {product['id']})")
         
@@ -104,9 +106,16 @@ if __name__ == '__main__':
 
         stats = save_releases(engine, items)
         print("DB save stats:", stats)
+        change_count += stats['updated'] + stats['inserted']
 
-    rows = get_recently_modified_releases(engine)
-    for r in rows:
-        print(r.release_item_id, r.feature_name, r.release_date, r.last_modified)
+    if change_count > 0:
+        # Cache settings: 24h fresh + 24h stale-while-revalidate window
+        _TTL_SECONDS = 24 * 60 * 60  # 24 hours fresh
+        _STALE_TTL_SECONDS = _TTL_SECONDS  # additional stale window
+        _LOCK_TTL_SECONDS = 60  # lock TTL to avoid stampede during refresh
 
-    otelLogger.info('Fabric-GPS Database Refresh completed')
+        # Redis cache instance (fresh = 24h, stale = 24h)
+        CACHE = RedisCache(ttl_seconds=_TTL_SECONDS, lock_ttl_seconds=_LOCK_TTL_SECONDS, stale_ttl_seconds=_STALE_TTL_SECONDS)
+        CACHE.flush()
+
+    otelLogger.info(f'Fabric-GPS Database Refresh completed with {change_count} changes')
