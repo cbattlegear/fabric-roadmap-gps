@@ -21,6 +21,7 @@ import logging
 from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+from opentelemetry.instrumentation.redis import RedisInstrumentor
 
 # Azure Communication Services for email
 try:
@@ -39,6 +40,7 @@ from db.db_sqlserver import (
 
 app = Flask(__name__)
 
+RedisInstrumentor().instrument()
 FlaskInstrumentor().instrument_app(app)
 
 logger_name = __name__
@@ -60,6 +62,8 @@ REDIS = None
 _TTL_SECONDS = 24 * 60 * 60  # 24 hours fresh
 _STALE_TTL_SECONDS = _TTL_SECONDS  # additional stale window
 _LOCK_TTL_SECONDS = 60  # lock TTL to avoid stampede during refresh
+
+_FRONT_END_TTL = 30 * 60  # 30 minutes
 
 # Redis cache instance (fresh = 24h, stale = 24h)
 CACHE = RedisCache(ttl_seconds=_TTL_SECONDS, lock_ttl_seconds=_LOCK_TTL_SECONDS, stale_ttl_seconds=_STALE_TTL_SECONDS)
@@ -296,6 +300,7 @@ def rss_feed():
     cached = CACHE.get("rss", parts)
     now_ts = _time.time()
     if cached:
+        otelLogger.info(f"Cache hit for RSS feed {'/'.join(parts)}")
         fresh_until = cached.get("fresh_until_ts", 0)
         stale_until = cached.get("stale_until_ts", 0)
         built_iso = cached.get("built_iso")
@@ -307,7 +312,7 @@ def rss_feed():
                 return Response(status=304)
             resp = Response(cached.get("body", ""), mimetype="application/rss+xml; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
         # stale but within serveable window
@@ -333,11 +338,12 @@ def rss_feed():
                 threading.Thread(target=_refresh_rss_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="application/rss+xml; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             resp.headers['X-Cache'] = 'STALE'
             return resp
 
+    otelLogger.info(f"Cache miss for RSS feed {'/'.join(parts)}")
     # No cache: build synchronously
     rows = get_recently_modified_releases(
         get_engine(),
@@ -352,7 +358,7 @@ def rss_feed():
     CACHE.set("rss", parts, xml, etag, built_dt)
     resp = Response(xml, mimetype="application/rss+xml; charset=utf-8")
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
 
@@ -370,6 +376,7 @@ def endpoints():
     cached = CACHE.get("endpoints", parts)
     now_ts = _time.time()
     if cached:
+        otelLogger.info(f"Cache hit for /endpoints")
         fresh_until = cached.get("fresh_until_ts", 0)
         stale_until = cached.get("stale_until_ts", 0)
         built_iso = cached.get("built_iso")
@@ -403,6 +410,7 @@ def endpoints():
             })
 
     # No cache or expired beyond stale window: build synchronously
+    otelLogger.info(f"Cache miss for /endpoints")
     html = _build_endpoints_html()
     etag = 'W/"' + hashlib.sha256(html.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
@@ -499,7 +507,8 @@ def api_releases():
     use_cache = not (q and str(q).strip())
 
     # Redis-backed cache key and lookup
-    parts = (product_name or "", release_type or "", release_status or "", modified_within_days, q or "")
+    parts = (product_name or "", release_type or "", release_status or "", str(modified_within_days), q or "")
+    print(parts)
     cached = CACHE.get("api", parts) if use_cache else None
     now_ts = _time.time()
 
@@ -518,6 +527,7 @@ def api_releases():
         }
 
     if cached:
+        otelLogger.info(f"Cache hit for API {'/'.join(parts)}")
         fresh_until = cached.get("fresh_until_ts", 0)
         stale_until = cached.get("stale_until_ts", 0)
         built_iso = cached.get("built_iso")
@@ -528,7 +538,7 @@ def api_releases():
                 return Response(status=304)
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
         if now_ts <= stale_until:
@@ -555,11 +565,11 @@ def api_releases():
                 threading.Thread(target=_refresh_api_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             resp.headers['X-Cache'] = 'STALE'
             return resp
-
+    otelLogger.info(f"Cache miss for API {'/'.join(parts)}")
     rows = get_recently_modified_releases(
         get_engine(),
         product_name=product_name,
@@ -578,7 +588,7 @@ def api_releases():
         CACHE.set("api", parts, json_str, etag, built_dt)
     resp = Response(json_str, mimetype="application/json; charset=utf-8")
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
 
@@ -604,7 +614,7 @@ def api_filter_options():
                 return Response(status=304)
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
         
@@ -630,7 +640,7 @@ def api_filter_options():
             
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             resp.headers['X-Cache'] = 'STALE'
             return resp
@@ -650,7 +660,7 @@ def api_filter_options():
     
     resp = Response(json_str, mimetype="application/json; charset=utf-8")
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}"
+    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
 
