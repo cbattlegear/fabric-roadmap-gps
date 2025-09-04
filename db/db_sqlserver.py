@@ -11,7 +11,7 @@ import logging
 
 # ...existing code...
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Date, Boolean, Text, DateTime, func, select
+    create_engine, Column, String, Integer, Date, Boolean, Text, DateTime, func, select, or_
 )
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -346,17 +346,21 @@ def get_recently_modified_releases(
     release_type: Optional[str] = None,
     release_status: Optional[str] = None,
     modified_within_days: Optional[int] = None,
+    q: Optional[str] = None,
 ) -> List[ReleaseItemModel]:
     """
     Return up to `limit` releases most recently modified (by last_modified desc).
     Optionally filter by exact `product_name`, `release_type`, or `release_status`
     (direct equality). Results are ordered by last_modified desc, then release_date desc.
+
+    Supports optional text search via `q` which performs a case-insensitive partial match
+    against feature_name, feature_description, and product_name.
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
 
     stmt = select(ReleaseItemModel)
     filters = []
-    # use direct equality instead of ilike/partial match
+    # use direct equality instead of ilike/partial match for explicit filters
     if product_name is not None:
         filters.append(ReleaseItemModel.product_name == product_name)
     if release_type is not None:
@@ -366,6 +370,19 @@ def get_recently_modified_releases(
     if modified_within_days is not None:
         modified_since = datetime.now() - timedelta(days=modified_within_days)
         filters.append(ReleaseItemModel.last_modified >= modified_since)
+
+    # Text search (case-insensitive partial match) across useful text columns
+    if q:
+        q_trimmed = str(q).strip()
+        if q_trimmed:
+            pattern = f"%{q_trimmed}%"
+            filters.append(
+                or_(
+                    ReleaseItemModel.feature_name.ilike(pattern),
+                    ReleaseItemModel.feature_description.ilike(pattern),
+                    ReleaseItemModel.product_name.ilike(pattern),
+                )
+            )
 
     if filters:
         stmt = stmt.where(*filters)
