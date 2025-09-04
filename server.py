@@ -20,6 +20,7 @@ import logging
 from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+from opentelemetry.instrumentation.redis import RedisInstrumentor
 
 #FlaskInstrumentor().instrument(enable_commenter=True, commenter_options={})
 from db.db_sqlserver import make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values
@@ -27,6 +28,7 @@ from db.db_sqlserver import make_engine, get_recently_modified_releases, init_db
 
 app = Flask(__name__)
 
+RedisInstrumentor().instrument()
 FlaskInstrumentor().instrument_app(app)
 
 logger_name = __name__
@@ -153,6 +155,7 @@ def rss_feed():
     cached = CACHE.get("rss", parts)
     now_ts = _time.time()
     if cached:
+        otelLogger.info(f"Cache hit for RSS feed {'/'.join(parts)}")
         fresh_until = cached.get("fresh_until_ts", 0)
         stale_until = cached.get("stale_until_ts", 0)
         built_iso = cached.get("built_iso")
@@ -195,6 +198,7 @@ def rss_feed():
             resp.headers['X-Cache'] = 'STALE'
             return resp
 
+    otelLogger.info(f"Cache miss for RSS feed {'/'.join(parts)}")
     # No cache: build synchronously
     rows = get_recently_modified_releases(
         get_engine(),
@@ -227,6 +231,7 @@ def endpoints():
     cached = CACHE.get("endpoints", parts)
     now_ts = _time.time()
     if cached:
+        otelLogger.info(f"Cache hit for /endpoints")
         fresh_until = cached.get("fresh_until_ts", 0)
         stale_until = cached.get("stale_until_ts", 0)
         built_iso = cached.get("built_iso")
@@ -260,6 +265,7 @@ def endpoints():
             })
 
     # No cache or expired beyond stale window: build synchronously
+    otelLogger.info(f"Cache miss for /endpoints")
     html = _build_endpoints_html()
     etag = 'W/"' + hashlib.sha256(html.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
@@ -369,6 +375,7 @@ def api_releases():
         }
 
     if cached:
+        otelLogger.info(f"Cache hit for API {'/'.join(parts)}")
         fresh_until = cached.get("fresh_until_ts", 0)
         stale_until = cached.get("stale_until_ts", 0)
         built_iso = cached.get("built_iso")
@@ -410,7 +417,7 @@ def api_releases():
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             resp.headers['X-Cache'] = 'STALE'
             return resp
-
+    otelLogger.info(f"Cache miss for API {'/'.join(parts)}")
     rows = get_recently_modified_releases(
         get_engine(),
         product_name=product_name,
