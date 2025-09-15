@@ -665,17 +665,21 @@ a:focus-visible {
 @keyframes modalIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 .modal-close { position: absolute; top: .75rem; right: .75rem; background: transparent; border: none; font-size: 1.75rem; line-height: 1; cursor: pointer; color: var(--fabric-neutral-grey-90); }
 .modal-close:hover { color: var(--fabric-primary); }
-.modal-header { margin-bottom: var(--spacing-m); }
+.modal-header { margin-bottom: var(--spacing-m); display: flex; flex-direction: column; }
 .modal-title { margin: 0 2.25rem 0 0; font-size: 1.4rem; font-weight: 600; }
-.modal-meta { display: flex; flex-wrap: wrap; gap: .5rem .75rem; margin: 0 0 var(--spacing-m); font-size: .75rem; }
-.modal-badge { background: var(--fabric-neutral-grey-20); padding: .25rem .55rem; border-radius: 4px; font-weight: 600; letter-spacing: .02em; }
-.modal-badge.success { background: var(--fabric-semantic-success); color: #fff; }
-.modal-badge.warn { background: var(--fabric-semantic-warning); color: #000; }
-.modal-last-modified { font-size: .75rem; color: var(--fabric-neutral-grey-90); margin-top: .1rem; margin-bottom: .5rem; display: block; font-style: italic;}
+.modal-meta-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: .75rem;
+  gap: .75rem;
+}
+.modal-last-modified { color: var(--fabric-neutral-grey-90);  font-style: italic;}
+.modal-release-info { color: var(--fabric-neutral-grey-90); font-weight: bold;}
 .modal-section { margin-bottom: var(--spacing-l); }
 .modal-section h4 { margin: 0 0 .5rem; font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; color: var(--fabric-neutral-grey-90); }
 .modal-description { line-height: 1.6; white-space: pre-wrap; }
-.modal-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: var(--spacing-m); }
+.modal-actions-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: var(--spacing-m); justify-content: space-between; align-items: center; }
 .link-copy { background: var(--fabric-neutral-grey-20); border: 1px solid var(--fabric-neutral-grey-30); padding: .4rem .75rem; border-radius: 4px; cursor: pointer; font-weight: 600; }
 .link-copy:hover { background: var(--fabric-neutral-grey-30); }
 /* End Modal Styles */

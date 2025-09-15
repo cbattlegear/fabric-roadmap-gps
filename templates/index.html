@@ -249,16 +249,12 @@
                 this.content.innerHTML = `
                     <div class="modal-header">
                         <h2 class="modal-title">${this.escape(item.feature_name || 'Unnamed Feature')}</h2>
-                        <span class="modal-last-modified">Last Modified: ${this.escape(lm)}</span>
-                        <div class="modal-meta">
-                            <span class="modal-badge">${this.escape(item.product_name || 'Unknown Product')}</span>
-                            <span class="modal-badge ${typeClass}">${this.escape(item.release_type || 'Unknown Type')}</span>
-                            <span class="modal-badge ${statusClass}">${this.escape(item.release_status || 'Unknown Status')}</span>
-                            <span class="modal-badge">Release: ${this.escape(relDate)}</span>
+                        <div class="modal-meta-row">
+                            <span class="modal-release-info">Status: ${this.escape(item.release_status || 'Unknown Status')} ${this.escape(item.release_type || 'Unknown Type')} on ${this.escape(relDate)}</span>
+                            <span class="modal-last-modified">Last Modified: ${this.escape(lm)}</span>
                         </div>
                     </div>
                     <div class="modal-section">
-                        <h4>Description</h4>
                         <div class="modal-description">${this.escape(item.feature_description || 'No description provided.')}</div>
                     </div>
                     <div class="modal-section" id="history-section">
@@ -266,9 +262,12 @@
                         <div class="history-loading" style="font-size:.8rem; opacity:.7;">Loading history...</div>
                         <ol class="history-timeline" style="list-style:none; padding:0; margin: .5rem 0 0 0;"></ol>
                     </div>
-                    <div class="modal-actions">
-                        <button class="link-copy" data-copy-link>Copy Direct Link</button>
-                        <a class="button button-secondary" href="/api/releases?release_item_id=${encodeURIComponent(item.release_item_id)}" target="_blank" rel="noopener">Open API JSON</a>
+                    <div class="modal-actions-row">
+                        <span class="modal-action-buttons">
+                            <button class="link-copy" data-copy-link>Copy Direct Link</button>
+                            <a class="button button-secondary" href="/api/releases?release_item_id=${encodeURIComponent(item.release_item_id)}" target="_blank" rel="noopener">Open API JSON</a>
+                        </span>
+                        <span class="modal-workload-name">Workload: ${this.escape(item.product_name || 'Unknown Workload')}</span>
                     </div>
                 `;
                 this.bindCopy(item.release_item_id);
