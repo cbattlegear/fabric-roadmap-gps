@@ -32,9 +32,9 @@ except ImportError:
     logging.warning("Azure Communication Services not available. Email sending will be disabled.")
 
 from db.db_sqlserver import (
-    make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values,
+    make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values, fetch_history_rows,
     EmailSubscriptionModel, EmailVerificationModel, create_email_subscription, 
-    verify_email_subscription, unsubscribe_email
+    verify_email_subscription, unsubscribe_email, fetch_history_rows
 )
 
 
@@ -492,26 +492,16 @@ def subscribe():
 
 @app.get("/api/releases")
 def api_releases():
-    """Return JSON array of releases with optional exact-match filters, no limit."""
+    """Return JSON array of releases with optional exact-match filters, or a single item if release_item_id is provided."""
+    release_item_id = request.args.get("release_item_id")
     product_name = request.args.get("product_name")
     release_type = request.args.get("release_type")
     release_status = request.args.get("release_status")
     modified_within_days = request.args.get("modified_within_days", type=int)
-    # Search query (partial/case-insensitive)
-    q = request.args.get("q")
+    q = request.args.get("q")  # partial search
 
     if modified_within_days is not None:
         modified_within_days = max(1, min(modified_within_days, 30))
-
-    # If a search query is provided, bypass caching to avoid filling up cache with one-off queries
-    use_cache = not (q and str(q).strip())
-
-    # Redis-backed cache key and lookup
-    parts = (product_name or "", release_type or "", release_status or "", str(modified_within_days), q or "")
-    print(parts)
-    cached = CACHE.get("api", parts) if use_cache else None
-    now_ts = _time.time()
-
 
     def _row_to_dict(r: ReleaseItemModel):
         return {
@@ -525,6 +515,74 @@ def api_releases():
             "feature_description": r.feature_description,
             "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
         }
+
+    # If querying a single item by ID use dedicated item cache namespace (api-item)
+    if release_item_id:
+        parts_item = (release_item_id,)
+        now_ts_item = _time.time()
+        cached_item = CACHE.get("api-item", parts_item)
+        if cached_item:
+            fresh_until = cached_item.get("fresh_until_ts", 0)
+            stale_until = cached_item.get("stale_until_ts", 0)
+            built_iso = cached_item.get("built_iso")
+            built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
+            if now_ts_item <= fresh_until:
+                inm = request.headers.get("If-None-Match")
+                if inm and inm == cached_item.get("etag"):
+                    return Response(status=304)
+                resp = Response(cached_item.get("body", ""), mimetype="application/json; charset=utf-8")
+                resp.headers['ETag'] = cached_item.get("etag", "")
+                resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+                resp.headers['Last-Modified'] = format_datetime(built_dt)
+                return resp
+            if now_ts_item <= stale_until:
+                if CACHE.try_acquire_lock("api-item", parts_item):
+                    def _refresh_item_bg():
+                        try:
+                            engine_bg = get_engine()
+                            SessionLocal_bg = sessionmaker(bind=engine_bg, future=True)
+                            with SessionLocal_bg() as session_bg:
+                                row_bg = session_bg.get(ReleaseItemModel, release_item_id)
+                                if not row_bg:
+                                    # If item disappeared, release cache so next request 404s
+                                    CACHE.release_lock("api-item", parts_item)
+                                    return
+                                data_bg = _row_to_dict(row_bg)
+                                json_bg = json.dumps(data_bg, sort_keys=True, separators=(",", ":"))
+                                etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
+                                built_bg = datetime.now(timezone.utc)
+                                CACHE.set("api-item", parts_item, json_bg, etag_bg, built_bg)
+                        finally:
+                            CACHE.release_lock("api-item", parts_item)
+                    threading.Thread(target=_refresh_item_bg, daemon=True).start()
+                resp = Response(cached_item.get("body", ""), mimetype="application/json; charset=utf-8")
+                resp.headers['ETag'] = cached_item.get("etag", "")
+                resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+                resp.headers['Last-Modified'] = format_datetime(built_dt)
+                resp.headers['X-Cache'] = 'STALE'
+                return resp
+        # Cache miss path
+        engine = get_engine()
+        SessionLocal = sessionmaker(bind=engine, future=True)
+        with SessionLocal() as session:
+            row = session.get(ReleaseItemModel, release_item_id)
+            if not row:
+                return jsonify({"error": "release_item_id not found"}), 404
+            data = _row_to_dict(row)
+            json_item = json.dumps(data, sort_keys=True, separators=(",", ":"))
+            etag_item = 'W/"' + hashlib.sha256(json_item.encode('utf-8')).hexdigest() + '"'
+            built_dt_item = datetime.now(timezone.utc)
+            CACHE.set("api-item", parts_item, json_item, etag_item, built_dt_item)
+            resp = Response(json_item, mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = etag_item
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt_item)
+            return resp
+
+    use_cache = not (q and str(q).strip())
+    parts = (product_name or "", release_type or "", release_status or "", str(modified_within_days), q or "")
+    cached = CACHE.get("api", parts) if use_cache else None
+    now_ts = _time.time()
 
     if cached:
         otelLogger.info(f"Cache hit for API {'/'.join(parts)}")
@@ -545,7 +603,7 @@ def api_releases():
             if CACHE.try_acquire_lock("api", parts):
                 def _refresh_api_bg():
                     try:
-                        rows = get_recently_modified_releases(
+                        rows_bg = get_recently_modified_releases(
                             get_engine(),
                             product_name=product_name,
                             release_type=release_type,
@@ -553,15 +611,13 @@ def api_releases():
                             modified_within_days=modified_within_days,
                             q=q,
                         )
-                        data = [_row_to_dict(r) for r in rows]
-
-                        json_bg = json.dumps(data, sort_keys=True, separators=(",", ":"))
+                        data_bg = [_row_to_dict(r) for r in rows_bg]
+                        json_bg = json.dumps(data_bg, sort_keys=True, separators=(",", ":"))
                         etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
                         built_bg = datetime.now(timezone.utc)
                         CACHE.set("api", parts, json_bg, etag_bg, built_bg)
                     finally:
                         CACHE.release_lock("api", parts)
-
                 threading.Thread(target=_refresh_api_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
@@ -569,6 +625,7 @@ def api_releases():
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             resp.headers['X-Cache'] = 'STALE'
             return resp
+
     otelLogger.info(f"Cache miss for API {'/'.join(parts)}")
     rows = get_recently_modified_releases(
         get_engine(),
@@ -579,8 +636,6 @@ def api_releases():
         q=q,
     )
     data = [_row_to_dict(r) for r in rows]
-
-    # Serialize to stable JSON for ETag
     json_str = json.dumps(data, sort_keys=True, separators=(",", ":"))
     etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
@@ -775,7 +830,171 @@ def unsubscribe_page():
         return render_template('unsubscribe.html', error="Failed to unsubscribe"), 500
 
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8000"))
-    # For local dev; in production, run with gunicorn/uvicorn, etc.
-    app.run(host="0.0.0.0", port=port)
+@app.route("/api/subscribe", methods=["POST"])
+def api_subscribe():
+    """Subscribe to weekly email updates"""
+    data = request.get_json()
+    if not data or 'email' not in data:
+        return jsonify({"error": "Email is required"}), 400
+    
+    email = data['email'].strip().lower()
+    if not email or '@' not in email:
+        return jsonify({"error": "Valid email is required"}), 400
+    
+    # Optional filters
+    filters = {}
+    if 'products' in data and data['products']:
+        filters['products'] = ','.join(data['products']) if isinstance(data['products'], list) else data['products']
+    if 'types' in data and data['types']:
+        filters['types'] = ','.join(data['types']) if isinstance(data['types'], list) else data['types']
+    if 'statuses' in data and data['statuses']:
+        filters['statuses'] = ','.join(data['statuses']) if isinstance(data['statuses'], list) else data['statuses']
+    
+    try:
+        engine = get_engine()
+        subscription_id, verification_token = create_email_subscription(engine, email, filters)
+        
+        if not verification_token:
+            return jsonify({"message": "Email is already subscribed and verified"}), 200
+        
+        # Send verification email
+        email_sent = send_verification_email(email, verification_token)
+        
+        if email_sent:
+            return jsonify({
+                "message": "Subscription created successfully! Please check your email for a verification link."
+            }), 201
+        else:
+            # Even if email fails, subscription was created - user can try again
+            otelLogger.warning(f"Subscription created for {email} but verification email failed to send")
+            return jsonify({
+                "message": "Subscription created, but there was an issue sending the verification email. Please try again or contact support.",
+                "verification_url": f"/verify-email?token={verification_token}"  # Fallback for testing
+            }), 201
+        
+    except Exception as e:
+        otelLogger.error(f"Error creating subscription: {e}")
+        return jsonify({"error": "Failed to create subscription"}), 500
+
+
+@app.route("/api/verify-email", methods=["GET"])
+def api_verify_email():
+    """Verify email subscription"""
+    token = request.args.get('token')
+    if not token:
+        return jsonify({"error": "Verification token is required"}), 400
+    
+    try:
+        engine = get_engine()
+        success = verify_email_subscription(engine, token)
+        
+        if success:
+            return jsonify({"message": "Email verified successfully! You will now receive weekly updates."}), 200
+        else:
+            return jsonify({"error": "Invalid or expired verification token"}), 400
+            
+    except Exception as e:
+        otelLogger.error(f"Error verifying email: {e}")
+        return jsonify({"error": "Failed to verify email"}), 500
+
+
+@app.route("/verify-email", methods=["GET"])
+def verify_email_page():
+    """HTML page for email verification"""
+    token = request.args.get('token')
+    if not token:
+        return render_template('verify_email.html', error="Missing verification token"), 400
+    
+    try:
+        engine = get_engine()
+        success = verify_email_subscription(engine, token)
+        
+        if success:
+            return render_template('verify_email.html', success=True)
+        else:
+            return render_template('verify_email.html', error="Invalid or expired verification token")
+            
+    except Exception as e:
+        otelLogger.error(f"Error verifying email: {e}")
+        return render_template('verify_email.html', error="Failed to verify email"), 500
+
+
+@app.route("/unsubscribe", methods=["GET"])
+def unsubscribe_page():
+    """HTML page for unsubscribing"""
+    token = request.args.get('token')
+    if not token:
+        return render_template('unsubscribe.html', error="Missing unsubscribe token"), 400
+    
+    try:
+        engine = get_engine()
+        success = unsubscribe_email(engine, token)
+        
+        if success:
+            return render_template('unsubscribe.html', success=True)
+        else:
+            return render_template('unsubscribe.html', error="Invalid unsubscribe token")
+            
+    except Exception as e:
+        otelLogger.error(f"Error unsubscribing: {e}")
+        return render_template('unsubscribe.html', error="Failed to unsubscribe"), 500
+
+
+@app.get("/api/releases/history/<release_item_id>")
+def api_release_history(release_item_id: str):
+    """Return change history (ChangedColumns + last_modified) for a single release_item_id using stored procedure.
+
+    Stored procedure expected: [dbo].[GetReleaseItemHistoryById]
+    Returns columns: VersionNum, release_item_id, ChangedColumns, last_modified
+    We only expose ChangedColumns and last_modified sorted desc by VersionNum.
+    Caching: keyed by release_item_id similar to other endpoints (fresh+stale semantics).
+    """
+    # Cache key parts (single dimension)
+    parts = (release_item_id,)
+    cached = CACHE.get("history", parts)
+    now_ts = _time.time()
+
+    if cached:
+        fresh_until = cached.get("fresh_until_ts", 0)
+        stale_until = cached.get("stale_until_ts", 0)
+        built_iso = cached.get("built_iso")
+        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
+        if now_ts <= fresh_until:
+            inm = request.headers.get("If-None-Match")
+            if inm and inm == cached.get("etag"):
+                return Response(status=304)
+            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            return resp
+        if now_ts <= stale_until:
+            if CACHE.try_acquire_lock("history", parts):
+                def _refresh_history_bg():
+                    try:
+                        data_bg = fetch_history_rows(get_engine(), release_item_id)
+                        json_bg = json.dumps(data_bg, sort_keys=True, separators=(",", ":"))
+                        etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
+                        built_bg = datetime.now(timezone.utc)
+                        CACHE.set("history", parts, json_bg, etag_bg, built_bg)
+                    finally:
+                        CACHE.release_lock("history", parts)
+                threading.Thread(target=_refresh_history_bg, daemon=True).start()
+            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            resp.headers['X-Cache'] = 'STALE'
+            return resp
+
+    # Cache miss or expired
+    rows = fetch_history_rows(get_engine(), release_item_id)
+    json_str = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+    etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
+    built_dt = datetime.now(timezone.utc)
+    CACHE.set("history", parts, json_str, etag, built_dt)
+    resp = Response(json_str, mimetype="application/json; charset=utf-8")
+    resp.headers['ETag'] = etag
+    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+    resp.headers['Last-Modified'] = format_datetime(built_dt)
+    return resp
