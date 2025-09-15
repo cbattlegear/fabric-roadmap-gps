@@ -23,7 +23,7 @@ from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
 
 #FlaskInstrumentor().instrument(enable_commenter=True, commenter_options={})
-from db.db_sqlserver import make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values
+from db.db_sqlserver import make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values, fetch_history_rows
 
 
 app = Flask(__name__)
@@ -343,26 +343,16 @@ def _build_endpoints_html() -> str:
 
 @app.get("/api/releases")
 def api_releases():
-    """Return JSON array of releases with optional exact-match filters, no limit."""
+    """Return JSON array of releases with optional exact-match filters, or a single item if release_item_id is provided."""
+    release_item_id = request.args.get("release_item_id")
     product_name = request.args.get("product_name")
     release_type = request.args.get("release_type")
     release_status = request.args.get("release_status")
     modified_within_days = request.args.get("modified_within_days", type=int)
-    # Search query (partial/case-insensitive)
-    q = request.args.get("q")
+    q = request.args.get("q")  # partial search
 
     if modified_within_days is not None:
         modified_within_days = max(1, min(modified_within_days, 30))
-
-    # If a search query is provided, bypass caching to avoid filling up cache with one-off queries
-    use_cache = not (q and str(q).strip())
-
-    # Redis-backed cache key and lookup
-    parts = (product_name or "", release_type or "", release_status or "", str(modified_within_days), q or "")
-    print(parts)
-    cached = CACHE.get("api", parts) if use_cache else None
-    now_ts = _time.time()
-
 
     def _row_to_dict(r: ReleaseItemModel):
         return {
@@ -376,6 +366,74 @@ def api_releases():
             "feature_description": r.feature_description,
             "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
         }
+
+    # If querying a single item by ID use dedicated item cache namespace (api-item)
+    if release_item_id:
+        parts_item = (release_item_id,)
+        now_ts_item = _time.time()
+        cached_item = CACHE.get("api-item", parts_item)
+        if cached_item:
+            fresh_until = cached_item.get("fresh_until_ts", 0)
+            stale_until = cached_item.get("stale_until_ts", 0)
+            built_iso = cached_item.get("built_iso")
+            built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
+            if now_ts_item <= fresh_until:
+                inm = request.headers.get("If-None-Match")
+                if inm and inm == cached_item.get("etag"):
+                    return Response(status=304)
+                resp = Response(cached_item.get("body", ""), mimetype="application/json; charset=utf-8")
+                resp.headers['ETag'] = cached_item.get("etag", "")
+                resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+                resp.headers['Last-Modified'] = format_datetime(built_dt)
+                return resp
+            if now_ts_item <= stale_until:
+                if CACHE.try_acquire_lock("api-item", parts_item):
+                    def _refresh_item_bg():
+                        try:
+                            engine_bg = get_engine()
+                            SessionLocal_bg = sessionmaker(bind=engine_bg, future=True)
+                            with SessionLocal_bg() as session_bg:
+                                row_bg = session_bg.get(ReleaseItemModel, release_item_id)
+                                if not row_bg:
+                                    # If item disappeared, release cache so next request 404s
+                                    CACHE.release_lock("api-item", parts_item)
+                                    return
+                                data_bg = _row_to_dict(row_bg)
+                                json_bg = json.dumps(data_bg, sort_keys=True, separators=(",", ":"))
+                                etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
+                                built_bg = datetime.now(timezone.utc)
+                                CACHE.set("api-item", parts_item, json_bg, etag_bg, built_bg)
+                        finally:
+                            CACHE.release_lock("api-item", parts_item)
+                    threading.Thread(target=_refresh_item_bg, daemon=True).start()
+                resp = Response(cached_item.get("body", ""), mimetype="application/json; charset=utf-8")
+                resp.headers['ETag'] = cached_item.get("etag", "")
+                resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+                resp.headers['Last-Modified'] = format_datetime(built_dt)
+                resp.headers['X-Cache'] = 'STALE'
+                return resp
+        # Cache miss path
+        engine = get_engine()
+        SessionLocal = sessionmaker(bind=engine, future=True)
+        with SessionLocal() as session:
+            row = session.get(ReleaseItemModel, release_item_id)
+            if not row:
+                return jsonify({"error": "release_item_id not found"}), 404
+            data = _row_to_dict(row)
+            json_item = json.dumps(data, sort_keys=True, separators=(",", ":"))
+            etag_item = 'W/"' + hashlib.sha256(json_item.encode('utf-8')).hexdigest() + '"'
+            built_dt_item = datetime.now(timezone.utc)
+            CACHE.set("api-item", parts_item, json_item, etag_item, built_dt_item)
+            resp = Response(json_item, mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = etag_item
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt_item)
+            return resp
+
+    use_cache = not (q and str(q).strip())
+    parts = (product_name or "", release_type or "", release_status or "", str(modified_within_days), q or "")
+    cached = CACHE.get("api", parts) if use_cache else None
+    now_ts = _time.time()
 
     if cached:
         otelLogger.info(f"Cache hit for API {'/'.join(parts)}")
@@ -396,7 +454,7 @@ def api_releases():
             if CACHE.try_acquire_lock("api", parts):
                 def _refresh_api_bg():
                     try:
-                        rows = get_recently_modified_releases(
+                        rows_bg = get_recently_modified_releases(
                             get_engine(),
                             product_name=product_name,
                             release_type=release_type,
@@ -404,15 +462,13 @@ def api_releases():
                             modified_within_days=modified_within_days,
                             q=q,
                         )
-                        data = [_row_to_dict(r) for r in rows]
-
-                        json_bg = json.dumps(data, sort_keys=True, separators=(",", ":"))
+                        data_bg = [_row_to_dict(r) for r in rows_bg]
+                        json_bg = json.dumps(data_bg, sort_keys=True, separators=(",", ":"))
                         etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
                         built_bg = datetime.now(timezone.utc)
                         CACHE.set("api", parts, json_bg, etag_bg, built_bg)
                     finally:
                         CACHE.release_lock("api", parts)
-
                 threading.Thread(target=_refresh_api_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
@@ -420,6 +476,7 @@ def api_releases():
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             resp.headers['X-Cache'] = 'STALE'
             return resp
+
     otelLogger.info(f"Cache miss for API {'/'.join(parts)}")
     rows = get_recently_modified_releases(
         get_engine(),
@@ -430,8 +487,6 @@ def api_releases():
         q=q,
     )
     data = [_row_to_dict(r) for r in rows]
-
-    # Serialize to stable JSON for ETag
     json_str = json.dumps(data, sort_keys=True, separators=(",", ":"))
     etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
@@ -516,7 +571,61 @@ def api_filter_options():
     return resp
 
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", "8000"))
-    # For local dev; in production, run with gunicorn/uvicorn, etc.
-    app.run(host="0.0.0.0", port=port)
+@app.get("/api/releases/history/<release_item_id>")
+def api_release_history(release_item_id: str):
+    """Return change history (ChangedColumns + last_modified) for a single release_item_id using stored procedure.
+
+    Stored procedure expected: [dbo].[GetReleaseItemHistoryById]
+    Returns columns: VersionNum, release_item_id, ChangedColumns, last_modified
+    We only expose ChangedColumns and last_modified sorted desc by VersionNum.
+    Caching: keyed by release_item_id similar to other endpoints (fresh+stale semantics).
+    """
+    # Cache key parts (single dimension)
+    parts = (release_item_id,)
+    cached = CACHE.get("history", parts)
+    now_ts = _time.time()
+
+    if cached:
+        fresh_until = cached.get("fresh_until_ts", 0)
+        stale_until = cached.get("stale_until_ts", 0)
+        built_iso = cached.get("built_iso")
+        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
+        if now_ts <= fresh_until:
+            inm = request.headers.get("If-None-Match")
+            if inm and inm == cached.get("etag"):
+                return Response(status=304)
+            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            return resp
+        if now_ts <= stale_until:
+            if CACHE.try_acquire_lock("history", parts):
+                def _refresh_history_bg():
+                    try:
+                        data_bg = fetch_history_rows(get_engine(), release_item_id)
+                        json_bg = json.dumps(data_bg, sort_keys=True, separators=(",", ":"))
+                        etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
+                        built_bg = datetime.now(timezone.utc)
+                        CACHE.set("history", parts, json_bg, etag_bg, built_bg)
+                    finally:
+                        CACHE.release_lock("history", parts)
+                threading.Thread(target=_refresh_history_bg, daemon=True).start()
+            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
+            resp.headers['ETag'] = cached.get("etag", "")
+            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+            resp.headers['Last-Modified'] = format_datetime(built_dt)
+            resp.headers['X-Cache'] = 'STALE'
+            return resp
+
+    # Cache miss or expired
+    rows = fetch_history_rows(get_engine(), release_item_id)
+    json_str = json.dumps(rows, sort_keys=True, separators=(",", ":"))
+    etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
+    built_dt = datetime.now(timezone.utc)
+    CACHE.set("history", parts, json_str, etag, built_dt)
+    resp = Response(json_str, mimetype="application/json; charset=utf-8")
+    resp.headers['ETag'] = etag
+    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
+    resp.headers['Last-Modified'] = format_datetime(built_dt)
+    return resp
