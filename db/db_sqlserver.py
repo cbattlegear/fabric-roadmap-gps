@@ -407,3 +407,37 @@ def get_distinct_values(engine, column_name: str, limit: Optional[int] = None) -
         if s:
             out.append(s)
     return out
+
+def fetch_history_rows(engine, release_item_id: str):
+    """Call stored procedure to retrieve history rows and shape output.
+    Exposed fields: changed_columns (array) and last_modified for each version.
+    We attempt to split ChangedColumns on comma, trimming whitespace.
+    """
+
+    conn = engine.raw_connection()
+    try:
+        # Assuming SQL Server; call the stored proc with one parameter
+        cursor = conn.cursor()
+        # Execute stored procedure. Adjust call pattern if needed.
+        cursor.execute("EXEC [dbo].[GetReleaseItemHistoryById] @ReleaseItemId = ?", (release_item_id,))
+        columns = [col[0] for col in cursor.description]
+        # Expect: VersionNum, release_item_id, ChangedColumns, last_modified
+        out = []
+        for row in cursor.fetchall():
+            row_dict = dict(zip(columns, row))
+            changed_raw = row_dict.get("ChangedColumns") or ""
+            # Convert comma separated to list (ignore empty) preserving order
+            changed_list = [c.strip() for c in changed_raw.split(',') if c and c.strip()]
+            out.append({
+                "changed_columns": changed_list,
+                "last_modified": row_dict.get("last_modified").isoformat() if hasattr(row_dict.get("last_modified"), 'isoformat') and row_dict.get("last_modified") else None
+            })
+        # Sort descending by last_modified (fallback to insertion order if None)
+        out.sort(key=lambda r: r.get("last_modified") or "", reverse=True)
+        return out
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
