@@ -45,6 +45,7 @@ FlaskInstrumentor().instrument_app(app)
 
 logger_name = __name__
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
+
 configure_azure_monitor(
     logger_name=opentelemetery_logger_name,
     enable_live_metrics=True 

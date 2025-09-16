@@ -203,98 +203,106 @@ class WeeklyEmailSender:
         except Exception as e:
             logger.error(f"Error updating last_email_sent for {subscription_id}: {e}")
 
+    def _build_badge(self, text: str, variant: str) -> str:
+        """Return a styled badge span consistent with site palette."""
+        if not text:
+            text = "Unknown"
+        colors = {
+            "product": ("#004578", "#ffffff"),
+            "success": ("#107c10", "#ffffff"),
+            "warning": ("#ca5010", "#ffffff"),
+            "neutral": ("#605e5c", "#ffffff"),
+        }
+        bg, fg = colors.get(variant, colors["neutral"])
+        return (
+            f'<span style="display:inline-block;margin:0 6px 6px 0;'
+            f'padding:4px 10px;font-size:12px;font-weight:600;letter-spacing:.25px;'
+            f'border-radius:999px;background:{bg};color:{fg};white-space:nowrap;">'
+            f'{self.escape_html(text)}</span>'
+        )
+
+    def _build_button(self, href: str, label: str) -> str:
+        return (
+            f'<a href="{self.escape_html(href)}" '
+            f'style="background:#19433c;background-image:linear-gradient(90deg,#19433c,#286c61);'
+            f'color:#ffffff;text-decoration:none;padding:10px 18px;font-size:14px;font-weight:600;'
+            f'border-radius:6px;display:inline-block;box-shadow:0 2px 4px rgba(0,0,0,0.15);">'
+            f'{self.escape_html(label)}</a>'
+        )
+
     def generate_email_html(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel) -> str:
-        """Generate HTML email content from JSON API data"""
+        """Generate HTML email content styled to match index page design."""
         unsubscribe_url = f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}"
-        
-        changes_html = []
+
+        # Style tokens (aligned with site)
+        BODY_BG = "#f3f2f1"
+        CARD_BG = "#ffffff"
+        CARD_BORDER = "#e1e5e9"
+        CARD_SHADOW = "0 1px 2px rgba(0,0,0,0.04),0 4px 10px rgba(0,0,0,0.06)"
+        TEXT_PRIMARY = "#323130"
+        TEXT_SECONDARY = "#605e5c"
+        HERO_GRADIENT = "linear-gradient(135deg,#19433c 0%,#286c61 100%)"
+
+        preheader = f"{len(changes)} Fabric roadmap item change(s) this week." if changes else "Your weekly Fabric GPS update." 
+
+        def fmt_date(dt_str: str, fallback: str = "TBD", out_fmt: str = "%b %d, %Y") -> str:
+            if not dt_str:
+                return fallback
+            for pattern in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%S.%fZ"):
+                try:
+                    return datetime.strptime(dt_str[:len(pattern)], pattern).strftime(out_fmt)
+                except Exception:
+                    continue
+            return dt_str
+
+        card_blocks: List[str] = []
         for change in changes:
-            release_date = 'TBD'
-            if change.get('release_date'):
-                try:
-                    release_date = datetime.strptime(change['release_date'], '%Y-%m-%d').strftime('%B %d, %Y')
-                except:
-                    release_date = change['release_date']
-            
-            modified_date = 'Unknown'
-            if change.get('last_modified'):
-                try:
-                    modified_date = datetime.strptime(change['last_modified'], '%Y-%m-%d').strftime('%B %d, %Y')
-                except:
-                    modified_date = change['last_modified']
-            
-            changes_html.append(f"""
-            <div style="border: 1px solid #e1e5e9; border-radius: 8px; padding: 16px; margin-bottom: 16px; background: white;">
-                <h3 style="margin: 0 0 8px 0; color: #323130; font-size: 18px;">
-                    {self.escape_html(change.get('feature_name', 'Unnamed Feature'))}
-                </h3>
-                <div style="margin-bottom: 12px;">
-                    <span style="display: inline-block; padding: 4px 8px; background: #0078d4; color: white; border-radius: 12px; font-size: 12px; margin-right: 8px;">
-                        {self.escape_html(change.get('product_name', 'Unknown'))}
-                    </span>
-                    <span style="display: inline-block; padding: 4px 8px; background: #ca5010; color: white; border-radius: 12px; font-size: 12px; margin-right: 8px;">
-                        {self.escape_html(change.get('release_type', 'Unknown'))}
-                    </span>
-                    <span style="display: inline-block; padding: 4px 8px; background: #107c10; color: white; border-radius: 12px; font-size: 12px;">
-                        {self.escape_html(change.get('release_status', 'Unknown'))}
-                    </span>
-                </div>
-                <div style="font-size: 14px; color: #605e5c; margin-bottom: 8px;">
-                    <strong>Last Modified:</strong> {modified_date} | <strong>Release Date:</strong> {release_date}
-                </div>
-                <p style="margin: 0; line-height: 1.5; color: #323130;">
-                    {self.escape_html(change.get('feature_description', 'No description available.'))}
-                </p>
-            </div>
-            """)
-        
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Fabric GPS Weekly Update</title>
-        </head>
-        <body style="font-family: 'Segoe UI', system-ui, sans-serif; line-height: 1.6; color: #323130; background-color: #f3f2f1; margin: 0; padding: 20px;">
-            <div style="max-width: 600px; margin: 0 auto; background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-                <!-- Header -->
-                <div style="background: linear-gradient(135deg, #0078d4 0%, #106ebe 100%); color: white; padding: 24px; text-align: center;">
-                    <h1 style="margin: 0; font-size: 24px;">🗺️ Fabric GPS</h1>
-                    <p style="margin: 8px 0 0 0; opacity: 0.9;">Weekly Microsoft Fabric Roadmap Update</p>
-                </div>
-                
-                <!-- Content -->
-                <div style="padding: 24px;">
-                    <h2 style="color: #323130; margin-top: 0;">This Week's Changes ({len(changes)} items)</h2>
-                    <p style="color: #605e5c; margin-bottom: 24px;">
-                        Here are the Microsoft Fabric roadmap items that were modified in the past week:
-                    </p>
-                    
-                    {' '.join(changes_html)}
-                    
-                    <div style="margin-top: 32px; padding: 16px; background: #f8f9fa; border-radius: 8px; text-align: center;">
-                        <p style="margin: 0; color: #605e5c;">
-                            <a href="{self.base_url}" style="color: #0078d4; text-decoration: none;">Visit Fabric GPS</a> 
-                            to explore the full roadmap and set up custom filters.
-                        </p>
-                    </div>
-                </div>
-                
-                <!-- Footer -->
-                <div style="background: #f8f9fa; padding: 16px; border-top: 1px solid #e1e5e9; text-align: center; font-size: 12px; color: #605e5c;">
-                    <p style="margin: 0 0 8px 0;">
-                        This email was sent to {subscription.email} because you subscribed to Fabric GPS weekly updates.
-                    </p>
-                    <p style="margin: 0;">
-                        <a href="{unsubscribe_url}" style="color: #605e5c;">Unsubscribe</a> | 
-                        Data sourced from Microsoft Fabric Roadmap
-                    </p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
+            feature_name = change.get('feature_name') or 'Unnamed Feature'
+            product_name = change.get('product_name') or 'Unknown'
+            release_type = change.get('release_type') or 'Unknown'
+            release_status = change.get('release_status') or 'Unknown'
+            description = change.get('feature_description') or 'No description available.'
+            rel_id = change.get('release_item_id')
+            release_date = fmt_date(change.get('release_date'))
+            modified_date = fmt_date(change.get('last_modified'), fallback="Unknown")
+            release_type_variant = "success" if release_type == "General availability" else "warning"
+            release_status_variant = "success" if release_status == "Shipped" else "warning"
+            detail_url = f"{self.base_url}/#release/{rel_id}" if rel_id else self.base_url
+            badges_html = (
+                self._build_badge(product_name, "product") +
+                self._build_badge(release_type, release_type_variant) +
+                self._build_badge(release_status, release_status_variant)
+            )
+            card_blocks.append(
+                f"""
+                <div style=\"background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px;\n                            padding:18px;margin:0 0 18px 0;box-shadow:{CARD_SHADOW};\">\n                    <h3 style=\"margin:0 0 10px 0;font-size:18px;line-height:1.3;color:{TEXT_PRIMARY};font-weight:600;\">\n                        <a href=\"{self.escape_html(detail_url)}\" style=\"color:{TEXT_PRIMARY};text-decoration:none;\">{self.escape_html(feature_name)}\n                        </a>\n                    </h3>\n                    <div style=\"margin:0 0 10px 0;\">{badges_html}</div>\n                    <div style=\"font-size:12px;color:{TEXT_SECONDARY};margin:0 0 12px 0;\">\n                        <strong>Last Modified:</strong> {self.escape_html(modified_date)} &nbsp;|&nbsp;\n                        <strong>Release Date:</strong> {self.escape_html(release_date)}\n                    </div>\n                    <p style=\"margin:0 0 14px 0;font-size:14px;line-height:1.5;color:{TEXT_PRIMARY};\">{self.escape_html(description)}\n                    </p>\n                    {self._build_button(detail_url, "View in Fabric GPS")}\n                </div>\n                """
+            )
+
+        if not card_blocks:
+            card_blocks.append(
+                f"""
+                <div style=\"background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px;\n                            padding:24px;margin:0 0 18px 0;box-shadow:{CARD_SHADOW};text-align:center;\">\n                    <p style=\"margin:0;font-size:15px;color:{TEXT_SECONDARY};\">No roadmap item changes in the past week for your filters.</p>\n                </div>\n                """
+            )
+
+        changes_section = "\n".join(card_blocks)
+        footer_links = (
+            f'<a href="{self.escape_html(self.base_url)}" style="color:#19433c;text-decoration:none;font-weight:500;">Fabric GPS</a>'
+        )
+
+        return f"""\
+<!DOCTYPE html>
+<html lang=\"en\">
+<head>
+<meta charset=\"UTF-8\">
+<title>Fabric GPS Weekly Update</title>
+<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
+<style>
+body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif; }}
+</style>
+</head>
+<body style=\"margin:0;padding:0;background:{BODY_BG};\">
+<span style=\"display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;\">{self.escape_html(preheader)}</span>
+<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:{BODY_BG};padding:24px 0;\">\n  <tr>\n    <td align=\"center\" style=\"padding:0 12px;\">\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"max-width:640px;\">\n        <tr>\n          <td style=\"background:{HERO_GRADIENT};color:#ffffff;border-radius:14px; padding:34px 34px 38px 34px; text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);\">\n            <h1 style=\"margin:0 0 10px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;\">🗺️ Fabric GPS Weekly Update</h1>\n            <p style=\"margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);\">Microsoft Fabric roadmap items modified during the past 7 days.</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:28px;\"></td></tr>\n        <tr><td style=\"padding:0;\">{changes_section}</td></tr>\n        <tr>\n          <td>\n            <div style=\"background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px; padding:22px;margin:6px 0 26px 0;box-shadow:{CARD_SHADOW};text-align:center;\">\n              <p style=\"margin:0 0 14px 0;font-size:14px;color:{TEXT_SECONDARY};\">Tune your filters or explore more history on the site.</p>\n              {self._build_button(self.base_url, "Open Fabric GPS")}\n            </div>\n          </td>\n        </tr>\n        <tr>\n          <td style=\"background:#f8f9fa;border:1px solid {CARD_BORDER};border-radius:10px; padding:18px 20px;text-align:center;font-size:12px;color:{TEXT_SECONDARY}; line-height:1.5;\">\n            <p style=\"margin:0 0 6px 0;\">Sent to {self.escape_html(subscription.email)} — you’re subscribed to weekly updates.</p>\n            <p style=\"margin:0 0 6px 0;\">\n              <a href=\"{self.escape_html(unsubscribe_url)}\" style=\"color:#19433c;text-decoration:none;font-weight:500;\">Unsubscribe</a>&nbsp;|&nbsp; Data sourced from Microsoft Fabric Roadmap\n            </p>\n            <p style=\"margin:8px 0 0 0;color:#8a8886;\">{footer_links}</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:30px;\"></td></tr>\n      </table>\n    </td>\n  </tr>\n</table>\n</body>\n</html>\n"""
 
     def generate_email_text(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel) -> str:
         """Generate plain text email content from JSON API data"""
