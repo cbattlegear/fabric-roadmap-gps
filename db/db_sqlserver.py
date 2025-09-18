@@ -11,15 +11,24 @@ import logging
 
 # ...existing code...
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Date, Boolean, Text, DateTime, func, select, or_
+    create_engine, Column, String, Integer, Date, Boolean, Text, MetaData, func, select, or_
 )
+from sqlalchemy.dialects.mssql import DATETIME2
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # SQLAlchemy-specific exceptions we may inspect
-from sqlalchemy.exc import DBAPIError, OperationalError, DisconnectionError
+from sqlalchemy.exc import DBAPIError
 
-Base = declarative_base()
+naming_convention = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+metadata = MetaData(naming_convention=naming_convention)
+Base = declarative_base(metadata=metadata)
 logger_name = __name__
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
 logger = logging.getLogger(opentelemetery_logger_name)
@@ -30,14 +39,14 @@ class ReleaseItemModel(Base):
     release_item_id = Column(String(36), primary_key=True)
     feature_name = Column(String(400))
     release_date = Column(Date, nullable=True)
-    release_type = Column(String(100))
+    release_type = Column(String(100), index=True)
     release_type_value = Column(Integer)
     vso_item = Column(String(1000))
-    release_status = Column(String(100))
+    release_status = Column(String(100), index=True)
     release_status_value = Column(Integer)
     release_semester = Column(String(200))
     product_id = Column(String(36), index=True)
-    product_name = Column(String(200))
+    product_name = Column(String(200), index=True)
     is_publish_externally = Column(Boolean)
     feature_description = Column(Text)
     # SHA256 hex of the content fields (used to detect changes)
