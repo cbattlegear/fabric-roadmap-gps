@@ -3,6 +3,8 @@ set -euo pipefail
 
 MODE="${APP_MODE:-web}"
 
+alembic upgrade head
+
 if [[ "$MODE" == "web" ]]; then
   # Run the Flask app with Gunicorn
   exec gunicorn -c gunicorn.conf.py
