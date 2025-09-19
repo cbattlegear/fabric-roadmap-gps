@@ -2,6 +2,7 @@ import json
 import os
 import urllib.parse
 import threading
+import logging
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional, List
 
@@ -22,8 +23,19 @@ from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
 
-#FlaskInstrumentor().instrument(enable_commenter=True, commenter_options={})
-from db.db_sqlserver import make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values, fetch_history_rows
+# Azure Communication Services for email
+try:
+    from azure.communication.email import EmailClient
+    AZURE_EMAIL_AVAILABLE = True
+except ImportError:
+    AZURE_EMAIL_AVAILABLE = False
+    logging.warning("Azure Communication Services not available. Email sending will be disabled.")
+
+from db.db_sqlserver import (
+    make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values, fetch_history_rows,
+    EmailSubscriptionModel, EmailVerificationModel, create_email_subscription, 
+    verify_email_subscription, unsubscribe_email, fetch_history_rows
+)
 
 
 app = Flask(__name__)
@@ -33,10 +45,13 @@ FlaskInstrumentor().instrument_app(app)
 
 logger_name = __name__
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
-configure_azure_monitor(
-    logger_name=opentelemetery_logger_name,
-    enable_live_metrics=True 
-)
+
+if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING") and os.getenv("CURRENT_ENVIRONMENT") != "development":
+    configure_azure_monitor(
+        logger_name=opentelemetery_logger_name,
+        enable_live_metrics=True 
+    )
+
 otelLogger= logging.getLogger(opentelemetery_logger_name)
 stream = logging.StreamHandler()
 otelLogger.addHandler(stream)
@@ -55,6 +70,146 @@ _FRONT_END_TTL = 30 * 60  # 30 minutes
 
 # Redis cache instance (fresh = 24h, stale = 24h)
 CACHE = RedisCache(ttl_seconds=_TTL_SECONDS, lock_ttl_seconds=_LOCK_TTL_SECONDS, stale_ttl_seconds=_STALE_TTL_SECONDS)
+
+# Email configuration
+EMAIL_CLIENT = None
+FROM_EMAIL = os.getenv('FROM_EMAIL', 'noreply@yourdomain.com')
+FROM_NAME = os.getenv('FROM_NAME', 'Fabric GPS')
+BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')
+
+
+def get_email_client():
+    """Get Azure Communication Services email client"""
+    global EMAIL_CLIENT
+    if EMAIL_CLIENT is None and AZURE_EMAIL_AVAILABLE:
+        connection_string = os.getenv('AZURE_COMMUNICATION_CONNECTION_STRING')
+        if connection_string:
+            try:
+                EMAIL_CLIENT = EmailClient.from_connection_string(connection_string)
+                otelLogger.info("Azure Communication Services email client initialized")
+            except Exception as e:
+                otelLogger.error(f"Failed to initialize Azure email client: {e}")
+        else:
+            otelLogger.warning("AZURE_COMMUNICATION_CONNECTION_STRING not set. Email sending disabled.")
+    return EMAIL_CLIENT
+
+
+def send_verification_email(email: str, verification_token: str) -> bool:
+    """Send verification email using Azure Communication Services"""
+    email_client = get_email_client()
+    if not email_client:
+        otelLogger.error("Email client not available for verification email")
+        return False
+    
+    try:
+        verification_url = f"{BASE_URL}/verify-email?token={verification_token}"
+
+        # HTML email content (restyled to match weekly email design language)
+        html_content = f"""<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width,initial-scale=1'>
+    <title>Verify Your Email - Fabric GPS</title>
+    <style>
+        body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif; }}
+    </style>
+</head>
+<body style='margin:0;padding:0;background:#f3f2f1;'>
+    <span style="display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;">Confirm your email to start weekly Fabric roadmap updates.</span>
+    <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='background:#f3f2f1;padding:28px 0;'>
+        <tr>
+            <td align='center' style='padding:0 14px;'>
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='max-width:620px;'>
+                    <tr>
+                        <td style="background:linear-gradient(135deg,#19433c 0%,#286c61 100%);color:#ffffff;border-radius:14px;padding:40px 36px 42px 36px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
+                            <h1 style='margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;'>🗺️ Fabric GPS</h1>
+                            <p style='margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);'>Verify your email to begin receiving weekly Microsoft Fabric roadmap change summaries.</p>
+                        </td>
+                    </tr>
+                    <tr><td style='height:30px;'></td></tr>
+                    <tr>
+                        <td style='background:#ffffff;border:1px solid #e1e5e9;border-radius:12px;padding:34px 32px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 10px rgba(0,0,0,0.06);'>
+                            <h2 style='margin:0 0 18px 0;font-size:22px;line-height:1.25;color:#323130;font-weight:600;text-align:center;'>Confirm Your Email Address</h2>
+                            <p style='margin:0 0 24px 0;font-size:15px;line-height:1.55;color:#605e5c;text-align:center;'>Thanks for signing up! One quick step: click the button below to confirm this address. Then every Monday you will get a concise, styled summary of roadmap item changes from the past week.</p>
+                            <div style='text-align:center;margin:10px 0 34px 0;'>
+                                <a href='{verification_url}' style="background:#19433c;background-image:linear-gradient(90deg,#19433c,#286c61);color:#ffffff;text-decoration:none;padding:14px 26px;font-size:15px;font-weight:600;border-radius:8px;display:inline-block;box-shadow:0 2px 4px rgba(0,0,0,0.18);">Verify Email</a>
+                            </div>
+                            <p style='margin:0 0 18px 0;font-size:13px;line-height:1.5;color:#605e5c;text-align:center;'>If the button doesn't work, copy & paste this link:</p>
+                            <p style='word-break:break-all;margin:0 0 26px 0;font-size:12px;line-height:1.4;text-align:center;'>
+                                <a href='{verification_url}' style='color:#19433c;text-decoration:none;'>{verification_url}</a>
+                            </p>
+                            <div style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:16px 18px;'>
+                                <p style='margin:0;font-size:13px;line-height:1.5;color:#605e5c;'>After verifying, you'll get one email per week (Mondays). No spam &mdash; unsubscribe anytime from those emails.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr><td style='height:26px;'></td></tr>
+                    <tr>
+                        <td style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:20px 22px;text-align:center;font-size:12px;line-height:1.55;color:#605e5c;'>
+                            <p style='margin:0 0 6px 0;'>This verification link expires in 24 hours.</p>
+                            <p style='margin:0 0 6px 0;'>If you didn't request this, ignore the message and you won't be subscribed.</p>
+                            <p style='margin:10px 0 0 0;color:#8a8886;'>© Fabric GPS</p>
+                        </td>
+                    </tr>
+                    <tr><td style='height:34px;'></td></tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+ </body>
+</html>"""
+
+        # Plain text content
+        text_content = f"""
+            FABRIC GPS - EMAIL VERIFICATION
+            
+            Thank you for subscribing to Fabric GPS weekly updates!
+            
+            Please verify your email address by clicking the link below:
+            {verification_url}
+            
+            Once verified, you'll receive weekly emails with the latest Microsoft Fabric roadmap changes.
+            
+            This verification link will expire in 24 hours.
+            If you didn't subscribe to Fabric GPS, you can safely ignore this email.
+            
+            --
+            Fabric GPS Team
+        """
+        
+        message = {
+            "senderAddress": FROM_EMAIL,
+            "recipients": {
+                "to": [{"address": email}]
+            },
+            "content": {
+                "subject": "Verify your email for Fabric GPS weekly updates",
+                "plainText": text_content,
+                "html": html_content
+            }
+        }
+        
+        POLLER_WAIT_TIME = 10
+
+        poller = email_client.begin_send(message)
+        time_elapsed = 0
+        while not poller.done():
+            print("Email send poller status: " + poller.status())
+            poller.wait(POLLER_WAIT_TIME)
+            time_elapsed += POLLER_WAIT_TIME
+            if time_elapsed > 18 * POLLER_WAIT_TIME:
+                raise RuntimeError("Polling timed out.")
+
+        if poller.result()["status"] == "Succeeded":
+            print(f"Successfully sent the email (operation id: {poller.result()['id']})")
+            return True
+        else:
+            raise RuntimeError(str(poller.result()["error"]))
+        
+    except Exception as e:
+        otelLogger.error(f"Error sending verification email to {email}: {e}")
+        return False
 
 
 def get_engine():
@@ -341,6 +496,12 @@ def _build_endpoints_html() -> str:
                              api_examples=api_examples_data)
 
 
+@app.get("/subscribe")
+def subscribe():
+    """Email subscription page"""
+    return render_template("subscribe.html")
+
+
 @app.get("/api/releases")
 def api_releases():
     """Return JSON array of releases with optional exact-match filters, or a single item if release_item_id is provided."""
@@ -569,6 +730,114 @@ def api_filter_options():
     resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
+
+
+@app.route("/api/subscribe", methods=["POST"])
+def api_subscribe():
+    """Subscribe to weekly email updates"""
+    data = request.get_json()
+    if not data or 'email' not in data:
+        return jsonify({"error": "Email is required"}), 400
+    
+    email = data['email'].strip().lower()
+    if not email or '@' not in email:
+        return jsonify({"error": "Valid email is required"}), 400
+    
+    # Optional filters
+    filters = {}
+    if 'products' in data and data['products']:
+        filters['products'] = ','.join(data['products']) if isinstance(data['products'], list) else data['products']
+    if 'types' in data and data['types']:
+        filters['types'] = ','.join(data['types']) if isinstance(data['types'], list) else data['types']
+    if 'statuses' in data and data['statuses']:
+        filters['statuses'] = ','.join(data['statuses']) if isinstance(data['statuses'], list) else data['statuses']
+    
+    try:
+        engine = get_engine()
+        subscription_id, verification_token = create_email_subscription(engine, email, filters)
+        
+        if not verification_token:
+            return jsonify({"message": "Email is already subscribed and verified"}), 200
+        
+        # Send verification email
+        email_sent = send_verification_email(email, verification_token)
+        
+        if email_sent:
+            return jsonify({
+                "message": "Subscription created successfully! Please check your email for a verification link."
+            }), 201
+        else:
+            # Even if email fails, subscription was created - user can try again
+            otelLogger.warning(f"Subscription created for {email} but verification email failed to send")
+            return jsonify({
+                "message": "Subscription created, but there was an issue sending the verification email. Please try again or contact support."
+            }), 201
+        
+    except Exception as e:
+        otelLogger.error(f"Error creating subscription: {e}")
+        return jsonify({"error": "Failed to create subscription"}), 500
+
+@app.route("/api/verify-email", methods=["GET"])
+def api_verify_email():
+    """Verify email subscription"""
+    token = request.args.get('token')
+    if not token:
+        return jsonify({"error": "Verification token is required"}), 400
+    
+    try:
+        engine = get_engine()
+        success = verify_email_subscription(engine, token)
+        
+        if success:
+            return jsonify({"message": "Email verified successfully! You will now receive weekly updates."}), 200
+        else:
+            return jsonify({"error": "Invalid or expired verification token"}), 400
+            
+    except Exception as e:
+        otelLogger.error(f"Error verifying email: {e}")
+        return jsonify({"error": "Failed to verify email"}), 500
+
+
+@app.route("/verify-email", methods=["GET"])
+def verify_email_page():
+    """HTML page for email verification"""
+    token = request.args.get('token')
+    if not token:
+        return render_template('verify_email.html', error="Missing verification token"), 400
+    
+    try:
+        engine = get_engine()
+        success = verify_email_subscription(engine, token)
+        
+        if success:
+            return render_template('verify_email.html', success=True)
+        else:
+            return render_template('verify_email.html', error="Invalid or expired verification token")
+            
+    except Exception as e:
+        otelLogger.error(f"Error verifying email: {e}")
+        return render_template('verify_email.html', error="Failed to verify email"), 500
+
+
+@app.route("/unsubscribe", methods=["GET"])
+def unsubscribe_page():
+    """HTML page for unsubscribing"""
+    token = request.args.get('token')
+    if not token:
+        return render_template('unsubscribe.html', error="Missing unsubscribe token"), 400
+    
+    try:
+        engine = get_engine()
+        success = unsubscribe_email(engine, token)
+        
+        if success:
+            return render_template('unsubscribe.html', success=True)
+        else:
+            return render_template('unsubscribe.html', error="Invalid unsubscribe token")
+            
+    except Exception as e:
+        otelLogger.error(f"Error unsubscribing: {e}")
+        return render_template('unsubscribe.html', error="Failed to unsubscribe"), 500
 
 
 @app.get("/api/releases/history/<release_item_id>")

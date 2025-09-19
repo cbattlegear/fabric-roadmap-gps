@@ -7,5 +7,7 @@ gunicorn>=21.2.0
 redis>=5.0.0
 azure-monitor-opentelemetry>=1.7.0
 opentelemetry-instrumentation-flask==0.57b0
+azure-communication-email>=1.0.0
 opentelemetry-instrumentation-sqlalchemy==0.57b0
 opentelemetry-instrumentation-redis==0.57b0
+alembic>=1.16.5

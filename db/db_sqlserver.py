@@ -3,6 +3,7 @@ import json
 import uuid
 import hashlib
 from datetime import datetime, date, timedelta
+from datetime import timezone
 from typing import Iterable, Any, Tuple, Dict
 import urllib.parse
 import time
@@ -11,15 +12,23 @@ import logging
 
 # ...existing code...
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Date, Boolean, Text, DateTime, func, select, or_
+    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete
 )
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # SQLAlchemy-specific exceptions we may inspect
-from sqlalchemy.exc import DBAPIError, OperationalError, DisconnectionError
+from sqlalchemy.exc import DBAPIError
 
-Base = declarative_base()
+naming_convention = {
+    "ix": "ix_%(column_0_label)s",
+    "uq": "uq_%(table_name)s_%(column_0_name)s",
+    "ck": "ck_%(table_name)s_%(constraint_name)s",
+    "fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s",
+    "pk": "pk_%(table_name)s",
+}
+metadata = MetaData(naming_convention=naming_convention)
+Base = declarative_base(metadata=metadata)
 logger_name = __name__
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
 logger = logging.getLogger(opentelemetery_logger_name)
@@ -30,20 +39,50 @@ class ReleaseItemModel(Base):
     release_item_id = Column(String(36), primary_key=True)
     feature_name = Column(String(400))
     release_date = Column(Date, nullable=True)
-    release_type = Column(String(100))
+    release_type = Column(String(100), index=True)
     release_type_value = Column(Integer)
     vso_item = Column(String(1000))
-    release_status = Column(String(100))
+    release_status = Column(String(100), index=True)
     release_status_value = Column(Integer)
     release_semester = Column(String(200))
     product_id = Column(String(36), index=True)
-    product_name = Column(String(200))
+    product_name = Column(String(200), index=True)
     is_publish_externally = Column(Boolean)
     feature_description = Column(Text)
     # SHA256 hex of the content fields (used to detect changes)
     row_hash = Column(String(64), nullable=False, index=True)
     # Last date row content was changed/inserted (UTC date only)
     last_modified = Column(Date, nullable=False, default=date.today)
+
+
+class EmailSubscriptionModel(Base):
+    __tablename__ = "email_subscriptions"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email = Column(String(255), nullable=False, unique=True, index=True)
+    verification_token = Column(String(64), nullable=True, index=True)
+    is_verified = Column(Boolean, default=False, nullable=False)
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    verified_at = Column(DateTime, nullable=True)
+    last_email_sent = Column(Date, nullable=True)
+    unsubscribe_token = Column(String(64), nullable=False, index=True)
+    
+    # Optional filters for personalized emails
+    product_filter = Column(String(200), nullable=True)  # Comma-separated product names
+    release_type_filter = Column(String(200), nullable=True)  # Comma-separated release types
+    release_status_filter = Column(String(200), nullable=True)  # Comma-separated release statuses
+
+
+class EmailVerificationModel(Base):
+    __tablename__ = "email_verifications"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    email = Column(String(255), nullable=False, index=True)
+    token = Column(String(64), nullable=False, unique=True, index=True)
+    action_type = Column(String(20), nullable=False)  # 'subscribe' or 'unsubscribe'
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+    is_used = Column(Boolean, default=False, nullable=False)
+    used_at = Column(DateTime, nullable=True)
 
 
 def _is_transient_sql_azure_error(exc: Exception) -> bool:
@@ -407,6 +446,171 @@ def get_distinct_values(engine, column_name: str, limit: Optional[int] = None) -
         if s:
             out.append(s)
     return out
+
+
+def generate_secure_token() -> str:
+    """Generate a secure random token for email verification/unsubscribe"""
+    return hashlib.sha256(f"{uuid.uuid4()}{time.time()}{random.random()}".encode()).hexdigest()
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def create_email_subscription(engine, email: str, filters: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
+    """Create an email subscription with verification token.
+    
+    Returns tuple of (subscription_id, verification_token)
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    
+    with SessionLocal() as session:
+        # Check if subscription already exists
+        existing = session.scalar(
+            select(EmailSubscriptionModel).where(EmailSubscriptionModel.email == email)
+        )
+        
+        if existing and existing.is_verified:
+            # Already subscribed and verified
+            return existing.id, ""
+        
+        verification_token = generate_secure_token()
+        unsubscribe_token = generate_secure_token()
+        
+        if existing:
+            # Update existing unverified subscription
+            existing.verification_token = verification_token
+            existing.unsubscribe_token = unsubscribe_token
+            existing.created_at = datetime.utcnow()
+            existing.is_active = True
+            if filters:
+                existing.product_filter = filters.get('products', '')
+                existing.release_type_filter = filters.get('types', '')
+                existing.release_status_filter = filters.get('statuses', '')
+            subscription_id = existing.id
+        else:
+            # Create new subscription
+            subscription = EmailSubscriptionModel(
+                email=email,
+                verification_token=verification_token,
+                unsubscribe_token=unsubscribe_token,
+                product_filter=filters.get('products', '') if filters else '',
+                release_type_filter=filters.get('types', '') if filters else '',
+                release_status_filter=filters.get('statuses', '') if filters else ''
+            )
+            session.add(subscription)
+            session.flush()
+            subscription_id = subscription.id
+        
+        # Create verification record
+        verification = EmailVerificationModel(
+            email=email,
+            token=verification_token,
+            action_type='subscribe',
+            expires_at=datetime.utcnow() + timedelta(hours=24)
+        )
+        session.add(verification)
+        session.commit()
+        
+        return subscription_id, verification_token
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def verify_email_subscription(engine, token: str) -> bool:
+    """Verify an email subscription using the verification token"""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    
+    with SessionLocal() as session:
+        # Find verification record
+        verification = session.scalar(
+            select(EmailVerificationModel)
+            .where(EmailVerificationModel.token == token)
+            .where(EmailVerificationModel.action_type == 'subscribe')
+            .where(EmailVerificationModel.is_used == False)
+            .where(EmailVerificationModel.expires_at > datetime.utcnow())
+        )
+        
+        if not verification:
+            return False
+        
+        # Find and update subscription
+        subscription = session.scalar(
+            select(EmailSubscriptionModel)
+            .where(EmailSubscriptionModel.email == verification.email)
+        )
+        
+        if not subscription:
+            return False
+        
+        # Mark as verified
+        subscription.is_verified = True
+        subscription.verified_at = datetime.utcnow()
+        subscription.verification_token = None
+        
+        # Mark verification as used
+        verification.is_used = True
+        verification.used_at = datetime.utcnow()
+        
+        session.commit()
+        return True
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def unsubscribe_email(engine, token: str) -> bool:
+    """Unsubscribe an email using the unsubscribe token"""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    
+    with SessionLocal() as session:
+        subscription = session.scalar(
+            select(EmailSubscriptionModel)
+            .where(EmailSubscriptionModel.unsubscribe_token == token)
+        )
+        
+        if not subscription:
+            return False
+        
+        stmt = delete(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
+        session.execute(stmt)
+        session.commit()
+        return True
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_active_subscriptions(engine) -> List[EmailSubscriptionModel]:
+    """Get all active and verified email subscriptions"""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    
+    with SessionLocal() as session:
+        subscriptions = session.scalars(
+            select(EmailSubscriptionModel)
+            .where(EmailSubscriptionModel.is_active == True)
+            .where(EmailSubscriptionModel.is_verified == True)
+        ).all()
+        
+        # Detach from session to avoid lazy loading issues
+        session.expunge_all()
+        return list(subscriptions)
+    
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_unsent_active_subscriptions(engine, time_frame: int) -> List[EmailSubscriptionModel]:
+    """Get all active and verified email subscriptions"""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    #filter based on last_email_sent is 7 or more days ago
+    # limit to 100 to prevent overwhelming the email service
+    with SessionLocal() as session:
+        subscriptions = session.scalars(
+            select(EmailSubscriptionModel)
+            .where(EmailSubscriptionModel.is_active == True)
+            .where(EmailSubscriptionModel.is_verified == True)
+            .where(
+                or_(
+                    EmailSubscriptionModel.last_email_sent == None,
+                    EmailSubscriptionModel.last_email_sent <= datetime.now(timezone.utc) - timedelta(days=time_frame)
+                )
+            )
+            .limit(100)
+        ).all()
+        
+        # Detach from session to avoid lazy loading issues
+        session.expunge_all()
+        return list(subscriptions)
 
 def fetch_history_rows(engine, release_item_id: str):
     """Call stored procedure to retrieve history rows and shape output.
