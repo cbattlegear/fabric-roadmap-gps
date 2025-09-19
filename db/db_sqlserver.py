@@ -3,6 +3,7 @@ import json
 import uuid
 import hashlib
 from datetime import datetime, date, timedelta
+from datetime import timezone
 from typing import Iterable, Any, Tuple, Dict
 import urllib.parse
 import time
@@ -11,9 +12,8 @@ import logging
 
 # ...existing code...
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Date, Boolean, Text, MetaData, func, select, or_
+    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete
 )
-from sqlalchemy.dialects.mssql import DATETIME2
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker
 
@@ -566,7 +566,8 @@ def unsubscribe_email(engine, token: str) -> bool:
         if not subscription:
             return False
         
-        subscription.is_active = False
+        stmt = delete(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
+        session.execute(stmt)
         session.commit()
         return True
 
@@ -598,7 +599,12 @@ def get_unsent_active_subscriptions(engine, time_frame: int) -> List[EmailSubscr
             select(EmailSubscriptionModel)
             .where(EmailSubscriptionModel.is_active == True)
             .where(EmailSubscriptionModel.is_verified == True)
-            .where(EmailSubscriptionModel.last_email_sent <= datetime.now(datetime.timezone.utc) - timedelta(days=time_frame))
+            .where(
+                or_(
+                    EmailSubscriptionModel.last_email_sent == None,
+                    EmailSubscriptionModel.last_email_sent <= datetime.now(timezone.utc) - timedelta(days=time_frame)
+                )
+            )
             .limit(100)
         ).all()
         

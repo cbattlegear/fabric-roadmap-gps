@@ -26,8 +26,6 @@ def include_object(object, name, type_, reflected, compare_to):
     # Ignore specific columns by name
     if type_ == "column" and name in {"ValidFrom", "ValidTo"}:
         return False
-    if type_ == "table" and name in {"email_verifications", "email_subscriptions"}:
-        return False
     return True
 
 

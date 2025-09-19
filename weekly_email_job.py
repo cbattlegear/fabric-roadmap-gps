@@ -29,10 +29,12 @@ from db.db_sqlserver import (
 # Configure logging
 logger_name = 'fabric-gps-email'
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
+
 configure_azure_monitor(
     logger_name=opentelemetery_logger_name,
     enable_live_metrics=True 
 )
+
 logger = logging.getLogger(opentelemetery_logger_name)
 stream = logging.StreamHandler()
 logger.addHandler(stream)
@@ -192,7 +194,6 @@ class WeeklyEmailSender:
         """Update the last_email_sent date for a subscription"""
         try:
             engine = make_engine()
-            SQLAlchemyInstrumentor().instrument(engine=engine)
             from sqlalchemy.orm import sessionmaker
             SessionLocal = sessionmaker(bind=engine, future=True)
             with SessionLocal() as session:
