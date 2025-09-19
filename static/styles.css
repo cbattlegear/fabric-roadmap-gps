@@ -700,12 +700,12 @@ body {
 .subscription-message.success {
   background: rgba(16, 124, 16, 0.1);
   border: 1px solid rgba(16, 124, 16, 0.3);
-  color: rgba(255, 255, 255, 0.9);
+  color: rgba(25, 67, 60, 0.9);
 }
 
 .subscription-message.error {
   background: rgba(196, 43, 28, 0.1);
-  border: 1px solid rgba(196, 43, 28, 0.3);
+  border: 1px solid rgba(196, 42, 28, 0.774);
   color: rgba(255, 255, 255, 0.9);
 }
 
