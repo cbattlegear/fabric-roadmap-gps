@@ -152,14 +152,26 @@
             <section class="endpoint-section">
                 <h2><span class="method-badge method-get">GET</span> JSON API</h2>
                 <p><strong>Endpoint:</strong> <code>/api/releases</code></p>
-                <p><strong>Description:</strong> Returns JSON array of releases with optional filtering. No limit applied.</p>
+                <p><strong>Description:</strong> Returns a <em>paginated envelope</em> of releases. Always sorted by <code>last_modified</code> (desc), then <code>release_date</code>. Supports filtering, full-text style partial search (simple <code>ILIKE %q%</code>) and page-based navigation. All collection responses are wrapped; a single-item lookup via <code>release_item_id</code> returns just the object (legacy compatibility) without the envelope.</p>
                 
                 <h3>Parameters</h3>
                 <ul>
-                    <li><code>product_name</code> - Filter by exact product name (case-sensitive)</li>
-                    <li><code>release_type</code> - Filter by exact release type</li>
-                    <li><code>release_status</code> - Filter by exact release status</li>
-                    <li><code>modified_within_days</code> - Show items modified within N days (1-30)</li>
+                    <li><code>product_name</code> - Exact match on product name</li>
+                    <li><code>release_type</code> - Exact match on release type</li>
+                    <li><code>release_status</code> - Exact match on release status</li>
+                    <li><code>modified_within_days</code> - Items modified within last N days (1–30)</li>
+                    <li><code>q</code> - Case-insensitive substring search across <code>feature_name</code>, <code>feature_description</code>, <code>product_name</code></li>
+                    <li><code>page</code> - 1-based page number (default 1)</li>
+                    <li><code>page_size</code> - Items per page (default 50, max 200, min 1)</li>
+                    <li><code>release_item_id</code> - If provided, bypasses pagination and returns a single release object</li>
+                </ul>
+
+                <p style="margin-top: var(--spacing-s);"><strong>Notes:</strong></p>
+                <ul>
+                    <li><code>q</code> trimming applied; empty/whitespace-only search is ignored.</li>
+                    <li>When <code>release_item_id</code> is supplied, all other filter / paging parameters are ignored.</li>
+                    <li>Stable, stateless pagination: combine your filters + <code>page</code>/<code>page_size</code>; use <code>links.next</code> until it becomes <code>null</code>.</li>
+                    <li>Returns <code>Link</code> response header with <code>rel="next"</code>/<code>rel="prev"</code> when applicable.</li>
                 </ul>
 
                 <h3>Examples</h3>
@@ -177,42 +189,123 @@
                             <h4>No examples available</h4>
                         </div>
                     {% endif %}
+                                        <div class="example-item">
+                                                <h4>Search (q)</h4>
+                                                <a href="/api/releases?q=lake&page_size=25">/api/releases?q=lake&page_size=25</a>
+                                        </div>
+                                        <div class="example-item">
+                                                <h4>Page 3 with filters</h4>
+                                                <a href="/api/releases?product_name=Power%20BI&release_status=GA&page=3&page_size=50">/api/releases?product_name=Power BI&release_status=GA&page=3&page_size=50</a>
+                                        </div>
+                                        <div class="example-item">
+                                                <h4>Single Item</h4>
+                                                <a href="/api/releases?release_item_id=YOUR-ID-HERE">/api/releases?release_item_id=YOUR-ID-HERE</a>
+                                        </div>
                 </div>
             </section>
 
             <section class="endpoint-section">
-                <h2>Response Format</h2>
-                <p>All responses include proper HTTP caching headers:</p>
-                <ul>
-                    <li><strong>ETag:</strong> Conditional requests supported (304 Not Modified)</li>
-                    <li><strong>Cache-Control:</strong> 24-hour fresh cache with stale-while-revalidate</li>
-                    <li><strong>Last-Modified:</strong> RFC 2822 formatted timestamp</li>
-                </ul>
+                                <h2>Response Format & Schemas</h2>
+                                <p>Collection responses (<code>/api/releases</code> without <code>release_item_id</code>) are wrapped in an envelope that includes pagination metadata and HATEOAS-style links.</p>
+                                <h3>Collection Envelope</h3>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
+    "data": [
+        {
+            "release_item_id": "uuid",
+            "feature_name": "string",
+            "release_date": "YYYY-MM-DD|null",
+            "release_type": "string",
+            "release_status": "string",
+            "product_id": "uuid|null",
+            "product_name": "string",
+            "feature_description": "string|null",
+            "last_modified": "YYYY-MM-DD"  
+        }
+        // ... up to page_size items
+    ],
+    "pagination": {
+        "page": 1,
+        "page_size": 50,
+        "total_items": 1234,
+        "total_pages": 25,
+        "has_next": true,
+        "has_prev": false,
+        "next_page": 2,
+        "prev_page": null
+    },
+    "links": {
+        "self": "/api/releases?product_name=Power%20BI&page=1&page_size=50",
+        "first": "/api/releases?product_name=Power%20BI&page=1&page_size=50",
+        "last": "/api/releases?product_name=Power%20BI&page=25&page_size=50",
+        "next": "/api/releases?product_name=Power%20BI&page=2&page_size=50",
+        "prev": null
+    }
+}</code></pre>
 
-                <h3>JSON Response Schema</h3>
-                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>[
-  {
+                                <h3>Single Item (release_item_id)</h3>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
     "release_item_id": "uuid",
     "feature_name": "string",
-    "release_date": "YYYY-MM-DD",
+    "release_date": "YYYY-MM-DD|null",
     "release_type": "string",
-    "release_status": "string", 
-    "product_id": "uuid",
+    "release_status": "string",
+    "product_id": "uuid|null",
     "product_name": "string",
-    "feature_description": "string",
+    "feature_description": "string|null",
     "last_modified": "YYYY-MM-DD"
-  }
+}</code></pre>
+
+                                <h3>History Endpoint <code>/api/releases/history/&lt;release_item_id&gt;</code></h3>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>[
+    {
+        "changed_columns": ["FeatureDescription", "ReleaseDate"],
+        "last_modified": "2025-01-12"
+    },
+    // ... newest first
 ]</code></pre>
+
+                                <h3>Filter Options <code>/api/filter-options</code></h3>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
+    "product_names": ["Power BI", "Data Factory", ...],
+    "release_types": ["Public Preview", "GA", ...],
+    "release_statuses": ["In Development", "Launched", ...]
+}</code></pre>
+
+                                <h3>Email Subscription</h3>
+                                <p><strong>POST</strong> <code>/api/subscribe</code> JSON body:</p>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
+    "email": "user@example.com",
+    "products": ["Power BI"],      // optional array
+    "types": ["GA"],               // optional array
+    "statuses": ["Launched"]       // optional array
+}</code></pre>
+                                <p>Verification link sent if new/unverified. Other related endpoints:</p>
+                                <ul>
+                                        <li><code>GET /api/verify-email?token=...</code> (JSON result)</li>
+                                        <li><code>GET /verify-email?token=...</code> (HTML page)</li>
+                                        <li><code>GET /unsubscribe?token=...</code> (HTML page)</li>
+                                </ul>
+
+                                <h3>HTTP Caching</h3>
+                                <p>All JSON & RSS endpoints emit:</p>
+                                <ul>
+                                        <li><strong>ETag</strong> - Weak hash for conditional GET (send <code>If-None-Match</code> to receive 304)</li>
+                                        <li><strong>Last-Modified</strong> - Based on build time (collection) or entity timestamp</li>
+                                        <li><strong>Cache-Control</strong> - <code>public, max-age=1800, stale-while-revalidate=900</code> (30 min fresh, 15 min serve-stale)</li>
+                                </ul>
+                                <p>Server-side Redis cache keeps a 24h fresh + 24h stale copy; client-facing headers use shorter periods for responsiveness.</p>
             </section>
 
             <section class="endpoint-section">
                 <h2>Caching & Performance</h2>
-                <p>Our system uses Redis-backed caching with stale-while-revalidate strategy:</p>
+                                <p>Summary of server-side caching layers:</p>
                 <ul>
-                    <li><strong>Fresh Window:</strong> 24 hours - served immediately from cache</li>
-                    <li><strong>Stale Window:</strong> Additional 24 hours - served from cache while refreshing in background</li>
-                    <li><strong>Cache Keys:</strong> Unique per filter combination for optimal performance</li>
-                    <li><strong>Background Refresh:</strong> Prevents stampeding and ensures fresh data</li>
+                                        <li><strong>Redis Fresh Window:</strong> 24h (immediate responses)</li>
+                                        <li><strong>Redis Stale Window:</strong> +24h (served while background refresh occurs)</li>
+                                        <li><strong>Key Dimensions (collection):</strong> product_name, release_type, release_status, modified_within_days, q, page, page_size</li>
+                                        <li><strong>Key Dimensions (single item):</strong> release_item_id</li>
+                                        <li><strong>Background Refresh:</strong> Locking avoids thundering herd; stale responses annotated with <code>X-Cache: STALE</code></li>
+                                        <li><strong>Client Cache:</strong> Shorter 30m TTL encourages conditional revalidation with <code>ETag</code></li>
                 </ul>
             </section>
         </div>
