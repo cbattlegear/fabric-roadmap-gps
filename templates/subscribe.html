@@ -212,12 +212,6 @@
                 this.messageDiv.textContent = message;
                 this.messageDiv.className = `subscription-message ${type}`;
                 this.messageDiv.style.display = 'block';
-
-                if (type === 'success') {
-                    setTimeout(() => {
-                        this.messageDiv.style.display = 'none';
-                    }, 5000);
-                }
             }
 
             setLoading(loading) {
