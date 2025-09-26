@@ -19,7 +19,6 @@
         }});
     </script>
     <link rel="stylesheet" href="/static/styles.css">
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🗺️%3C/text%3E%3C/svg%3E">
     <style>
         .verification-container {
             max-width: 600px;
@@ -30,11 +29,7 @@
             box-shadow: var(--elevation-2);
             text-align: center;
         }
-        .success-icon {
-            font-size: 4rem;
-            margin-bottom: var(--spacing-l);
-        }
-        .error-icon {
+        .success-icon,.error-icon,.pending-icon {
             font-size: 4rem;
             margin-bottom: var(--spacing-l);
         }
@@ -58,23 +53,30 @@
     <main>
         <div class="container">
             <div class="verification-container">
-                {% if success %}
+                {% if pending %}
+                    <div class="pending-icon">✉️</div>
+                    <h1 style="margin-top:0;">Confirm Your Subscription</h1>
+                    <p>Click the button below to verify your email and activate weekly updates every Monday.</p>
+                    <form method="POST" style="margin-top:var(--spacing-l);">
+                      <input type="hidden" name="token" value="{{ token }}">
+                      <button type="submit" class="button button-primary">Verify Email</button>
+                    </form>
+                    <p style="margin-top:var(--spacing-l);font-size:.85rem;color:var(--fabric-neutral-grey-90);">Link valid for 24 hours. This page does nothing until you press Verify.</p>
+                {% elif success %}
                     <div class="success-icon">✅</div>
-                    <h1 class="success-message">Email Verified Successfully!</h1>
-                    <p>Thank you for subscribing to Fabric GPS weekly updates. You will receive an email every week with the latest Microsoft Fabric roadmap changes.</p>
-                    <p>You can unsubscribe at any time using the link in your weekly emails.</p>
-                    <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+                    <h1 class="success-message">Email Verified!</h1>
+                    <p>You will now receive weekly Microsoft Fabric roadmap change summaries.</p>
+                    <a href="/" class="button button-primary" style="margin-top:var(--spacing-l);">Back to Home</a>
                 {% elif error %}
                     <div class="error-icon">❌</div>
                     <h1 class="error-message">Verification Failed</h1>
                     <p>{{ error }}</p>
-                    <p>The verification link may have expired or been used already. Please try subscribing again.</p>
-                    <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+                    <a href="/" class="button button-primary" style="margin-top:var(--spacing-l);">Back to Home</a>
                 {% else %}
                     <div class="error-icon">❓</div>
                     <h1 class="error-message">Invalid Request</h1>
                     <p>No verification token provided.</p>
-                    <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+                    <a href="/" class="button button-primary" style="margin-top:var(--spacing-l);">Back to Home</a>
                 {% endif %}
             </div>
         </div>

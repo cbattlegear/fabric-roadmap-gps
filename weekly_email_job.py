@@ -30,10 +30,11 @@ from db.db_sqlserver import (
 logger_name = 'fabric-gps-email'
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
 
-configure_azure_monitor(
-    logger_name=opentelemetery_logger_name,
-    enable_live_metrics=True 
-)
+if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING") and os.getenv("CURRENT_ENVIRONMENT") != "development":
+    configure_azure_monitor(
+        logger_name=opentelemetery_logger_name,
+        enable_live_metrics=True 
+    )
 
 logger = logging.getLogger(opentelemetery_logger_name)
 stream = logging.StreamHandler()

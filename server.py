@@ -76,6 +76,7 @@ EMAIL_CLIENT = None
 FROM_EMAIL = os.getenv('FROM_EMAIL', 'noreply@yourdomain.com')
 FROM_NAME = os.getenv('FROM_NAME', 'Fabric GPS')
 BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')
+ASYNC_EMAIL_VERIFICATION = os.getenv('ASYNC_EMAIL_VERIFICATION', '1') != '0'
 
 
 def get_email_client():
@@ -189,23 +190,45 @@ def send_verification_email(email: str, verification_token: str) -> bool:
                 "html": html_content
             }
         }
-        
-        POLLER_WAIT_TIME = 10
+        # Non-blocking strategy: start send, monitor in background (default). Set ASYNC_EMAIL_VERIFICATION=0 to restore blocking behavior.
+        if ASYNC_EMAIL_VERIFICATION:
+            try:
+                poller = email_client.begin_send(message)
+            except Exception as e:
+                otelLogger.error(f"Failed to initiate async verification email send to {email}: {e}")
+                return False
 
-        poller = email_client.begin_send(message)
-        time_elapsed = 0
-        while not poller.done():
-            print("Email send poller status: " + poller.status())
-            poller.wait(POLLER_WAIT_TIME)
-            time_elapsed += POLLER_WAIT_TIME
-            if time_elapsed > 18 * POLLER_WAIT_TIME:
-                raise RuntimeError("Polling timed out.")
+            def _monitor_send(poller_obj, target_email):
+                try:
+                    # Wait up to 3 minutes; adjust if needed
+                    result = poller_obj.result()
+                    status = result.get('status') if isinstance(result, dict) else getattr(result, 'get', lambda *_: None)('status')
+                    if status == 'Succeeded':
+                        otelLogger.info(f"Verification email sent to {target_email}")
+                    else:
+                        otelLogger.warning(f"Verification email status for {target_email}: {status}")
+                except Exception as monitor_exc:
+                    otelLogger.error(f"Error monitoring verification email send to {target_email}: {monitor_exc}")
 
-        if poller.result()["status"] == "Succeeded":
-            print(f"Successfully sent the email (operation id: {poller.result()['id']})")
+            threading.Thread(target=_monitor_send, args=(poller, email), daemon=True).start()
             return True
         else:
-            raise RuntimeError(str(poller.result()["error"]))
+            # Legacy blocking path (if explicitly requested)
+            POLLER_WAIT_TIME = 10
+            poller = email_client.begin_send(message)
+            time_elapsed = 0
+            while not poller.done():
+                otelLogger.info("Verification email poller status: " + poller.status())
+                poller.wait(POLLER_WAIT_TIME)
+                time_elapsed += POLLER_WAIT_TIME
+                if time_elapsed > 18 * POLLER_WAIT_TIME:
+                    raise RuntimeError("Polling timed out.")
+            result = poller.result()
+            if result["status"] == "Succeeded":
+                otelLogger.info(f"Successfully sent verification email (operation id: {result['id']})")
+                return True
+            else:
+                raise RuntimeError(str(result["error"]))
         
     except Exception as e:
         otelLogger.error(f"Error sending verification email to {email}: {e}")
@@ -759,18 +782,24 @@ def api_subscribe():
         if not verification_token:
             return jsonify({"message": "Email is already subscribed and verified"}), 200
         
-        # Send verification email
-        email_sent = send_verification_email(email, verification_token)
-        
-        if email_sent:
-            return jsonify({
-                "message": "Subscription created successfully! Please check your email for a verification link."
-            }), 201
+        # Send verification email (async by default)
+        email_queued = send_verification_email(email, verification_token)
+        if email_queued:
+            if ASYNC_EMAIL_VERIFICATION:
+                return jsonify({
+                    "message": "Subscription created! Verification email is being sent. Make sure to check your Spam or Junk folder if you don't see it soon.",
+                    "async": True
+                }), 201
+            else:
+                return jsonify({
+                    "message": "Subscription created! Verification email sent.",
+                    "async": False
+                }), 201
         else:
-            # Even if email fails, subscription was created - user can try again
-            otelLogger.warning(f"Subscription created for {email} but verification email failed to send")
+            otelLogger.warning(f"Subscription created for {email} but verification email failed to initiate")
             return jsonify({
-                "message": "Subscription created, but there was an issue sending the verification email. Please try again or contact support."
+                "message": "Subscription created, but the verification email couldn't be sent. Try again later.",
+                "async": ASYNC_EMAIL_VERIFICATION
             }), 201
         
     except Exception as e:
@@ -798,25 +827,30 @@ def api_verify_email():
         return jsonify({"error": "Failed to verify email"}), 500
 
 
-@app.route("/verify-email", methods=["GET"])
+@app.route("/verify-email", methods=["GET", "POST"])
 def verify_email_page():
-    """HTML page for email verification"""
-    token = request.args.get('token')
+    """HTML page for email verification with explicit confirm step.
+    GET: display confirmation page (does NOT verify).
+    POST: perform verification using token then show result.
+    """
+    token = request.values.get('token')
     if not token:
-        return render_template('verify_email.html', error="Missing verification token"), 400
-    
-    try:
-        engine = get_engine()
-        success = verify_email_subscription(engine, token)
-        
-        if success:
-            return render_template('verify_email.html', success=True)
-        else:
-            return render_template('verify_email.html', error="Invalid or expired verification token")
-            
-    except Exception as e:
-        otelLogger.error(f"Error verifying email: {e}")
-        return render_template('verify_email.html', error="Failed to verify email"), 500
+        return render_template('verify_email.html', error="Missing verification token", pending=False), 400
+
+    if request.method == 'POST':
+        try:
+            engine = get_engine()
+            success = verify_email_subscription(engine, token)
+            if success:
+                return render_template('verify_email.html', success=True, pending=False)
+            else:
+                return render_template('verify_email.html', error="Invalid or expired verification token", pending=False)
+        except Exception as e:
+            otelLogger.error(f"Error verifying email: {e}")
+            return render_template('verify_email.html', error="Failed to verify email", pending=False), 500
+
+    # GET -> show pending confirmation UI
+    return render_template('verify_email.html', pending=True, token=token)
 
 
 @app.route("/unsubscribe", methods=["GET"])
