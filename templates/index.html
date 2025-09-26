@@ -154,69 +154,6 @@
                 </div>
             </section>
 
-            <section class="features-section">
-                <div class="why-build-section">
-                    <h2 class="section-title">Why Build Fabric GPS?</h2>
-                    <div class="why-build-content">
-                        <div class="why-build-story">
-                            <p class="story-text">
-                                After several people in the span of a week asked for an easier way to track changes across the Microsoft Fabric roadmap,
-                                we built Fabric GPS to provide a simple and efficient solution.
-                            </p>
-                            <p class="story-text">
-                                Our goal is to make it easier for everyone to stay informed about the latest developments in the Microsoft Fabric ecosystem.
-                            </p>
-                        </div>
-                        <div class="benefits-grid">
-                            <div class="benefit-item">
-                                <div class="benefit-icon">🎯</div>
-                                <h4>Focused Updates</h4>
-                                <p>Get only the roadmap changes that matter to you with smart filtering.</p>
-                            </div>
-                            <div class="benefit-item">
-                                <div class="benefit-icon">⚡</div>
-                                <h4>Real-time Data</h4>
-                                <p>Stay current with 24-hour refresh cycles and instant notifications.</p>
-                            </div>
-                            <div class="benefit-item">
-                                <div class="benefit-icon">🔧</div>
-                                <h4>Developer Friendly</h4>
-                                <p>RESTful APIs and RSS feeds for easy integration into your workflow.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="coming-soon-section">
-                    <h3 class="coming-soon-title">Coming Soon</h3>
-                    <div class="roadmap-items">
-                        <div class="roadmap-item subscription-item">
-                            <div class="roadmap-icon">📨</div>
-                            <div class="roadmap-content">
-                                <h4>Weekly Email Updates</h4>
-                                <p>Get a weekly summary of Microsoft Fabric roadmap changes delivered to your inbox.</p>
-                                <a href="/subscribe" class="button button-primary">Subscribe to Email Updates</a>
-                            </div>
-                        </div>
-                        <div class="roadmap-item">
-                            <div class="roadmap-icon">📈</div>
-                            <div class="roadmap-content">
-                                <h4>Analytics Dashboard</h4>
-                                <p>Visualize roadmap trends and track update frequency across different product areas.</p>
-                                <span class="roadmap-status">Planned</span>
-                            </div>
-                        </div>
-                        <div class="roadmap-item">
-                            <div class="roadmap-icon">🔔</div>
-                            <div class="roadmap-content">
-                                <h4>Custom Alerts</h4>
-                                <p>Set up personalized alerts for specific products, features, or release types.</p>
-                                <span class="roadmap-status">Research</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
         </div>
     </main>
 
@@ -225,7 +162,9 @@
             <p>
                 <a href="/endpoints" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">API Documentation</a>
                 <a href="/subscribe" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">Email Notifications</a>
-                &copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap. Updated every 24 hours.
+                &copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap. Updated every hour.
+                This page is not affliated with Microsoft and is a personal project to make viewing
+                Microsoft Fabric changes easier for everyone.
             </p>
         </div>
     </footer>
@@ -364,24 +303,15 @@
                 this.loadingMore = false;
                 this.allPagesLoaded = false;
                 this.observer = null;
-                this.stateKey = 'fabricGPS_recent_changes_state_v1';
-                this.restoreAttempted = false;
+                this.hasLoadedOnce = false;
                 this.init();
             }
 
             async init() {
                 await this.loadFilterOptions();
-                // Try restoring state first
-                const restored = this.restoreState();
-                if (!restored) {
-                    await this.loadRecentChanges({ reset: true });
-                } else {
-                    // Kick off fetch of next page quietly if near bottom
-                    setTimeout(()=>this.maybePreloadNext(), 400);
-                }
+                await this.loadRecentChanges({ reset: true });
                 this.bindEvents();
                 this.setupInfiniteScroll();
-                this.bindScrollPersistence();
             }
 
             async loadFilterOptions() {
@@ -427,88 +357,111 @@
             async loadRecentChanges(options = {}) {
                 const { reset = false } = options;
                 const filters = this.getActiveFilters();
+
                 if (reset) {
                     this.page = 1;
-                    this.currentData = [];
+                    this.currentData = []; // (DOM remains; we won't hide it unless true initial load)
                     this.allPagesLoaded = false;
                 }
-                if (this.loadingMore || this.allPagesLoaded) return;
-                this.loadingMore = true;
-                if (this.page > 1) this.toggleBottomLoading(true);
-                 this.showLoading(true);
-                 try {
-                     const params = new URLSearchParams();
-                     if (filters.product_name) params.append('product_name', filters.product_name);
-                     if (filters.release_type) params.append('release_type', filters.release_type);
-                     if (filters.release_status) params.append('release_status', filters.release_status);
-                     if (filters.modified_within_days) params.append('modified_within_days', filters.modified_within_days);
-                     // Include search query if meets minimum length
-                     if (filters.q && String(filters.q).trim().length >= this.minSearchLength) {
-                         params.append('q', String(filters.q).trim());
-                     }
-                    // Current page & size
-                     params.append('page', String(this.page));
-                     params.append('page_size', String(this.pageSize));
 
-                     const response = await fetch(`/api/releases?${params.toString()}`);
-                     const payload = await response.json();
-                     const items = Array.isArray(payload) ? payload : (payload.data || []);
-                     // API already returns sorted; defensive sort
-                     items.sort((a, b) => new Date(b.last_modified) - new Date(a.last_modified));
-                     if (this.page === 1) {
+                if (this.loadingMore || this.allPagesLoaded) return;
+
+                const isInitialLoad = this.page === 1 && !this.hasLoadedOnce;
+
+                this.loadingMore = true;
+
+                // Decide visual indicator strategy:
+                // - First ever load: full loader (center)
+                // - Any subsequent load (including filter/search resets): bottom loader only
+                if (this.page > 1) {
+                    this.toggleBottomLoading(true);
+                } else if (isInitialLoad) {
+                    this.showLoading(true);        // show main loader only once
+                } else {
+                    this.toggleBottomLoading(true); // preserve existing cards
+                }
+
+                try {
+                    const params = new URLSearchParams();
+                    if (filters.product_name) params.append('product_name', filters.product_name);
+                    if (filters.release_type) params.append('release_type', filters.release_type);
+                    if (filters.release_status) params.append('release_status', filters.release_status);
+                    if (filters.modified_within_days) params.append('modified_within_days', filters.modified_within_days);
+                    if (filters.q && String(filters.q).trim().length >= this.minSearchLength) {
+                        params.append('q', String(filters.q).trim());
+                    }
+                    params.append('page', String(this.page));
+                    params.append('page_size', String(this.pageSize));
+
+                    const response = await fetch(`/api/releases?${params.toString()}`);
+                    const payload = await response.json();
+                    const items = Array.isArray(payload) ? payload : (payload.data || []);
+                    items.sort((a, b) => new Date(b.last_modified) - new Date(a.last_modified));
+
+                    if (this.page === 1) {
                         this.currentData = items;
-                     } else {
+                    } else {
                         this.currentData = this.currentData.concat(items);
-                     }
-                     this.pagination = payload.pagination || null;
-                     // If current page exceeds total pages (e.g. filter change) auto reset
-                     if (this.pagination && this.page > this.pagination.total_pages) {
-                         this.page = this.pagination.total_pages || 1;
-                         this.loadingMore = false;
-                         return this.loadRecentChanges({ reset: true }); // reload with corrected page
-                     }
-                     if (this.pagination && !this.pagination.has_next) {
+                    }
+
+                    this.pagination = payload.pagination || null;
+
+                    if (this.pagination && this.page > this.pagination.total_pages) {
+                        this.page = this.pagination.total_pages || 1;
+                        this.loadingMore = false;
+                        return this.loadRecentChanges({ reset: true });
+                    }
+
+                    if (this.pagination && !this.pagination.has_next) {
                         this.allPagesLoaded = true;
-                     }
-                     
-                     this.renderChanges();
-                     // Prepare for potential next load
-                     if (this.pagination && this.pagination.has_next) {
-                        this.page += 1; // increment for next fetch
-                     }
-                     this.saveState();
-                 } catch (error) {
-                     console.error('Error loading recent changes:', error);
-                     this.showError();
-                 } finally {
-                     this.showLoading(false);
-                     this.loadingMore = false;
-                     this.toggleBottomLoading(false);
-                     this.updateLoadMoreButton();
-                 }
-             }
+                    }
+
+                    this.renderChanges();
+
+                    if (this.pagination && this.pagination.has_next) {
+                        this.page += 1;
+                    }
+
+                    if (!this.hasLoadedOnce && this.currentData.length > 0) {
+                        this.hasLoadedOnce = true;
+                    }
+                } catch (error) {
+                    console.error('Error loading recent changes:', error);
+                    if (isInitialLoad) {
+                        this.showError();
+                    } else {
+                        // Non-initial load error: keep old content; optionally flash a toast (not implemented)
+                    }
+                } finally {
+                    if (isInitialLoad) {
+                        this.showLoading(false);
+                    }
+                    this.toggleBottomLoading(false);
+                    this.loadingMore = false;
+                    this.updateLoadMoreButton();
+                }
+            }
 
             renderChanges() {
-                 const container = document.getElementById('changes-grid');
-                 const noResults = document.getElementById('no-results');
+                const container = document.getElementById('changes-grid');
+                const noResults = document.getElementById('no-results');
 
-                 if (this.currentData.length === 0) {
-                     container.innerHTML = '';
-                     noResults.style.display = 'block';
-                     return;
-                 }
+                if (this.currentData.length === 0) {
+                    // Only show "no results" if this was genuinely the first load or a filter returning nothing
+                    container.innerHTML = '';
+                    noResults.style.display = 'block';
+                    return;
+                }
 
-                 noResults.style.display = 'none';
-                // Re-render full list (simpler); could optimize append-only
+                noResults.style.display = 'none';
                 container.innerHTML = this.currentData.map(item => this.createChangeItem(item)).join('');
-                 // Attach click handlers
-                 container.querySelectorAll('.change-item').forEach(card => {
-                     card.addEventListener('click', () => {
-                         const id = card.getAttribute('data-id');
-                         window.__releaseModal.openById(id);
-                     });
-                 });
-             }
+                container.querySelectorAll('.change-item').forEach(card => {
+                    card.addEventListener('click', () => {
+                        const id = card.getAttribute('data-id');
+                        window.__releaseModal.openById(id);
+                    });
+                });
+            }
 
             createChangeItem(item) {
                 const date = new Date(item.last_modified).toLocaleDateString('en-US', {
@@ -619,15 +572,19 @@
                 if (!el) return;
                 el.style.display = show ? 'block' : 'none';
             }
+            
             showLoading(show) {
                 const loader = document.getElementById('loading-indicator');
                 const grid = document.getElementById('changes-grid');
                 const noResults = document.getElementById('no-results');
-                
+
                 if (show) {
                     loader.style.display = 'flex';
-                    grid.style.display = 'none';
-                    noResults.style.display = 'none';
+                    // Only hide grid if it has no content yet (true initial load)
+                    if (!this.hasLoadedOnce) {
+                        grid.style.display = 'none';
+                        noResults.style.display = 'none';
+                    }
                 } else {
                     loader.style.display = 'none';
                     grid.style.display = 'grid';
@@ -684,53 +641,6 @@
                 if (rect.top < window.innerHeight + 300) {
                     this.loadRecentChanges({ reset: false });
                 }
-            }
-            bindScrollPersistence() {
-                window.addEventListener('scroll', this.debounce(()=> this.saveState(), 250));
-                window.addEventListener('beforeunload', ()=> this.saveState());
-            }
-            saveState() {
-                try {
-                    const filters = this.getActiveFilters();
-                    const payload = {
-                        pageNext: this.page,
-                        pageSize: this.pageSize,
-                        data: this.currentData,
-                        pagination: this.pagination,
-                        filters,
-                        scrollY: window.scrollY,
-                        ts: Date.now()
-                    };
-                    sessionStorage.setItem(this.stateKey, JSON.stringify(payload));
-                } catch(_) {}
-            }
-            restoreState() {
-                if (this.restoreAttempted) return false;
-                this.restoreAttempted = true;
-                try {
-                    const raw = sessionStorage.getItem(this.stateKey);
-                    if (!raw) return false;
-                    const payload = JSON.parse(raw);
-                    // Simple staleness check: 30 minutes
-                    if (!payload || (Date.now() - (payload.ts||0)) > 30*60*1000) return false;
-                    // Apply filters first
-                    const filters = payload.filters || {};
-                    document.getElementById('product-filter').value = filters.product_name || '';
-                    document.getElementById('type-filter').value = filters.release_type || '';
-                    document.getElementById('status-filter').value = filters.release_status || '';
-                    document.getElementById('days-filter').value = filters.modified_within_days || '';
-                    const si = document.getElementById('search-input'); if (si) si.value = filters.q || '';
-                    this.currentData = Array.isArray(payload.data) ? payload.data : [];
-                    this.pagination = payload.pagination || null;
-                    this.page = payload.pageNext || 1;
-                    this.renderChanges();
-                    setTimeout(()=> window.scrollTo({ top: payload.scrollY || 0, behavior: 'auto'}), 50);
-                    this.updateLoadMoreButton();
-                    return true;
-                } catch(_) { return false; }
-            }
-            debounce(fn, wait) {
-                let t; return (...args)=> { clearTimeout(t); t = setTimeout(()=> fn.apply(this,args), wait); };
             }
         }
         // Initialize when DOM is loaded
