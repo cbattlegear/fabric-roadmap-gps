@@ -1023,3 +1023,20 @@ def api_release_history(release_item_id: str):
     resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
+
+
+@app.get("/about")
+def about_page():
+    return render_template('about.html')
+
+
+@app.context_processor
+def inject_nav():
+    from datetime import datetime
+    nav_items = [
+        {"label": "Home", "url": "/"},
+        {"label": "API", "url": "/endpoints"},
+        {"label": "Subscribe", "url": "/subscribe"},
+        {"label": "About", "url": "/about"},
+    ]
+    return {"nav_items": nav_items, "current_year": datetime.utcnow().year}

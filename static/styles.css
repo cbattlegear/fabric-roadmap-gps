@@ -161,10 +161,7 @@ body {
 
 /* Features list */
 .features-section {
-  background: white;
-  border-radius: 8px;
   padding: var(--spacing-xl);
-  box-shadow: var(--elevation-2);
   margin-bottom: var(--spacing-xl);
 }
 
@@ -753,3 +750,15 @@ a:focus-visible {
 .link-copy { background: var(--fabric-neutral-grey-20); border: 1px solid var(--fabric-neutral-grey-30); padding: .4rem .75rem; border-radius: 4px; cursor: pointer; font-weight: 600; }
 .link-copy:hover { background: var(--fabric-neutral-grey-30); }
 /* End Modal Styles */
+
+.endpoint-section { background: white; border-radius: 8px; padding: var(--spacing-l); margin-bottom: var(--spacing-l); box-shadow: var(--elevation-2); }
+.method-badge { display: inline-block; padding: var(--spacing-xs) var(--spacing-s); border-radius: 4px; font-size: var(--font-size-caption); font-weight: 600; text-transform: uppercase; }
+.method-get { background-color: var(--fabric-semantic-success); color: white; }
+.example-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--spacing-m); margin-top: var(--spacing-m); }
+.example-item { background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; border-left: 4px solid var(--fabric-primary); overflow-wrap: break-word; }
+.example-item h4 { margin: 0 0 var(--spacing-s) 0; color: var(--fabric-neutral-grey-160); }
+.example-item a { color: var(--fabric-primary); text-decoration: none; font-family: monospace; font-size: 0.8rem; }
+.example-item a:hover { text-decoration: underline; }
+code { background: var(--fabric-neutral-grey-30); padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }
+.nav-link { color: var(--fabric-primary); text-decoration: none; font-weight: 500; }
+.nav-link:hover { text-decoration: underline; }
