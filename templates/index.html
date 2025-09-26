@@ -1,68 +1,14 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Fabric GPS - Microsoft Fabric Roadmap Tracker</title>
-    <script type="text/javascript">
-        !(function (cfg){function e(){cfg.onInit&&cfg.onInit(n)}var x,w,D,t,E,n,C=window,O=document,b=C.location,q="script",I="ngestionendpoint",L="disableExceptionTracking",j="ai.device.";"instrumentationKey"[x="toLowerCase"](),w="crossOrigin",D="POST",t="appInsightsSDK",E=cfg.name||"appInsights",(cfg.name||C[t])&&(C[t]=E),n=C[E]||function(g){var f=!1,m=!1,h={initialize:!0,queue:[],sv:"8",version:2,config:g};function v(e,t){var n={},i="Browser";function a(e){e=""+e;return 1===e.length?"0"+e:e}return n[j+"id"]=i[x](),n[j+"type"]=i,n["ai.operation.name"]=b&&b.pathname||"_unknown_",n["ai.internal.sdkVersion"]="javascript:snippet_"+(h.sv||h.version),{time:(i=new Date).getUTCFullYear()+"-"+a(1+i.getUTCMonth())+"-"+a(i.getUTCDate())+"T"+a(i.getUTCHours())+":"+a(i.getUTCMinutes())+":"+a(i.getUTCSeconds())+"."+(i.getUTCMilliseconds()/1e3).toFixed(3).slice(2,5)+"Z",iKey:e,name:"Microsoft.ApplicationInsights."+e.replace(/-/g,"")+"."+t,sampleRate:100,tags:n,data:{baseData:{ver:2}},ver:undefined,seq:"1",aiDataContract:undefined}}var n,i,t,a,y=-1,T=0,S=["js.monitor.azure.com","js.cdn.applicationinsights.io","js.cdn.monitor.azure.com","js0.cdn.applicationinsights.io","js0.cdn.monitor.azure.com","js2.cdn.applicationinsights.io","js2.cdn.monitor.azure.com","az416426.vo.msecnd.net"],o=g.url||cfg.src,r=function(){return s(o,null)};function s(d,t){if((n=navigator)&&(~(n=(n.userAgent||"").toLowerCase()).indexOf("msie")||~n.indexOf("trident/"))&&~d.indexOf("ai.3")&&(d=d.replace(/(\/)(ai\.3\.)([^\d]*)$/,function(e,t,n){return t+"ai.2"+n})),!1!==cfg.cr)for(var e=0;e<S.length;e++)if(0<d.indexOf(S[e])){y=e;break}var n,i=function(e){var a,t,n,i,o,r,s,c,u,l;h.queue=[],m||(0<=y&&T+1<S.length?(a=(y+T+1)%S.length,p(d.replace(/^(.*\/\/)([\w\.]*)(\/.*)$/,function(e,t,n,i){return t+S[a]+i})),T+=1):(f=m=!0,s=d,!0!==cfg.dle&&(c=(t=function(){var e,t={},n=g.connectionString;if(n)for(var i=n.split(";"),a=0;a<i.length;a++){var o=i[a].split("=");2===o.length&&(t[o[0][x]()]=o[1])}return t}()).instrumentationkey||g.instrumentationKey||"",t=(t=(t=t[I])&&"/"===t.slice(-1)?t.slice(0,-1):t)?t+"/v2/track":g.endpointUrl,t=g.userOverrideEndpointUrl||t,(n=[]).push((i="SDK LOAD Failure: Failed to load Application Insights SDK script (See stack for details)",o=s,u=t,(l=(r=v(c,"Exception")).data).baseType="ExceptionData",l.baseData.exceptions=[{typeName:"SDKLoadFailed",message:i.replace(/\./g,"-"),hasFullStack:!1,stack:i+"\nSnippet failed to load ["+o+"] -- Telemetry is disabled\nHelp Link: https://go.microsoft.com/fwlink/?linkid=2128109\nHost: "+(b&&b.pathname||"_unknown_")+"\nEndpoint: "+u,parsedStack:[]}],r)),n.push((l=s,i=t,(u=(o=v(c,"Message")).data).baseType="MessageData",(r=u.baseData).message='AI (Internal): 99 message:"'+("SDK LOAD Failure: Failed to load Application Insights SDK script (See stack for details) ("+l+")").replace(/\"/g,"")+'"',r.properties={endpoint:i},o)),s=n,c=t,JSON&&((u=C.fetch)&&!cfg.useXhr?u(c,{method:D,body:JSON.stringify(s),mode:"cors"}):XMLHttpRequest&&((l=new XMLHttpRequest).open(D,c),l.setRequestHeader("Content-type","application/json"),l.send(JSON.stringify(s)))))))},a=function(e,t){m||setTimeout(function(){!t&&h.core||i()},500),f=!1},p=function(e){var n=O.createElement(q),e=(n.src=e,t&&(n.integrity=t),n.setAttribute("data-ai-name",E),cfg[w]);return!e&&""!==e||"undefined"==n[w]||(n[w]=e),n.onload=a,n.onerror=i,n.onreadystatechange=function(e,t){"loaded"!==n.readyState&&"complete"!==n.readyState||a(0,t)},cfg.ld&&cfg.ld<0?O.getElementsByTagName("head")[0].appendChild(n):setTimeout(function(){O.getElementsByTagName(q)[0].parentNode.appendChild(n)},cfg.ld||0),n};p(d)}cfg.sri&&(n=o.match(/^((http[s]?:\/\/.*\/)\w+(\.\d+){1,5})\.(([\w]+\.){0,2}js)$/))&&6===n.length?(d="".concat(n[1],".integrity.json"),i="@".concat(n[4]),l=window.fetch,t=function(e){if(!e.ext||!e.ext[i]||!e.ext[i].file)throw Error("Error Loading JSON response");var t=e.ext[i].integrity||null;s(o=n[2]+e.ext[i].file,t)},l&&!cfg.useXhr?l(d,{method:"GET",mode:"cors"}).then(function(e){return e.json()["catch"](function(){return{}})}).then(t)["catch"](r):XMLHttpRequest&&((a=new XMLHttpRequest).open("GET",d),a.onreadystatechange=function(){if(a.readyState===XMLHttpRequest.DONE)if(200===a.status)try{t(JSON.parse(a.responseText))}catch(e){r()}else r()},a.send())):o&&r();try{h.cookie=O.cookie}catch(k){}function e(e){for(;e.length;)!function(t){h[t]=function(){var e=arguments;f||h.queue.push(function(){h[t].apply(h,e)})}}(e.pop())}var c,u,l="track",d="TrackPage",p="TrackEvent",l=(e([l+"Event",l+"PageView",l+"Exception",l+"Trace",l+"DependencyData",l+"Metric",l+"PageViewPerformance","start"+d,"stop"+d,"start"+p,"stop"+p,"addTelemetryInitializer","setAuthenticatedUserContext","clearAuthenticatedUserContext","flush"]),h.SeverityLevel={Verbose:0,Information:1,Warning:2,Error:3,Critical:4},(g.extensionConfig||{}).ApplicationInsightsAnalytics||{});return!0!==g[L]&&!0!==l[L]&&(e(["_"+(c="onerror")]),u=C[c],C[c]=function(e,t,n,i,a){var o=u&&u(e,t,n,i,a);return!0!==o&&h["_"+c]({message:e,url:t,lineNumber:n,columnNumber:i,error:a,evt:C.event}),o},g.autoExceptionInstrumented=!0),h}(cfg.cfg),(C[E]=n).queue&&0===n.queue.length?(n.queue.push(e),n.trackPageView({})):e();})({
-        src: "https://js.monitor.azure.com/scripts/b/ai.3.gbl.min.js",
-        // name: "appInsights", // Global SDK Instance name defaults to "appInsights" when not supplied
-        // ld: 0, // Defines the load delay (in ms) before attempting to load the sdk. -1 = block page load and add to head. (default) = 0ms load after timeout,
-        // useXhr: 1, // Use XHR instead of fetch to report failures (if available),
-        // dle: true, // Prevent the SDK from reporting load failure log
-        crossOrigin: "anonymous", // When supplied this will add the provided value as the cross origin attribute on the script tag
-        // onInit: null, // Once the application insights instance has loaded and initialized this callback function will be called with 1 argument -- the sdk instance (DON'T ADD anything to the sdk.queue -- As they won't get called)
-        // sri: false, // Custom optional value to specify whether fetching the snippet from integrity file and do integrity check
-        cfg: { // Application Insights Configuration
-            connectionString: "InstrumentationKey=abe0fd34-1a9f-4fac-adef-0a391ab5a425;IngestionEndpoint=https://canadacentral-1.in.applicationinsights.azure.com/;LiveEndpoint=https://canadacentral.livediagnostics.monitor.azure.com/;ApplicationId=63030687-a2e7-4248-8b1a-e4b9f265e1e5"
-        }});
-    </script>
-    <link rel="stylesheet" href="/static/styles.css">
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🗺️%3C/text%3E%3C/svg%3E">
-    <style>
-        @media (max-width: 768px) {
-            /* Mobile navigation */
-            header .container > div {
-                flex-direction: column !important;
-                gap: 1rem;
-                align-items: flex-start !important;
-            }
-            
-            header nav {
-                width: 100%;
-                justify-content: center;
-            }
-        }
-    </style>
-</head>
-<body>
-    <header class="header">
-        <div class="container">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h1 style="margin: 0; font-size: 1.5rem; color: var(--fabric-neutral-grey-160);">
-                    🗺️ Fabric GPS
-                </h1>
-                <nav style="display: flex; gap: 1rem;">
-                    <a href="/" style="color: var(--fabric-brand-60); text-decoration: none; padding: 0.25rem 0.5rem; font-weight: 600;">Home</a>
-                    <a href="/endpoints" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">API</a>
-                    <a href="/subscribe" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">Subscribe</a>
-                </nav>
-            </div>
-        </div>
-    </header>
 
-    <main>
-        <section class="hero-section">
-            <div class="container">
-                <h1 class="hero-title">Microsoft Fabric Roadmap Tracker</h1>
-                <p class="hero-subtitle">
-                    Stay up-to-date with the latest Microsoft Fabric roadmap updates.
-                    Get real-time feeds and explore what's coming next.
-                </p>
-            </div>
-        </section>
+    {% extends 'base.html' %}
+    {% block title %}Fabric GPS - Microsoft Fabric Roadmap Tracker{% endblock %}
 
+    
+{% block herotitle%}Microsoft Fabric Roadmap Tracker{% endblock %}
+{% block herosubtitle%}
+Stay up-to-date with the latest Microsoft Fabric roadmap updates.
+Get real-time feeds and explore what's coming next.
+{% endblock %}
+{% block content %}
         <div class="container">
             <section class="card-grid">
                 <div class="card">
@@ -86,12 +32,12 @@
                 </div>
 
                 <div class="card">
-                    <h2 class="card-title">📊 Data Insights</h2>
+                    <h2 class="card-title">📨 Email Updates</h2>
                     <p class="card-description">
-                        Our system tracks changes across all Microsoft Fabric products, providing you with
-                        comprehensive coverage of the roadmap landscape with 24-hour caching for optimal performance.
+                        Get one concise Monday email summarizing the week's Microsoft Fabric roadmap changes—focused
+                        highlights that prep you for the week without noise or inbox clutter.
                     </p>
-                    <a href="/endpoints" class="button button-primary">View Details</a>
+                    <a href="/subscribe" class="button button-primary">Subscribe Now</a>
                 </div>
             </section>
 
@@ -142,89 +88,18 @@
                     <div class="changes-grid" id="changes-grid">
                         <!-- Changes will be populated by JavaScript -->
                     </div>
+                    <div id="loading-more-indicator" style="display:none; text-align:center; padding:.75rem 0; font-size:.75rem; opacity:.7;">Loading more…</div>
+                    <div style="text-align:center; margin-top:.5rem;">
+                        <button id="load-more-btn" class="button button-secondary" style="display:none;">Load More</button>
+                    </div>
+                     <div id="infinite-scroll-sentinel" style="height:1px;"></div>
                     
                     <div class="no-results" id="no-results" style="display: none;">
                         <p>No changes found matching your filters. Try adjusting your criteria.</p>
                     </div>
                 </div>
             </section>
-
-            <section class="features-section">
-                <div class="why-build-section">
-                    <h2 class="section-title">Why Build Fabric GPS?</h2>
-                    <div class="why-build-content">
-                        <div class="why-build-story">
-                            <p class="story-text">
-                                After several people in the span of a week asked for an easier way to track changes across the Microsoft Fabric roadmap,
-                                we built Fabric GPS to provide a simple and efficient solution.
-                            </p>
-                            <p class="story-text">
-                                Our goal is to make it easier for everyone to stay informed about the latest developments in the Microsoft Fabric ecosystem.
-                            </p>
-                        </div>
-                        <div class="benefits-grid">
-                            <div class="benefit-item">
-                                <div class="benefit-icon">🎯</div>
-                                <h4>Focused Updates</h4>
-                                <p>Get only the roadmap changes that matter to you with smart filtering.</p>
-                            </div>
-                            <div class="benefit-item">
-                                <div class="benefit-icon">⚡</div>
-                                <h4>Real-time Data</h4>
-                                <p>Stay current with 24-hour refresh cycles and instant notifications.</p>
-                            </div>
-                            <div class="benefit-item">
-                                <div class="benefit-icon">🔧</div>
-                                <h4>Developer Friendly</h4>
-                                <p>RESTful APIs and RSS feeds for easy integration into your workflow.</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="coming-soon-section">
-                    <h3 class="coming-soon-title">Coming Soon</h3>
-                    <div class="roadmap-items">
-                        <div class="roadmap-item subscription-item">
-                            <div class="roadmap-icon">📨</div>
-                            <div class="roadmap-content">
-                                <h4>Weekly Email Updates</h4>
-                                <p>Get a weekly summary of Microsoft Fabric roadmap changes delivered to your inbox.</p>
-                                <a href="/subscribe" class="button button-primary">Subscribe to Email Updates</a>
-                            </div>
-                        </div>
-                        <div class="roadmap-item">
-                            <div class="roadmap-icon">📈</div>
-                            <div class="roadmap-content">
-                                <h4>Analytics Dashboard</h4>
-                                <p>Visualize roadmap trends and track update frequency across different product areas.</p>
-                                <span class="roadmap-status">Planned</span>
-                            </div>
-                        </div>
-                        <div class="roadmap-item">
-                            <div class="roadmap-icon">🔔</div>
-                            <div class="roadmap-content">
-                                <h4>Custom Alerts</h4>
-                                <p>Set up personalized alerts for specific products, features, or release types.</p>
-                                <span class="roadmap-status">Research</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
         </div>
-    </main>
-
-    <footer class="footer">
-        <div class="container">
-            <p>
-                <a href="/endpoints" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">API Documentation</a>
-                <a href="/subscribe" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">Email Notifications</a>
-                &copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap. Updated every 24 hours.
-            </p>
-        </div>
-    </footer>
-
     <div id="release-modal" class="modal" aria-hidden="true" role="dialog" aria-modal="true">
         <div class="modal-backdrop" data-modal-close></div>
         <div class="modal-dialog" role="document">
@@ -234,8 +109,10 @@
             </div>
         </div>
     </div>
+{% endblock %}
+{% block scripts %}
 
-    <script>
+<script>
         class ReleaseModal {
             constructor() {
                 this.modal = document.getElementById('release-modal');
@@ -353,13 +230,21 @@
                 this.currentData = [];
                 this.debounceTimer = null;
                 this.minSearchLength = 2; // minimum chars to trigger search
+                this.page = 1;
+                this.pageSize = 15;
+                this.pagination = null; // server-provided pagination metadata
+                this.loadingMore = false;
+                this.allPagesLoaded = false;
+                this.observer = null;
+                this.hasLoadedOnce = false;
                 this.init();
             }
 
             async init() {
                 await this.loadFilterOptions();
-                await this.loadRecentChanges();
+                await this.loadRecentChanges({ reset: true });
                 this.bindEvents();
+                this.setupInfiniteScroll();
             }
 
             async loadFilterOptions() {
@@ -402,32 +287,91 @@
                 });
             }
 
-            async loadRecentChanges(filters = {}) {
-                this.showLoading(true);
+            async loadRecentChanges(options = {}) {
+                const { reset = false } = options;
+                const filters = this.getActiveFilters();
+
+                if (reset) {
+                    this.page = 1;
+                    this.currentData = []; // (DOM remains; we won't hide it unless true initial load)
+                    this.allPagesLoaded = false;
+                }
+
+                if (this.loadingMore || this.allPagesLoaded) return;
+
+                const isInitialLoad = this.page === 1 && !this.hasLoadedOnce;
+
+                this.loadingMore = true;
+
+                // Decide visual indicator strategy:
+                // - First ever load: full loader (center)
+                // - Any subsequent load (including filter/search resets): bottom loader only
+                if (this.page > 1) {
+                    this.toggleBottomLoading(true);
+                } else if (isInitialLoad) {
+                    this.showLoading(true);        // show main loader only once
+                } else {
+                    this.toggleBottomLoading(true); // preserve existing cards
+                }
+
                 try {
                     const params = new URLSearchParams();
                     if (filters.product_name) params.append('product_name', filters.product_name);
                     if (filters.release_type) params.append('release_type', filters.release_type);
                     if (filters.release_status) params.append('release_status', filters.release_status);
                     if (filters.modified_within_days) params.append('modified_within_days', filters.modified_within_days);
-                    // Include search query if meets minimum length
                     if (filters.q && String(filters.q).trim().length >= this.minSearchLength) {
                         params.append('q', String(filters.q).trim());
                     }
+                    params.append('page', String(this.page));
+                    params.append('page_size', String(this.pageSize));
 
                     const response = await fetch(`/api/releases?${params.toString()}`);
-                    this.currentData = await response.json();
-                    
-                    // Limit to 15 items and sort by last_modified
-                    this.currentData.sort((a, b) => new Date(b.last_modified) - new Date(a.last_modified));
-                    this.currentData = this.currentData.slice(0, 15);
-                    
+                    const payload = await response.json();
+                    const items = Array.isArray(payload) ? payload : (payload.data || []);
+                    items.sort((a, b) => new Date(b.last_modified) - new Date(a.last_modified));
+
+                    if (this.page === 1) {
+                        this.currentData = items;
+                    } else {
+                        this.currentData = this.currentData.concat(items);
+                    }
+
+                    this.pagination = payload.pagination || null;
+
+                    if (this.pagination && this.page > this.pagination.total_pages) {
+                        this.page = this.pagination.total_pages || 1;
+                        this.loadingMore = false;
+                        return this.loadRecentChanges({ reset: true });
+                    }
+
+                    if (this.pagination && !this.pagination.has_next) {
+                        this.allPagesLoaded = true;
+                    }
+
                     this.renderChanges();
+
+                    if (this.pagination && this.pagination.has_next) {
+                        this.page += 1;
+                    }
+
+                    if (!this.hasLoadedOnce && this.currentData.length > 0) {
+                        this.hasLoadedOnce = true;
+                    }
                 } catch (error) {
                     console.error('Error loading recent changes:', error);
-                    this.showError();
+                    if (isInitialLoad) {
+                        this.showError();
+                    } else {
+                        // Non-initial load error: keep old content; optionally flash a toast (not implemented)
+                    }
                 } finally {
-                    this.showLoading(false);
+                    if (isInitialLoad) {
+                        this.showLoading(false);
+                    }
+                    this.toggleBottomLoading(false);
+                    this.loadingMore = false;
+                    this.updateLoadMoreButton();
                 }
             }
 
@@ -436,6 +380,7 @@
                 const noResults = document.getElementById('no-results');
 
                 if (this.currentData.length === 0) {
+                    // Only show "no results" if this was genuinely the first load or a filter returning nothing
                     container.innerHTML = '';
                     noResults.style.display = 'block';
                     return;
@@ -443,7 +388,6 @@
 
                 noResults.style.display = 'none';
                 container.innerHTML = this.currentData.map(item => this.createChangeItem(item)).join('');
-                // Attach click handlers
                 container.querySelectorAll('.change-item').forEach(card => {
                     card.addEventListener('click', () => {
                         const id = card.getAttribute('data-id');
@@ -487,37 +431,41 @@
                     </div>`;
             }
             bindEvents() {
-                const applyBtn = document.getElementById('apply-filters');
-                const clearBtn = document.getElementById('clear-filters');
+                 const applyBtn = document.getElementById('apply-filters');
+                 const clearBtn = document.getElementById('clear-filters');
+                const loadMoreBtn = document.getElementById('load-more-btn');
 
-                // Debounced search input handling
-                const searchInput = document.getElementById('search-input');
-                if (searchInput) {
-                    searchInput.addEventListener('input', (e) => {
-                        this.debounceSearch();
+                 // Debounced search input handling
+                 const searchInput = document.getElementById('search-input');
+                 if (searchInput) {
+                     searchInput.addEventListener('input', (e) => {
+                         this.debounceSearch(); // debounce will trigger reset load when long enough
+                     });
+                 }
+
+                 applyBtn.addEventListener('click', () => {
+                     this.loadRecentChanges({ reset: true });
+                 });
+
+                 clearBtn.addEventListener('click', () => {
+                     this.clearFilters();
+                     this.loadRecentChanges({ reset: true });
+                 });
+
+                if (loadMoreBtn) {
+                    loadMoreBtn.addEventListener('click', () => {
+                        this.loadRecentChanges({ reset: false });
                     });
                 }
-
-                applyBtn.addEventListener('click', () => {
-                    const filters = this.getActiveFilters();
-                    this.loadRecentChanges(filters);
-                });
-
-                clearBtn.addEventListener('click', () => {
-                    this.clearFilters();
-                    this.loadRecentChanges();
-                });
-
-                // Allow Enter key to apply filters
-                document.querySelectorAll('.filter-select').forEach(select => {
-                    select.addEventListener('keypress', (e) => {
-                        if (e.key === 'Enter') {
-                            const filters = this.getActiveFilters();
-                            this.loadRecentChanges(filters);
-                        }
-                    });
-                });
-            }
+                 // Allow Enter key to apply filters
+                 document.querySelectorAll('.filter-select').forEach(select => {
+                     select.addEventListener('keypress', (e) => {
+                         if (e.key === 'Enter') {
+                             this.loadRecentChanges({ reset: true });
+                         }
+                     });
+                 });
+             }
 
             getActiveFilters() {
                 return {
@@ -536,17 +484,40 @@
                 document.getElementById('days-filter').value = '';
                 const si = document.getElementById('search-input');
                 if (si) si.value = '';
+                this.page = 1;
+                this.allPagesLoaded = false;
+                this.currentData = [];
+             }
+            updateLoadMoreButton() {
+                const btn = document.getElementById('load-more-btn');
+                if (!btn) return;
+                if (this.observer) {
+                    // IntersectionObserver active — hide manual button unless all loaded
+                    btn.style.display = this.allPagesLoaded ? 'none' : 'none';
+                } else {
+                    // Fallback mode
+                    btn.style.display = this.allPagesLoaded ? 'none' : 'inline-block';
+                    btn.disabled = this.loadingMore;
+                }
             }
-
+            toggleBottomLoading(show) {
+                const el = document.getElementById('loading-more-indicator');
+                if (!el) return;
+                el.style.display = show ? 'block' : 'none';
+            }
+            
             showLoading(show) {
                 const loader = document.getElementById('loading-indicator');
                 const grid = document.getElementById('changes-grid');
                 const noResults = document.getElementById('no-results');
-                
+
                 if (show) {
                     loader.style.display = 'flex';
-                    grid.style.display = 'none';
-                    noResults.style.display = 'none';
+                    // Only hide grid if it has no content yet (true initial load)
+                    if (!this.hasLoadedOnce) {
+                        grid.style.display = 'none';
+                        noResults.style.display = 'none';
+                    }
                 } else {
                     loader.style.display = 'none';
                     grid.style.display = 'grid';
@@ -577,16 +548,38 @@
                         // do not search yet
                         return;
                     }
-                    this.loadRecentChanges(filters);
+                    this.loadRecentChanges({ reset: true });
                 }, delay);
+             }
+
+            setupInfiniteScroll() {
+                const sentinel = document.getElementById('infinite-scroll-sentinel');
+                if (!('IntersectionObserver' in window) || !sentinel) return;
+                this.observer = new IntersectionObserver(entries => {
+                    for (const entry of entries) {
+                        if (entry.isIntersecting) {
+                            this.loadRecentChanges({ reset: false });
+                        }
+                    }
+                }, { root: null, rootMargin: '0px 0px 300px 0px', threshold: 0 });
+                this.observer.observe(sentinel);
+                // Always update button (fallback or not)
+                this.updateLoadMoreButton();
+            }
+            maybePreloadNext() {
+                if (this.allPagesLoaded || this.loadingMore) return;
+                const sentinel = document.getElementById('infinite-scroll-sentinel');
+                if (!sentinel) return;
+                const rect = sentinel.getBoundingClientRect();
+                if (rect.top < window.innerHeight + 300) {
+                    this.loadRecentChanges({ reset: false });
+                }
             }
         }
-
         // Initialize when DOM is loaded
         document.addEventListener('DOMContentLoaded', () => {
             window.__releaseModal = new ReleaseModal();
             new RecentChanges();
         });
     </script>
-</body>
-</html>
+{% endblock %}

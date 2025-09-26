@@ -3,6 +3,7 @@ import re
 import unicodedata
 import json
 import logging
+import os
 
 from unidecode import unidecode
 
@@ -17,10 +18,15 @@ from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 
 logger_name = 'fabric-gps-refresh'
+
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
-configure_azure_monitor(
-    logger_name=opentelemetery_logger_name   
-)
+
+if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING") and os.getenv("CURRENT_ENVIRONMENT") != "development":
+    configure_azure_monitor(
+        logger_name=opentelemetery_logger_name,
+        enable_live_metrics=True 
+    )
+
 otelLogger= logging.getLogger(opentelemetery_logger_name)
 stream = logging.StreamHandler()
 otelLogger.addHandler(stream)

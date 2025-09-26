@@ -356,20 +356,16 @@ def get_recently_modified_releases(
     release_status: Optional[str] = None,
     modified_within_days: Optional[int] = None,
     q: Optional[str] = None,
+    offset: Optional[int] = None,
 ) -> List[ReleaseItemModel]:
     """
-    Return up to `limit` releases most recently modified (by last_modified desc).
-    Optionally filter by exact `product_name`, `release_type`, or `release_status`
-    (direct equality). Results are ordered by last_modified desc, then release_date desc.
-
-    Supports optional text search via `q` which performs a case-insensitive partial match
-    against feature_name, feature_description, and product_name.
+    Return releases most recently modified (by last_modified desc), filtered & paginated.
+    Supports optional text search via `q` and pagination via `limit` & `offset`.
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
 
     stmt = select(ReleaseItemModel)
     filters = []
-    # use direct equality instead of ilike/partial match for explicit filters
     if product_name is not None:
         filters.append(ReleaseItemModel.product_name == product_name)
     if release_type is not None:
@@ -377,10 +373,9 @@ def get_recently_modified_releases(
     if release_status is not None:
         filters.append(ReleaseItemModel.release_status == release_status)
     if modified_within_days is not None:
-        modified_since = datetime.now() - timedelta(days=modified_within_days)
-        filters.append(ReleaseItemModel.last_modified >= modified_since)
-
-    # Text search (case-insensitive partial match) across useful text columns
+        from datetime import datetime as _dt
+        modified_since = _dt.utcnow() - timedelta(days=modified_within_days)
+        filters.append(ReleaseItemModel.last_modified >= modified_since.date())
     if q:
         q_trimmed = str(q).strip()
         if q_trimmed:
@@ -392,19 +387,57 @@ def get_recently_modified_releases(
                     ReleaseItemModel.product_name.ilike(pattern),
                 )
             )
-
     if filters:
         stmt = stmt.where(*filters)
-
+    stmt = stmt.order_by(ReleaseItemModel.last_modified.desc(), ReleaseItemModel.release_date.desc(), ReleaseItemModel.release_item_id.desc())
+    if offset is not None:
+        stmt = stmt.offset(offset)
     if limit is not None:
-        stmt = stmt.order_by(ReleaseItemModel.last_modified.desc(), ReleaseItemModel.release_date.desc()).limit(limit)
-    else:
-        stmt = stmt.order_by(ReleaseItemModel.last_modified.desc(), ReleaseItemModel.release_date.desc())
-
+        stmt = stmt.limit(limit)
     with SessionLocal() as session:
         rows = session.scalars(stmt).all()
-
     return rows
+
+@retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
+def count_recently_modified_releases(
+    engine,
+    product_name: Optional[str] = None,
+    release_type: Optional[str] = None,
+    release_status: Optional[str] = None,
+    modified_within_days: Optional[int] = None,
+    q: Optional[str] = None,
+) -> int:
+    """Return total count of releases matching filters/search."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    stmt = select(func.count()).select_from(ReleaseItemModel)
+    filters = []
+    if product_name is not None:
+        filters.append(ReleaseItemModel.product_name == product_name)
+    if release_type is not None:
+        filters.append(ReleaseItemModel.release_type == release_type)
+    if release_status is not None:
+        filters.append(ReleaseItemModel.release_status == release_status)
+    if modified_within_days is not None:
+        from datetime import datetime as _dt
+        modified_since = _dt.utcnow() - timedelta(days=modified_within_days)
+        filters.append(ReleaseItemModel.last_modified >= modified_since.date())
+    if q:
+        q_trimmed = str(q).strip()
+        if q_trimmed:
+            pattern = f"%{q_trimmed}%"
+            filters.append(
+                or_(
+                    ReleaseItemModel.feature_name.ilike(pattern),
+                    ReleaseItemModel.feature_description.ilike(pattern),
+                    ReleaseItemModel.product_name.ilike(pattern),
+                )
+            )
+    if filters:
+        stmt = stmt.where(*filters)
+    with SessionLocal() as session:
+        total = session.scalar(stmt) or 0
+    return int(total)
+
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
 def get_distinct_values(engine, column_name: str, limit: Optional[int] = None) -> List[str]:

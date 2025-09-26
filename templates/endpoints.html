@@ -1,123 +1,10 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>API Documentation - Fabric GPS</title>
-    <script type="text/javascript">
-        !(function (cfg){function e(){cfg.onInit&&cfg.onInit(n)}var x,w,D,t,E,n,C=window,O=document,b=C.location,q="script",I="ingestionendpoint",L="disableExceptionTracking",j="ai.device.";"instrumentationKey"[x="toLowerCase"](),w="crossOrigin",D="POST",t="appInsightsSDK",E=cfg.name||"appInsights",(cfg.name||C[t])&&(C[t]=E),n=C[E]||function(g){var f=!1,m=!1,h={initialize:!0,queue:[],sv:"8",version:2,config:g};function v(e,t){var n={},i="Browser";function a(e){e=""+e;return 1===e.length?"0"+e:e}return n[j+"id"]=i[x](),n[j+"type"]=i,n["ai.operation.name"]=b&&b.pathname||"_unknown_",n["ai.internal.sdkVersion"]="javascript:snippet_"+(h.sv||h.version),{time:(i=new Date).getUTCFullYear()+"-"+a(1+i.getUTCMonth())+"-"+a(i.getUTCDate())+"T"+a(i.getUTCHours())+":"+a(i.getUTCMinutes())+":"+a(i.getUTCSeconds())+"."+(i.getUTCMilliseconds()/1e3).toFixed(3).slice(2,5)+"Z",iKey:e,name:"Microsoft.ApplicationInsights."+e.replace(/-/g,"")+"."+t,sampleRate:100,tags:n,data:{baseData:{ver:2}},ver:undefined,seq:"1",aiDataContract:undefined}}var n,i,t,a,y=-1,T=0,S=["js.monitor.azure.com","js.cdn.applicationinsights.io","js.cdn.monitor.azure.com","js0.cdn.applicationinsights.io","js0.cdn.monitor.azure.com","js2.cdn.applicationinsights.io","js2.cdn.monitor.azure.com","az416426.vo.msecnd.net"],o=g.url||cfg.src,r=function(){return s(o,null)};function s(d,t){if((n=navigator)&&(~(n=(n.userAgent||"").toLowerCase()).indexOf("msie")||~n.indexOf("trident/"))&&~d.indexOf("ai.3")&&(d=d.replace(/(\/)(ai\.3\.)([^\d]*)$/,function(e,t,n){return t+"ai.2"+n})),!1!==cfg.cr)for(var e=0;e<S.length;e++)if(0<d.indexOf(S[e])){y=e;break}var n,i=function(e){var a,t,n,i,o,r,s,c,u,l;h.queue=[],m||(0<=y&&T+1<S.length?(a=(y+T+1)%S.length,p(d.replace(/^(.*\/\/)([\w\.]*)(\/.*)$/,function(e,t,n,i){return t+S[a]+i})),T+=1):(f=m=!0,s=d,!0!==cfg.dle&&(c=(t=function(){var e,t={},n=g.connectionString;if(n)for(var i=n.split(";"),a=0;a<i.length;a++){var o=i[a].split("=");2===o.length&&(t[o[0][x]()]=o[1])}return t[I]||(e=(n=t.endpointsuffix)?t.location:null,t[I]="https://"+(e?e+".":"")+"dc."+(n||"services.visualstudio.com")),t}()).instrumentationkey||g.instrumentationKey||"",t=(t=(t=t[I])&&"/"===t.slice(-1)?t.slice(0,-1):t)?t+"/v2/track":g.endpointUrl,t=g.userOverrideEndpointUrl||t,(n=[]).push((i="SDK LOAD Failure: Failed to load Application Insights SDK script (See stack for details)",o=s,u=t,(l=(r=v(c,"Exception")).data).baseType="ExceptionData",l.baseData.exceptions=[{typeName:"SDKLoadFailed",message:i.replace(/\./g,"-"),hasFullStack:!1,stack:i+"\nSnippet failed to load ["+o+"] -- Telemetry is disabled\nHelp Link: https://go.microsoft.com/fwlink/?linkid=2128109\nHost: "+(b&&b.pathname||"_unknown_")+"\nEndpoint: "+u,parsedStack:[]}],r)),n.push((l=s,i=t,(u=(o=v(c,"Message")).data).baseType="MessageData",(r=u.baseData).message='AI (Internal): 99 message:"'+("SDK LOAD Failure: Failed to load Application Insights SDK script (See stack for details) ("+l+")").replace(/\"/g,"")+'"',r.properties={endpoint:i},o)),s=n,c=t,JSON&&((u=C.fetch)&&!cfg.useXhr?u(c,{method:D,body:JSON.stringify(s),mode:"cors"}):XMLHttpRequest&&((l=new XMLHttpRequest).open(D,c),l.setRequestHeader("Content-type","application/json"),l.send(JSON.stringify(s)))))))},a=function(e,t){m||setTimeout(function(){!t&&h.core||i()},500),f=!1},p=function(e){var n=O.createElement(q),e=(n.src=e,t&&(n.integrity=t),n.setAttribute("data-ai-name",E),cfg[w]);return!e&&""!==e||"undefined"==n[w]||(n[w]=e),n.onload=a,n.onerror=i,n.onreadystatechange=function(e,t){"loaded"!==n.readyState&&"complete"!==n.readyState||a(0,t)},cfg.ld&&cfg.ld<0?O.getElementsByTagName("head")[0].appendChild(n):setTimeout(function(){O.getElementsByTagName(q)[0].parentNode.appendChild(n)},cfg.ld||0),n};p(d)}cfg.sri&&(n=o.match(/^((http[s]?:\/\/.*\/)\w+(\.\d+){1,5})\.(([\w]+\.){0,2}js)$/))&&6===n.length?(d="".concat(n[1],".integrity.json"),i="@".concat(n[4]),l=window.fetch,t=function(e){if(!e.ext||!e.ext[i]||!e.ext[i].file)throw Error("Error Loading JSON response");var t=e.ext[i].integrity||null;s(o=n[2]+e.ext[i].file,t)},l&&!cfg.useXhr?l(d,{method:"GET",mode:"cors"}).then(function(e){return e.json()["catch"](function(){return{}})}).then(t)["catch"](r):XMLHttpRequest&&((a=new XMLHttpRequest).open("GET",d),a.onreadystatechange=function(){if(a.readyState===XMLHttpRequest.DONE)if(200===a.status)try{t(JSON.parse(a.responseText))}catch(e){r()}else r()},a.send())):o&&r();try{h.cookie=O.cookie}catch(k){}function e(e){for(;e.length;)!function(t){h[t]=function(){var e=arguments;f||h.queue.push(function(){h[t].apply(h,e)})}}(e.pop())}var c,u,l="track",d="TrackPage",p="TrackEvent",l=(e([l+"Event",l+"PageView",l+"Exception",l+"Trace",l+"DependencyData",l+"Metric",l+"PageViewPerformance","start"+d,"stop"+d,"start"+p,"stop"+p,"addTelemetryInitializer","setAuthenticatedUserContext","clearAuthenticatedUserContext","flush"]),h.SeverityLevel={Verbose:0,Information:1,Warning:2,Error:3,Critical:4},(g.extensionConfig||{}).ApplicationInsightsAnalytics||{});return!0!==g[L]&&!0!==l[L]&&(e(["_"+(c="onerror")]),u=C[c],C[c]=function(e,t,n,i,a){var o=u&&u(e,t,n,i,a);return!0!==o&&h["_"+c]({message:e,url:t,lineNumber:n,columnNumber:i,error:a,evt:C.event}),o},g.autoExceptionInstrumented=!0),h}(cfg.cfg),(C[E]=n).queue&&0===n.queue.length?(n.queue.push(e),n.trackPageView({})):e();})({
-        src: "https://js.monitor.azure.com/scripts/b/ai.3.gbl.min.js",
-        // name: "appInsights", // Global SDK Instance name defaults to "appInsights" when not supplied
-        // ld: 0, // Defines the load delay (in ms) before attempting to load the sdk. -1 = block page load and add to head. (default) = 0ms load after timeout,
-        // useXhr: 1, // Use XHR instead of fetch to report failures (if available),
-        // dle: true, // Prevent the SDK from reporting load failure log
-        crossOrigin: "anonymous", // When supplied this will add the provided value as the cross origin attribute on the script tag
-        // onInit: null, // Once the application insights instance has loaded and initialized this callback function will be called with 1 argument -- the sdk instance (DON'T ADD anything to the sdk.queue -- As they won't get called)
-        // sri: false, // Custom optional value to specify whether fetching the snippet from integrity file and do integrity check
-        cfg: { // Application Insights Configuration
-            connectionString: "InstrumentationKey=abe0fd34-1a9f-4fac-adef-0a391ab5a425;IngestionEndpoint=https://canadacentral-1.in.applicationinsights.azure.com/;LiveEndpoint=https://canadacentral.livediagnostics.monitor.azure.com/;ApplicationId=63030687-a2e7-4248-8b1a-e4b9f265e1e5"
-        }});
-    </script>
-    <link rel="stylesheet" href="/static/styles.css">
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E🗺️%3C/text%3E%3C/svg%3E">
-    <style>
-        .endpoint-section {
-            background: white;
-            border-radius: 8px;
-            padding: var(--spacing-l);
-            margin-bottom: var(--spacing-l);
-            box-shadow: var(--elevation-2);
-        }
-        .method-badge {
-            display: inline-block;
-            padding: var(--spacing-xs) var(--spacing-s);
-            border-radius: 4px;
-            font-size: var(--font-size-caption);
-            font-weight: 600;
-            text-transform: uppercase;
-        }
-        .method-get { background-color: var(--fabric-semantic-success); color: white; }
-        .example-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-            gap: var(--spacing-m);
-            margin-top: var(--spacing-m);
-        }
-        .example-item {
-            background: var(--fabric-neutral-grey-20);
-            padding: var(--spacing-m);
-            border-radius: 4px;
-            border-left: 4px solid var(--fabric-primary);
-            overflow-wrap: break-word;
-        }
-        .example-item h4 {
-            margin: 0 0 var(--spacing-s) 0;
-            color: var(--fabric-neutral-grey-160);
-        }
-        .example-item a {
-            color: var(--fabric-primary);
-            text-decoration: none;
-            font-family: monospace;
-            font-size: 0.8rem;
-        }
-        .example-item a:hover {
-            text-decoration: underline;
-        }
-        code {
-            background: var(--fabric-neutral-grey-30);
-            padding: 2px 4px;
-            border-radius: 3px;
-            font-size: 0.9em;
-        }
-        .nav-link {
-            color: var(--fabric-primary);
-            text-decoration: none;
-            font-weight: 500;
-        }
-        .nav-link:hover {
-            text-decoration: underline;
-        }
-        
-        @media (max-width: 768px) {
-            /* Mobile navigation */
-            header .container > div {
-                flex-direction: column !important;
-                gap: 1rem;
-                align-items: flex-start !important;
-            }
-            
-            header nav {
-                width: 100%;
-                justify-content: center;
-            }
-        }
-    </style>
-</head>
-<body>
-    <header class="header">
-        <div class="container">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
-                <h1 style="margin: 0; font-size: 1.5rem; color: var(--fabric-neutral-grey-160);">
-                    <a href="/" style="color: var(--fabric-neutral-grey-160); text-decoration: none;">🗺️ Fabric GPS</a> / API Documentation
-                </h1>
-                <nav style="display: flex; gap: 1rem;">
-                    <a href="/" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">Home</a>
-                    <a href="/endpoints" style="color: var(--fabric-brand-60); text-decoration: none; padding: 0.25rem 0.5rem; font-weight: 600;">API</a>
-                    <a href="/subscribe" style="color: var(--fabric-brand-40); text-decoration: none; padding: 0.25rem 0.5rem;">Subscribe</a>
-                </nav>
-            </div>
-        </div>
-    </header>
+{% extends 'base.html' %}
+{% block title %}API Documentation - Fabric GPS{% endblock %}
 
-    <main>
+{% block herotitle%}API Documentation{% endblock %}
+{% block herosubtitle%}Comprehensive guide to accessing Microsoft Fabric roadmap data through our RSS and JSON endpoints.{% endblock %}
+{% block content %}
         <div class="container">
-            <section class="hero-section" style="margin-bottom: var(--spacing-xl); background: white; color: var(--fabric-neutral-grey-160); box-shadow: var(--elevation-2); border-radius: 8px;">
-                <h1 class="hero-title" style="color: var(--fabric-neutral-grey-160);">API Documentation</h1>
-                <p class="hero-subtitle" style="color: var(--fabric-neutral-grey-90);">
-                    Comprehensive guide to accessing Microsoft Fabric roadmap data through our RSS and JSON endpoints.
-                </p>
-            </section>
-
             <section class="endpoint-section">
                 <h2><span class="method-badge method-get">GET</span> RSS Feed</h2>
                 <p><strong>Endpoints:</strong> <code>/rss</code> and <code>/rss.xml</code></p>
@@ -152,14 +39,26 @@
             <section class="endpoint-section">
                 <h2><span class="method-badge method-get">GET</span> JSON API</h2>
                 <p><strong>Endpoint:</strong> <code>/api/releases</code></p>
-                <p><strong>Description:</strong> Returns JSON array of releases with optional filtering. No limit applied.</p>
+                <p><strong>Description:</strong> Returns a <em>paginated envelope</em> of releases. Always sorted by <code>last_modified</code> (desc), then <code>release_date</code>. Supports filtering, full-text style partial search (simple <code>ILIKE %q%</code>) and page-based navigation. All collection responses are wrapped; a single-item lookup via <code>release_item_id</code> returns just the object (legacy compatibility) without the envelope.</p>
                 
                 <h3>Parameters</h3>
                 <ul>
-                    <li><code>product_name</code> - Filter by exact product name (case-sensitive)</li>
-                    <li><code>release_type</code> - Filter by exact release type</li>
-                    <li><code>release_status</code> - Filter by exact release status</li>
-                    <li><code>modified_within_days</code> - Show items modified within N days (1-30)</li>
+                    <li><code>product_name</code> - Exact match on product name</li>
+                    <li><code>release_type</code> - Exact match on release type</li>
+                    <li><code>release_status</code> - Exact match on release status</li>
+                    <li><code>modified_within_days</code> - Items modified within last N days (1–30)</li>
+                    <li><code>q</code> - Case-insensitive substring search across <code>feature_name</code>, <code>feature_description</code>, <code>product_name</code></li>
+                    <li><code>page</code> - 1-based page number (default 1)</li>
+                    <li><code>page_size</code> - Items per page (default 50, max 200, min 1)</li>
+                    <li><code>release_item_id</code> - If provided, bypasses pagination and returns a single release object</li>
+                </ul>
+
+                <p style="margin-top: var(--spacing-s);"><strong>Notes:</strong></p>
+                <ul>
+                    <li><code>q</code> trimming applied; empty/whitespace-only search is ignored.</li>
+                    <li>When <code>release_item_id</code> is supplied, all other filter / paging parameters are ignored.</li>
+                    <li>Stable, stateless pagination: combine your filters + <code>page</code>/<code>page_size</code>; use <code>links.next</code> until it becomes <code>null</code>.</li>
+                    <li>Returns <code>Link</code> response header with <code>rel="next"</code>/<code>rel="prev"</code> when applicable.</li>
                 </ul>
 
                 <h3>Examples</h3>
@@ -177,55 +76,124 @@
                             <h4>No examples available</h4>
                         </div>
                     {% endif %}
+                                        <div class="example-item">
+                                                <h4>Search (q)</h4>
+                                                <a href="/api/releases?q=lake&page_size=25">/api/releases?q=lake&page_size=25</a>
+                                        </div>
+                                        <div class="example-item">
+                                                <h4>Page 3 with filters</h4>
+                                                <a href="/api/releases?product_name=Power%20BI&release_status=GA&page=3&page_size=50">/api/releases?product_name=Power BI&release_status=GA&page=3&page_size=50</a>
+                                        </div>
+                                        <div class="example-item">
+                                                <h4>Single Item</h4>
+                                                <a href="/api/releases?release_item_id=YOUR-ID-HERE">/api/releases?release_item_id=YOUR-ID-HERE</a>
+                                        </div>
                 </div>
             </section>
 
             <section class="endpoint-section">
-                <h2>Response Format</h2>
-                <p>All responses include proper HTTP caching headers:</p>
-                <ul>
-                    <li><strong>ETag:</strong> Conditional requests supported (304 Not Modified)</li>
-                    <li><strong>Cache-Control:</strong> 24-hour fresh cache with stale-while-revalidate</li>
-                    <li><strong>Last-Modified:</strong> RFC 2822 formatted timestamp</li>
-                </ul>
+                                <h2>Response Format & Schemas</h2>
+                                <p>Collection responses (<code>/api/releases</code> without <code>release_item_id</code>) are wrapped in an envelope that includes pagination metadata and HATEOAS-style links.</p>
+                                <h3>Collection Envelope</h3>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
+    "data": [
+        {
+            "release_item_id": "uuid",
+            "feature_name": "string",
+            "release_date": "YYYY-MM-DD|null",
+            "release_type": "string",
+            "release_status": "string",
+            "product_id": "uuid|null",
+            "product_name": "string",
+            "feature_description": "string|null",
+            "last_modified": "YYYY-MM-DD"  
+        }
+        // ... up to page_size items
+    ],
+    "pagination": {
+        "page": 1,
+        "page_size": 50,
+        "total_items": 1234,
+        "total_pages": 25,
+        "has_next": true,
+        "has_prev": false,
+        "next_page": 2,
+        "prev_page": null
+    },
+    "links": {
+        "self": "/api/releases?product_name=Power%20BI&page=1&page_size=50",
+        "first": "/api/releases?product_name=Power%20BI&page=1&page_size=50",
+        "last": "/api/releases?product_name=Power%20BI&page=25&page_size=50",
+        "next": "/api/releases?product_name=Power%20BI&page=2&page_size=50",
+        "prev": null
+    }
+}</code></pre>
 
-                <h3>JSON Response Schema</h3>
-                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>[
-  {
+                                <h3>Single Item (release_item_id)</h3>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
     "release_item_id": "uuid",
     "feature_name": "string",
-    "release_date": "YYYY-MM-DD",
+    "release_date": "YYYY-MM-DD|null",
     "release_type": "string",
-    "release_status": "string", 
-    "product_id": "uuid",
+    "release_status": "string",
+    "product_id": "uuid|null",
     "product_name": "string",
-    "feature_description": "string",
+    "feature_description": "string|null",
     "last_modified": "YYYY-MM-DD"
-  }
+}</code></pre>
+
+                                <h3>History Endpoint <code>/api/releases/history/&lt;release_item_id&gt;</code></h3>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>[
+    {
+        "changed_columns": ["FeatureDescription", "ReleaseDate"],
+        "last_modified": "2025-01-12"
+    },
+    // ... newest first
 ]</code></pre>
+
+                                <h3>Filter Options <code>/api/filter-options</code></h3>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
+    "product_names": ["Power BI", "Data Factory", ...],
+    "release_types": ["Public Preview", "GA", ...],
+    "release_statuses": ["In Development", "Launched", ...]
+}</code></pre>
+
+                                <h3>Email Subscription</h3>
+                                <p><strong>POST</strong> <code>/api/subscribe</code> JSON body:</p>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
+    "email": "user@example.com",
+    "products": ["Power BI"],      // optional array
+    "types": ["GA"],               // optional array
+    "statuses": ["Launched"]       // optional array
+}</code></pre>
+                                <p>Verification link sent if new/unverified. Other related endpoints:</p>
+                                <ul>
+                                        <li><code>GET /api/verify-email?token=...</code> (JSON result)</li>
+                                        <li><code>GET /verify-email?token=...</code> (HTML page)</li>
+                                        <li><code>GET /unsubscribe?token=...</code> (HTML page)</li>
+                                </ul>
+
+                                <h3>HTTP Caching</h3>
+                                <p>All JSON & RSS endpoints emit:</p>
+                                <ul>
+                                        <li><strong>ETag</strong> - Weak hash for conditional GET (send <code>If-None-Match</code> to receive 304)</li>
+                                        <li><strong>Last-Modified</strong> - Based on build time (collection) or entity timestamp</li>
+                                        <li><strong>Cache-Control</strong> - <code>public, max-age=1800, stale-while-revalidate=900</code> (30 min fresh, 15 min serve-stale)</li>
+                                </ul>
+                                <p>Server-side Redis cache keeps a 24h fresh + 24h stale copy; client-facing headers use shorter periods for responsiveness.</p>
             </section>
 
             <section class="endpoint-section">
                 <h2>Caching & Performance</h2>
-                <p>Our system uses Redis-backed caching with stale-while-revalidate strategy:</p>
+                                <p>Summary of server-side caching layers:</p>
                 <ul>
-                    <li><strong>Fresh Window:</strong> 24 hours - served immediately from cache</li>
-                    <li><strong>Stale Window:</strong> Additional 24 hours - served from cache while refreshing in background</li>
-                    <li><strong>Cache Keys:</strong> Unique per filter combination for optimal performance</li>
-                    <li><strong>Background Refresh:</strong> Prevents stampeding and ensures fresh data</li>
+                                        <li><strong>Redis Fresh Window:</strong> 24h (immediate responses)</li>
+                                        <li><strong>Redis Stale Window:</strong> +24h (served while background refresh occurs)</li>
+                                        <li><strong>Key Dimensions (collection):</strong> product_name, release_type, release_status, modified_within_days, q, page, page_size</li>
+                                        <li><strong>Key Dimensions (single item):</strong> release_item_id</li>
+                                        <li><strong>Background Refresh:</strong> Locking avoids thundering herd; stale responses annotated with <code>X-Cache: STALE</code></li>
+                                        <li><strong>Client Cache:</strong> Shorter 30m TTL encourages conditional revalidation with <code>ETag</code></li>
                 </ul>
             </section>
-        </div>
-    </main>
-
-    <footer class="footer">
-        <div class="container">
-            <p>
-                <a href="/" class="nav-link">← Back to Home</a> |
-                <a href="/subscribe" class="nav-link">Subscribe</a> |
-                &copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap.
-            </p>
-        </div>
-    </footer>
-</body>
-</html>
+    </div>
+{% endblock %}

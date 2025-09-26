@@ -23,17 +23,18 @@ from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from db.db_sqlserver import (
-    make_engine, get_unsent_active_subscriptions, EmailSubscriptionModel
+    make_engine, get_unsent_active_subscriptions, EmailSubscriptionModel, EmailVerificationModel
 )
 
 # Configure logging
 logger_name = 'fabric-gps-email'
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
 
-configure_azure_monitor(
-    logger_name=opentelemetery_logger_name,
-    enable_live_metrics=True 
-)
+if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING") and os.getenv("CURRENT_ENVIRONMENT") != "development":
+    configure_azure_monitor(
+        logger_name=opentelemetery_logger_name,
+        enable_live_metrics=True 
+    )
 
 logger = logging.getLogger(opentelemetery_logger_name)
 stream = logging.StreamHandler()
@@ -80,6 +81,16 @@ class WeeklyEmailSender:
                     error_count += 1
             
             logger.info(f"Weekly email job completed. Sent: {sent_count}, Errors: {error_count}")
+            # Run cleanup after sending
+            try:
+                cleanup_counts = self.cleanup_expired(engine)
+                logger.info(
+                    "Cleanup complete: expired_or_used_verifications=%d, stale_unverified_subscriptions=%d",
+                    cleanup_counts.get('expired_or_used_verifications', 0),
+                    cleanup_counts.get('stale_unverified', 0)
+                )
+            except Exception as cleanup_exc:
+                logger.error(f"Cleanup step failed: {cleanup_exc}")
             
         except Exception as e:
             logger.error(f"Fatal error in weekly email job: {e}")
@@ -406,6 +417,41 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
                    .replace('>', '&gt;')
                    .replace('"', '&quot;')
                    .replace("'", '&#x27;'))
+
+    def cleanup_expired(self, engine):
+        """Remove:
+        - Expired verification records (expires_at < now or is_used True)
+        - Used verification records (is_used = True)
+        - Stale unverified subscriptions (verification_token not null, is_verified False, created_at older than 24h)
+        Returns dict of counts removed.
+        """
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy import delete, or_, and_
+        SessionLocal = sessionmaker(bind=engine, future=True)
+        now = datetime.utcnow()
+        threshold = now - timedelta(hours=24)
+        counts = {"expired_or_used_verifications": 0, "stale_unverified": 0}
+        with SessionLocal() as session:
+            # Expired or used verifications
+            expired_stmt = delete(EmailVerificationModel).where(
+                or_(EmailVerificationModel.expires_at < now, EmailVerificationModel.is_used == True)
+            )
+            result_expired = session.execute(expired_stmt)
+            counts["expired_or_used_verifications"] = result_expired.rowcount or 0
+
+            # Stale unverified subscriptions
+            stale_stmt = delete(EmailSubscriptionModel).where(
+                and_(
+                    EmailSubscriptionModel.is_verified == False,
+                    EmailSubscriptionModel.verification_token.isnot(None),
+                    EmailSubscriptionModel.created_at < threshold,
+                )
+            )
+            result_stale = session.execute(stale_stmt)
+            counts["stale_unverified"] = result_stale.rowcount or 0
+
+            session.commit()
+        return counts
 
 
 def main():

@@ -34,7 +34,7 @@ except ImportError:
 from db.db_sqlserver import (
     make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values, fetch_history_rows,
     EmailSubscriptionModel, EmailVerificationModel, create_email_subscription, 
-    verify_email_subscription, unsubscribe_email, fetch_history_rows
+    verify_email_subscription, unsubscribe_email, fetch_history_rows, count_recently_modified_releases
 )
 
 
@@ -76,6 +76,7 @@ EMAIL_CLIENT = None
 FROM_EMAIL = os.getenv('FROM_EMAIL', 'noreply@yourdomain.com')
 FROM_NAME = os.getenv('FROM_NAME', 'Fabric GPS')
 BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')
+ASYNC_EMAIL_VERIFICATION = os.getenv('ASYNC_EMAIL_VERIFICATION', '1') != '0'
 
 
 def get_email_client():
@@ -189,23 +190,45 @@ def send_verification_email(email: str, verification_token: str) -> bool:
                 "html": html_content
             }
         }
-        
-        POLLER_WAIT_TIME = 10
+        # Non-blocking strategy: start send, monitor in background (default). Set ASYNC_EMAIL_VERIFICATION=0 to restore blocking behavior.
+        if ASYNC_EMAIL_VERIFICATION:
+            try:
+                poller = email_client.begin_send(message)
+            except Exception as e:
+                otelLogger.error(f"Failed to initiate async verification email send to {email}: {e}")
+                return False
 
-        poller = email_client.begin_send(message)
-        time_elapsed = 0
-        while not poller.done():
-            print("Email send poller status: " + poller.status())
-            poller.wait(POLLER_WAIT_TIME)
-            time_elapsed += POLLER_WAIT_TIME
-            if time_elapsed > 18 * POLLER_WAIT_TIME:
-                raise RuntimeError("Polling timed out.")
+            def _monitor_send(poller_obj, target_email):
+                try:
+                    # Wait up to 3 minutes; adjust if needed
+                    result = poller_obj.result()
+                    status = result.get('status') if isinstance(result, dict) else getattr(result, 'get', lambda *_: None)('status')
+                    if status == 'Succeeded':
+                        otelLogger.info(f"Verification email sent to {target_email}")
+                    else:
+                        otelLogger.warning(f"Verification email status for {target_email}: {status}")
+                except Exception as monitor_exc:
+                    otelLogger.error(f"Error monitoring verification email send to {target_email}: {monitor_exc}")
 
-        if poller.result()["status"] == "Succeeded":
-            print(f"Successfully sent the email (operation id: {poller.result()['id']})")
+            threading.Thread(target=_monitor_send, args=(poller, email), daemon=True).start()
             return True
         else:
-            raise RuntimeError(str(poller.result()["error"]))
+            # Legacy blocking path (if explicitly requested)
+            POLLER_WAIT_TIME = 10
+            poller = email_client.begin_send(message)
+            time_elapsed = 0
+            while not poller.done():
+                otelLogger.info("Verification email poller status: " + poller.status())
+                poller.wait(POLLER_WAIT_TIME)
+                time_elapsed += POLLER_WAIT_TIME
+                if time_elapsed > 18 * POLLER_WAIT_TIME:
+                    raise RuntimeError("Polling timed out.")
+            result = poller.result()
+            if result["status"] == "Succeeded":
+                otelLogger.info(f"Successfully sent verification email (operation id: {result['id']})")
+                return True
+            else:
+                raise RuntimeError(str(result["error"]))
         
     except Exception as e:
         otelLogger.error(f"Error sending verification email to {email}: {e}")
@@ -504,13 +527,30 @@ def subscribe():
 
 @app.get("/api/releases")
 def api_releases():
-    """Return JSON array of releases with optional exact-match filters, or a single item if release_item_id is provided."""
+    """Return paginated JSON array of releases (always wrapped with pagination),
+    or a single item if release_item_id is provided.
+
+    Query Params:
+      release_item_id: if provided, returns single item (not paginated wrapper)
+      product_name, release_type, release_status, modified_within_days, q (search)
+      page (1-based, default 1)
+      page_size (default 50, max 200)
+    """
     release_item_id = request.args.get("release_item_id")
     product_name = request.args.get("product_name")
     release_type = request.args.get("release_type")
     release_status = request.args.get("release_status")
     modified_within_days = request.args.get("modified_within_days", type=int)
     q = request.args.get("q")  # partial search
+    page = request.args.get("page", type=int) or 1
+    page_size = request.args.get("page_size", type=int) or 50
+
+    if page < 1:
+        page = 1
+    if page_size < 1:
+        page_size = 1
+    if page_size > 200:
+        page_size = 200
 
     if modified_within_days is not None:
         modified_within_days = max(1, min(modified_within_days, 30))
@@ -528,8 +568,9 @@ def api_releases():
             "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
         }
 
-    # If querying a single item by ID use dedicated item cache namespace (api-item)
+    # Single item path (legacy style, keep existing caching envelope not wrapped)
     if release_item_id:
+        # (retain existing code below untouched)
         parts_item = (release_item_id,)
         now_ts_item = _time.time()
         cached_item = CACHE.get("api-item", parts_item)
@@ -592,12 +633,24 @@ def api_releases():
             return resp
 
     use_cache = not (q and str(q).strip())
-    parts = (product_name or "", release_type or "", release_status or "", str(modified_within_days), q or "")
-    cached = CACHE.get("api", parts) if use_cache else None
+    # (Remove old non-paginated collection logic and replace with pagination)
+    # Always cache pages (including those with search q) using page & page_size in key
+    offset = (page - 1) * page_size
+
+    # Cache key parts now include page & page_size
+    parts = (
+        product_name or "", 
+        release_type or "", 
+        release_status or "", 
+        str(modified_within_days), 
+        q or "", 
+        str(page), 
+        str(page_size)
+    )
+    cached = CACHE.get("api-page", parts)
     now_ts = _time.time()
 
     if cached:
-        otelLogger.info(f"Cache hit for API {'/'.join(parts)}")
         fresh_until = cached.get("fresh_until_ts", 0)
         stale_until = cached.get("stale_until_ts", 0)
         built_iso = cached.get("built_iso")
@@ -612,25 +665,40 @@ def api_releases():
             resp.headers['Last-Modified'] = format_datetime(built_dt)
             return resp
         if now_ts <= stale_until:
-            if CACHE.try_acquire_lock("api", parts):
-                def _refresh_api_bg():
+            if CACHE.try_acquire_lock("api-page", parts):
+                def _refresh_page_bg():
                     try:
-                        rows_bg = get_recently_modified_releases(
-                            get_engine(),
-                            product_name=product_name,
-                            release_type=release_type,
-                            release_status=release_status,
-                            modified_within_days=modified_within_days,
-                            q=q,
+                        total_bg = count_recently_modified_releases(
+                            get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
+                            modified_within_days=modified_within_days, q=q
                         )
-                        data_bg = [_row_to_dict(r) for r in rows_bg]
-                        json_bg = json.dumps(data_bg, sort_keys=True, separators=(",", ":"))
+                        rows_bg = get_recently_modified_releases(
+                            get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
+                            modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset
+                        )
+                        data_rows_bg = [_row_to_dict(r) for r in rows_bg]
+                        total_pages_bg = (total_bg + page_size - 1) // page_size if total_bg else 1
+                        pagination_bg = {
+                            "page": page,
+                            "page_size": page_size,
+                            "total_items": total_bg,
+                            "total_pages": total_pages_bg,
+                            "has_next": page < total_pages_bg,
+                            "has_prev": page > 1,
+                            "next_page": page + 1 if page < total_pages_bg else None,
+                            "prev_page": page - 1 if page > 1 else None,
+                        }
+                        envelope_bg = {
+                            "data": data_rows_bg,
+                            "pagination": pagination_bg,
+                        }
+                        json_bg = json.dumps(envelope_bg, sort_keys=True, separators=(",", ":"))
                         etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
                         built_bg = datetime.now(timezone.utc)
-                        CACHE.set("api", parts, json_bg, etag_bg, built_bg)
+                        CACHE.set("api-page", parts, json_bg, etag_bg, built_bg)
                     finally:
-                        CACHE.release_lock("api", parts)
-                threading.Thread(target=_refresh_api_bg, daemon=True).start()
+                        CACHE.release_lock("api-page", parts)
+                threading.Thread(target=_refresh_page_bg, daemon=True).start()
             resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
             resp.headers['ETag'] = cached.get("etag", "")
             resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
@@ -638,25 +706,71 @@ def api_releases():
             resp.headers['X-Cache'] = 'STALE'
             return resp
 
-    otelLogger.info(f"Cache miss for API {'/'.join(parts)}")
-    rows = get_recently_modified_releases(
-        get_engine(),
-        product_name=product_name,
-        release_type=release_type,
-        release_status=release_status,
-        modified_within_days=modified_within_days,
-        q=q,
+    # Cache miss: compute total + page rows
+    total = count_recently_modified_releases(
+        get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
+        modified_within_days=modified_within_days, q=q
     )
-    data = [_row_to_dict(r) for r in rows]
-    json_str = json.dumps(data, sort_keys=True, separators=(",", ":"))
+    rows = get_recently_modified_releases(
+        get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
+        modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset
+    )
+    data_rows = [_row_to_dict(r) for r in rows]
+    total_pages = (total + page_size - 1) // page_size if total else 1
+    pagination = {
+        "page": page,
+        "page_size": page_size,
+        "total_items": total,
+        "total_pages": total_pages,
+        "has_next": page < total_pages,
+        "has_prev": page > 1,
+        "next_page": page + 1 if page < total_pages else None,
+        "prev_page": page - 1 if page > 1 else None,
+    }
+
+    # Basic HATEOAS-style links (omit base filters if None)
+    from urllib.parse import urlencode
+    base_params = {
+        k: v for k, v in {
+            "product_name": product_name,
+            "release_type": release_type,
+            "release_status": release_status,
+            "modified_within_days": modified_within_days,
+            "q": q,
+            "page_size": page_size,
+        }.items() if v not in (None, "")
+    }
+    def _link(p):
+        bp = base_params.copy()
+        bp["page"] = p
+        return f"/api/releases?{urlencode(bp)}"
+    links = {
+        "self": _link(page),
+        "first": _link(1),
+        "last": _link(total_pages),
+        "next": _link(page + 1) if page < total_pages else None,
+        "prev": _link(page - 1) if page > 1 else None,
+    }
+
+    envelope = {
+        "data": data_rows,
+        "pagination": pagination,
+        "links": links,
+    }
+    json_str = json.dumps(envelope, sort_keys=True, separators=(",", ":"))
     etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
     built_dt = datetime.now(timezone.utc)
-    if use_cache:
-        CACHE.set("api", parts, json_str, etag, built_dt)
+    CACHE.set("api-page", parts, json_str, etag, built_dt)
     resp = Response(json_str, mimetype="application/json; charset=utf-8")
     resp.headers['ETag'] = etag
     resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
+    if links.get("next") or links.get("prev"):
+        link_header_parts = []
+        if links.get("next"): link_header_parts.append(f"<{links['next']}>; rel=\"next\"")
+        if links.get("prev"): link_header_parts.append(f"<{links['prev']}>; rel=\"prev\"")
+        if link_header_parts:
+            resp.headers['Link'] = ", ".join(link_header_parts)
     return resp
 
 
@@ -759,18 +873,24 @@ def api_subscribe():
         if not verification_token:
             return jsonify({"message": "Email is already subscribed and verified"}), 200
         
-        # Send verification email
-        email_sent = send_verification_email(email, verification_token)
-        
-        if email_sent:
-            return jsonify({
-                "message": "Subscription created successfully! Please check your email for a verification link."
-            }), 201
+        # Send verification email (async by default)
+        email_queued = send_verification_email(email, verification_token)
+        if email_queued:
+            if ASYNC_EMAIL_VERIFICATION:
+                return jsonify({
+                    "message": "Subscription created! Verification email is being sent. Make sure to check your Spam or Junk folder if you don't see it soon.",
+                    "async": True
+                }), 201
+            else:
+                return jsonify({
+                    "message": "Subscription created! Verification email sent.",
+                    "async": False
+                }), 201
         else:
-            # Even if email fails, subscription was created - user can try again
-            otelLogger.warning(f"Subscription created for {email} but verification email failed to send")
+            otelLogger.warning(f"Subscription created for {email} but verification email failed to initiate")
             return jsonify({
-                "message": "Subscription created, but there was an issue sending the verification email. Please try again or contact support."
+                "message": "Subscription created, but the verification email couldn't be sent. Try again later.",
+                "async": ASYNC_EMAIL_VERIFICATION
             }), 201
         
     except Exception as e:
@@ -798,25 +918,30 @@ def api_verify_email():
         return jsonify({"error": "Failed to verify email"}), 500
 
 
-@app.route("/verify-email", methods=["GET"])
+@app.route("/verify-email", methods=["GET", "POST"])
 def verify_email_page():
-    """HTML page for email verification"""
-    token = request.args.get('token')
+    """HTML page for email verification with explicit confirm step.
+    GET: display confirmation page (does NOT verify).
+    POST: perform verification using token then show result.
+    """
+    token = request.values.get('token')
     if not token:
-        return render_template('verify_email.html', error="Missing verification token"), 400
-    
-    try:
-        engine = get_engine()
-        success = verify_email_subscription(engine, token)
-        
-        if success:
-            return render_template('verify_email.html', success=True)
-        else:
-            return render_template('verify_email.html', error="Invalid or expired verification token")
-            
-    except Exception as e:
-        otelLogger.error(f"Error verifying email: {e}")
-        return render_template('verify_email.html', error="Failed to verify email"), 500
+        return render_template('verify_email.html', error="Missing verification token", pending=False), 400
+
+    if request.method == 'POST':
+        try:
+            engine = get_engine()
+            success = verify_email_subscription(engine, token)
+            if success:
+                return render_template('verify_email.html', success=True, pending=False)
+            else:
+                return render_template('verify_email.html', error="Invalid or expired verification token", pending=False)
+        except Exception as e:
+            otelLogger.error(f"Error verifying email: {e}")
+            return render_template('verify_email.html', error="Failed to verify email", pending=False), 500
+
+    # GET -> show pending confirmation UI
+    return render_template('verify_email.html', pending=True, token=token)
 
 
 @app.route("/unsubscribe", methods=["GET"])
@@ -898,3 +1023,20 @@ def api_release_history(release_item_id: str):
     resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
     resp.headers['Last-Modified'] = format_datetime(built_dt)
     return resp
+
+
+@app.get("/about")
+def about_page():
+    return render_template('about.html')
+
+
+@app.context_processor
+def inject_nav():
+    from datetime import datetime
+    nav_items = [
+        {"label": "Home", "url": "/"},
+        {"label": "API", "url": "/endpoints"},
+        {"label": "Subscribe", "url": "/subscribe"},
+        {"label": "About", "url": "/about"},
+    ]
+    return {"nav_items": nav_items, "current_year": datetime.utcnow().year}
