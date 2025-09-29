@@ -76,7 +76,7 @@ Get real-time feeds and explore what's coming next.
                             <label for="search-input">Search:</label>
                             <input id="search-input" class="filter-select" type="search" placeholder="Search features, descriptions, products..." />
                         </div>
-                        <button id="apply-filters" class="button button-primary">Apply Filters</button>
+                        <!-- <button id="apply-filters" class="button button-primary">Apply Filters</button> -->
                         <button id="clear-filters" class="button button-secondary">Clear</button>
                     </div>
                     
@@ -443,9 +443,19 @@ Get real-time feeds and explore what's coming next.
                      });
                  }
 
-                 applyBtn.addEventListener('click', () => {
-                     this.loadRecentChanges({ reset: true });
-                 });
+                     // AUTO APPLY ON SELECT CHANGE
+                const autoSelectIds = ['product-filter','type-filter','status-filter','days-filter'];
+                autoSelectIds.forEach(id => {
+                    const el = document.getElementById(id);
+                    if (!el) return;
+                    el.addEventListener('change', () => {
+                        if (this.loadingMore) return;
+                        if (this._filterChangeTimer) clearTimeout(this._filterChangeTimer);
+                        this._filterChangeTimer = setTimeout(() => {
+                            this.loadRecentChanges({ reset: true });
+                        }, 60); // tiny debounce to collapse rapid changes
+                    });
+                });
 
                  clearBtn.addEventListener('click', () => {
                      this.clearFilters();
