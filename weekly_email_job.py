@@ -131,74 +131,109 @@ class WeeklyEmailSender:
             logger.error(f"Error processing subscription {subscription.email}: {e}")
             return False
 
+    def _extract_items(self, payload: Any) -> List[Dict[str, Any]]:
+        """
+        Support both new spec (envelope with 'data') and legacy raw list.
+        """
+        if isinstance(payload, dict) and 'data' in payload and isinstance(payload['data'], list):
+            return payload['data']
+        if isinstance(payload, list):
+            return payload
+        return []
+
+    def _fetch_all_pages(self, base_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Fetch all pages for given param set using new paginated API.
+        Stops if API returns an empty page or pagination.has_next is False.
+        """
+        page = 1
+        all_items: List[Dict[str, Any]] = []
+        while True:
+            params = dict(base_params)
+            params['page'] = page
+            resp = requests.get(f"{self.base_url}/api/releases", params=params, timeout=30)
+            if resp.status_code != 200:
+                logger.error(f"API page request failed (status {resp.status_code}) params={params}")
+                break
+            payload = resp.json()
+            items = self._extract_items(payload)
+            if not items:
+                break
+            all_items.extend(items)
+            # Determine if more pages
+            pagination = payload.get('pagination') if isinstance(payload, dict) else None
+            if not pagination or not pagination.get('has_next'):
+                break
+            page += 1
+            # Safety cap to avoid runaway loops (unlikely)
+            if page > 20:
+                logger.warning("Pagination exceeded 20 pages; stopping early.")
+                break
+        return all_items
+
+# Replace the existing get_changes_from_api method with:
+
     def get_changes_from_api(self, subscription: EmailSubscriptionModel) -> List[Dict[str, Any]]:
-        """Get changes using the JSON API with caching"""
+        """
+        Get last week's changes via paginated API, honoring subscriber filters.
+        De-duplicates across multiple product queries, applies additional filters,
+        sorts desc by last_modified, and caps to 50 items.
+        """
         try:
-            # Build API URL with filters
-            api_url = f"{self.base_url}/api/releases"
-            params = {
-                'modified_within_days': 7  # Get last week's changes
+            BASE_PARAMS = {
+                'modified_within_days': 7,
+                'page_size': 200  # request larger page size to reduce pagination loops
             }
-            
-            # Add subscriber's filters if they exist
+
+            aggregated: List[Dict[str, Any]] = []
+
             if subscription.product_filter:
                 products = [p.strip() for p in subscription.product_filter.split(',') if p.strip()]
                 if products:
-                    # Make multiple requests for each product (API doesn't support multiple values)
-                    all_changes = []
                     for product in products:
-                        product_params = params.copy()
-                        product_params['product_name'] = product
-                        response = requests.get(api_url, params=product_params, timeout=30)
-                        if response.status_code == 200:
-                            all_changes.extend(response.json())
-                    # Remove duplicates based on release_item_id
-                    seen_ids = set()
-                    unique_changes = []
-                    for change in all_changes:
-                        if change['release_item_id'] not in seen_ids:
-                            seen_ids.add(change['release_item_id'])
-                            unique_changes.append(change)
-                    changes = unique_changes
+                        per_product_params = dict(BASE_PARAMS)
+                        per_product_params['product_name'] = product
+                        aggregated.extend(self._fetch_all_pages(per_product_params))
                 else:
-                    # No product filter, get all changes
-                    response = requests.get(api_url, params=params, timeout=30)
-                    if response.status_code == 200:
-                        changes = response.json()
-                    else:
-                        logger.error(f"API request failed with status {response.status_code}")
-                        return []
+                    aggregated.extend(self._fetch_all_pages(BASE_PARAMS))
             else:
-                # No filters, get all changes
-                response = requests.get(api_url, params=params, timeout=30)
-                if response.status_code == 200:
-                    changes = response.json()
-                else:
-                    logger.error(f"API request failed with status {response.status_code}")
-                    return []
-            
-            # Apply additional filters (release_type and release_status)
-            filtered_changes = changes
-            
+                aggregated.extend(self._fetch_all_pages(BASE_PARAMS))
+
+            # Deduplicate by release_item_id
+            deduped: Dict[str, Dict[str, Any]] = {}
+            for item in aggregated:
+                rid = item.get('release_item_id')
+                if not rid:
+                    continue
+                # Keep first occurrence (they should be identical across pages/products)
+                if rid not in deduped:
+                    deduped[rid] = item
+            items = list(deduped.values())
+
+            # Apply optional release type/status filters
             if subscription.release_type_filter:
-                types = [t.strip() for t in subscription.release_type_filter.split(',') if t.strip()]
+                types = {t.strip() for t in subscription.release_type_filter.split(',') if t.strip()}
                 if types:
-                    filtered_changes = [c for c in filtered_changes if c.get('release_type') in types]
-            
+                    items = [c for c in items if c.get('release_type') in types]
+
             if subscription.release_status_filter:
-                statuses = [s.strip() for s in subscription.release_status_filter.split(',') if s.strip()]
+                statuses = {s.strip() for s in subscription.release_status_filter.split(',') if s.strip()}
                 if statuses:
-                    filtered_changes = [c for c in filtered_changes if c.get('release_status') in statuses]
-            
-            # Sort by last_modified (most recent first) and limit to reasonable number
-            filtered_changes.sort(key=lambda x: x.get('last_modified', ''), reverse=True)
-            return filtered_changes[:50]  # Limit to 50 items max
-            
+                    items = [c for c in items if c.get('release_status') in statuses]
+
+            # Robust sort by last_modified (ISO date or fallback)
+            def _lm_key(x):
+                lm = x.get('last_modified')
+                return lm or ""
+            items.sort(key=_lm_key, reverse=True)
+
+            return items[:50]
+
         except requests.RequestException as e:
-            logger.error(f"Error calling API for {subscription.email}: {e}")
+            logger.error(f"Network/API error retrieving changes for {subscription.email}: {e}")
             return []
         except Exception as e:
-            logger.error(f"Error processing API response for {subscription.email}: {e}")
+            logger.error(f"Unexpected error processing changes for {subscription.email}: {e}")
             return []
 
     def update_last_email_sent(self, subscription_id: str):
