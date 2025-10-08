@@ -111,8 +111,33 @@ Get real-time feeds and explore what's coming next.
     </div>
 {% endblock %}
 {% block scripts %}
-
+<script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1/dist/markdown-it.min.js"></script>
 <script>
+    const md = new markdownit({html: true});
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function descriptionPrepareHtml(text) {
+            if (!text) return 'No description available.';
+            let escaped = escapeHtml(text);
+            let unescapeStr = escaped.replace(/&amp;/g, '&')
+                .replace(/&lt;/g, '<')
+                .replace(/&gt;/g, '>')
+                .replace(/&quot;/g, '"')
+                .replace(/&#39;/g, "'");
+
+            unescapeStr = unescapeStr.replace('###', '');
+
+            // Convert line breaks to <br>
+            unescapeStr = unescapeStr.replace(/\n/g, '<br>');
+            unescapeStr = md.render(unescapeStr);
+            return unescapeStr;
+        }
+
         class ReleaseModal {
             constructor() {
                 this.modal = document.getElementById('release-modal');
@@ -151,14 +176,14 @@ Get real-time feeds and explore what's coming next.
                 const statusClass = item.release_status === 'Shipped' ? 'success' : 'warn';
                 this.content.innerHTML = `
                     <div class="modal-header">
-                        <h2 class="modal-title">${this.escape(item.feature_name || 'Unnamed Feature')}</h2>
+                        <h2 class="modal-title">${escapeHtml(item.feature_name || 'Unnamed Feature')}</h2>
                         <div class="modal-meta-row">
-                            <span class="modal-release-info">Status: ${this.escape(item.release_status || 'Unknown Status')} ${this.escape(item.release_type || 'Unknown Type')} on ${this.escape(relDate)}</span>
-                            <span class="modal-last-modified">Last Modified: ${this.escape(lm)}</span>
+                            <span class="modal-release-info">Status: ${escapeHtml(item.release_status || 'Unknown Status')} ${escapeHtml(item.release_type || 'Unknown Type')} on ${escapeHtml(relDate)}</span>
+                            <span class="modal-last-modified">Last Modified: ${escapeHtml(lm)}</span>
                         </div>
                     </div>
                     <div class="modal-section">
-                        <div class="modal-description">${this.escape(item.feature_description || 'No description provided.')}</div>
+                        <div class="modal-description">${descriptionPrepareHtml(item.feature_description || 'No description provided.')}</div>
                     </div>
                     <div class="modal-section" id="history-section">
                         <h4>Change History</h4>
@@ -413,20 +438,20 @@ Get real-time feeds and explore what's coming next.
                 const releaseStatusClass = item.release_status == 'Shipped' ? 'badge-success' : 'badge-warning';
 
                 return `
-                    <div class="change-item" data-id="${this.escapeHtml(item.release_item_id)}" role="button" tabindex="0" aria-label="View details for ${this.escapeHtml(item.feature_name || 'feature')}">
+                    <div class="change-item" data-id="${escapeHtml(item.release_item_id)}" role="button" tabindex="0" aria-label="View details for ${escapeHtml(item.feature_name || 'feature')}">
                         <div class="change-header">
-                            <h3 class="change-title">${this.escapeHtml(item.feature_name || 'Unnamed Feature')}</h3>
+                            <h3 class="change-title">${escapeHtml(item.feature_name || 'Unnamed Feature')}</h3>
                             <div class="change-badges">
-                                <span class="change-badge badge-product">${this.escapeHtml(item.product_name || 'Unknown')}</span>
-                                <span class="change-badge ${releaseTypeClass}">${this.escapeHtml(item.release_type || 'Unknown')}</span>
-                                <span class="change-badge ${releaseStatusClass}">${this.escapeHtml(item.release_status || 'Unknown')}</span>
+                                <span class="change-badge badge-product">${escapeHtml(item.product_name || 'Unknown')}</span>
+                                <span class="change-badge ${releaseTypeClass}">${escapeHtml(item.release_type || 'Unknown')}</span>
+                                <span class="change-badge ${releaseStatusClass}">${escapeHtml(item.release_status || 'Unknown')}</span>
                             </div>
                         </div>
                         <div class="change-meta">
                             <span class="change-date">Last Modified: ${date}</span>
                             <span class="release-date">Release Date: ${releaseDate}</span>
                         </div>
-                        <p class="change-description">${this.escapeHtml(item.feature_description || 'No description available.')}</p>
+                        <p class="change-description">${descriptionPrepareHtml(item.feature_description || 'No description available.')}</p>
                         <div class="change-link-inline" style="margin-top:.5rem; font-size:.75rem; color: var(--fabric-primary);">Click for details ▸</div>
                     </div>`;
             }
@@ -541,12 +566,6 @@ Get real-time feeds and explore what's coming next.
                 container.innerHTML = '';
                 noResults.innerHTML = '<p>Error loading changes. Please try again later.</p>';
                 noResults.style.display = 'block';
-            }
-
-            escapeHtml(text) {
-                const div = document.createElement('div');
-                div.textContent = text;
-                return div.innerHTML;
             }
 
             debounceSearch(delay = 300) {
