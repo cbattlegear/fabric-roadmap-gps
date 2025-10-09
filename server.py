@@ -34,7 +34,8 @@ except ImportError:
 from db.db_sqlserver import (
     make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values, fetch_history_rows,
     EmailSubscriptionModel, EmailVerificationModel, create_email_subscription, 
-    verify_email_subscription, unsubscribe_email, fetch_history_rows, count_recently_modified_releases
+    verify_email_subscription, unsubscribe_email, fetch_history_rows, count_recently_modified_releases,
+    healthcheck as db_healthcheck
 )
 
 
@@ -1028,6 +1029,17 @@ def api_release_history(release_item_id: str):
 @app.get("/about")
 def about_page():
     return render_template('about.html')
+
+@app.get("/healthcheck")
+def healthcheck():
+    sql_health = db_healthcheck(get_engine())
+    redis_health = CACHE.ping()
+    return jsonify(
+        {
+            "web_server_status": "healthy",
+            "sql_status": "healthy" if sql_health else "unhealthy",
+            "redis_status": "healthy" if redis_health else "unhealthy",
+        }), 200 if sql_health and redis_health else 503
 
 
 @app.context_processor

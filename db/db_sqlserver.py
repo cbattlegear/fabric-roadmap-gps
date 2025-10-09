@@ -645,6 +645,7 @@ def get_unsent_active_subscriptions(engine, time_frame: int) -> List[EmailSubscr
         session.expunge_all()
         return list(subscriptions)
 
+@retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
 def fetch_history_rows(engine, release_item_id: str):
     """Call stored procedure to retrieve history rows and shape output.
     Exposed fields: changed_columns (array) and last_modified for each version.
@@ -678,3 +679,22 @@ def fetch_history_rows(engine, release_item_id: str):
         except Exception:
             pass
         conn.close()
+
+@retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
+def healthcheck(engine):
+    conn = engine.raw_connection()
+    try:
+        # Assuming SQL Server; call the stored proc with one parameter
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        return True
+    except:
+        return False
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+    
+    
