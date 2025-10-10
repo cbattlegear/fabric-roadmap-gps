@@ -26,6 +26,8 @@ from db.db_sqlserver import (
     make_engine, get_unsent_active_subscriptions, EmailSubscriptionModel, EmailVerificationModel
 )
 
+os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-email-job'
+
 # Configure logging
 logger_name = 'fabric-gps-email'
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'

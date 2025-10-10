@@ -16,6 +16,7 @@ from db.redis_cache import RedisCache
 from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
+os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-refresh'
 
 logger_name = 'fabric-gps-refresh'
 
