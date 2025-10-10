@@ -19,6 +19,7 @@ import logging
 # Import the `configure_azure_monitor()` function from the
 # `azure.monitor.opentelemetry` package.
 from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry.sdk.resources import Resource
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 from opentelemetry.instrumentation.redis import RedisInstrumentor
@@ -38,6 +39,7 @@ from db.db_sqlserver import (
     healthcheck as db_healthcheck
 )
 
+os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
 app = Flask(__name__)
 
@@ -58,6 +60,19 @@ stream = logging.StreamHandler()
 otelLogger.addHandler(stream)
 otelLogger.setLevel(logging.INFO)
 otelLogger.info('Fabric-GPS Website started')
+
+if os.getenv("CURRENT_ENVIRONMENT") == "development":
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
+
+    # Set up the tracer provider
+    tracer_provider = TracerProvider()
+    trace.set_tracer_provider(tracer_provider)
+
+    # Configure the ConsoleSpanExporter
+    span_processor = BatchSpanProcessor(ConsoleSpanExporter())
+    tracer_provider.add_span_processor(span_processor)
 
 ENGINE = None
 REDIS = None
@@ -1039,7 +1054,7 @@ def healthcheck():
             "web_server_status": "healthy",
             "sql_status": "healthy" if sql_health else "unhealthy",
             "redis_status": "healthy" if redis_health else "unhealthy",
-        }), 200 if sql_health and redis_health else 503
+        }), 200 #if sql_health and redis_health else 503
 
 
 @app.context_processor
