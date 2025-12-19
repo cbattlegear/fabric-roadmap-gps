@@ -21,22 +21,28 @@ def upgrade():
     op.execute("""
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'fabric_blog_posts')
         BEGIN
-            CREATE TABLE fabric_blog_posts (
-                id INT IDENTITY(1,1) PRIMARY KEY,
-                title NVARCHAR(500) NOT NULL,
-                url NVARCHAR(1000) NOT NULL UNIQUE,
-                categories NVARCHAR(500),
-                post_date DATE,
-                author NVARCHAR(200),
-                views INT,
-                summary NVARCHAR(MAX),
-                scraped_at DATETIME2 DEFAULT GETUTCDATE(),
-                updated_at DATETIME2 DEFAULT GETUTCDATE(),
-                [blog_vector] [vector](1536) NULL
-            );
-            
-            CREATE INDEX idx_post_date ON fabric_blog_posts(post_date DESC);
-            CREATE INDEX idx_categories ON fabric_blog_posts(categories);
+            CREATE TABLE [dbo].[fabric_blog_posts](
+                [id] [int] IDENTITY(1,1) NOT NULL,
+                [title] [nvarchar](500) NOT NULL,
+                [url] [nvarchar](1000) NOT NULL,
+                [categories] [nvarchar](500) NULL,
+                [post_date] [date] NULL,
+                [author] [nvarchar](200) NULL,
+                [views] [int] NULL,
+                [summary] [nvarchar](max) NULL,
+                [scraped_at] [datetime2](7) NULL,
+                [updated_at] [datetime2](7) NULL,
+                [blog_vector] [vector](1536) NULL,
+            PRIMARY KEY CLUSTERED 
+            (
+                [id] ASC
+            )WITH (STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [PRIMARY],
+            UNIQUE NONCLUSTERED 
+            (
+                [url] ASC
+            )WITH (STATISTICS_NORECOMPUTE = OFF, IGNORE_DUP_KEY = OFF, OPTIMIZE_FOR_SEQUENTIAL_KEY = OFF) ON [PRIMARY]
+            ) ON [PRIMARY] TEXTIMAGE_ON [PRIMARY];
+                    
         END
     """)
     
