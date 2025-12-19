@@ -40,23 +40,26 @@ Fabric GPS helps you track Microsoft Fabric roadmap changes quickly via filtered
           <div class="why-build-content">
             <div class="why-build-story">
               <p class="story-text">
-                Fabric GPS pulls all roadmap data directly from the 
+                <strong>Pure, unfiltered roadmap data.</strong> We tap directly into the 
                 <a href="https://roadmap.fabric.microsoft.com/" target="_blank">Official Microsoft Fabric Roadmap</a>
-                by reading the same JSON files that power the official site.
+                — reading the exact same JSON that powers Microsoft's site — so you're always seeing the source of truth.
               </p>
               <p class="story-text">
-                We store everything in an Azure SQL Database and have been tracking changes to roadmap items since August 27, 2025. 
-                This lets us show you exactly what's new, what's changed, and when it happened.
+                <strong>Historical tracking that remembers everything.</strong> Since August 27, 2025, we've been watching every edit, 
+                every status flip, and every new feature announcement. Our Azure SQL Database captures it all, giving you a complete timeline 
+                of what changed, when it changed, and how it evolved.
               </p>
               <p class="story-text">
-                Related blog posts are pulled from the <a href="https://blog.fabric.microsoft.com/en-US/blog" target="_blank">Microsoft Fabric Blog</a>.
-                The related blog is found via cosine vector distance between the release description and the blog summary, so can be incorrect.
+                <strong>AI-powered blog connections.</strong> We use Azure OpenAI embeddings and cosine similarity to automatically match 
+                releases with related articles from the <a href="https://blog.fabric.microsoft.com/en-US/blog" target="_blank">Microsoft Fabric Blog</a>. 
+                The semantic matching is pretty smart, but occasionally makes creative connections — treat it as a helpful suggestion rather than gospel.
               </p>
               <p class="story-text">
-                Questions or feedback? Reach out at 
+                <strong>Built in the open, powered by feedback.</strong> Have ideas? Found a bug? Drop us a line at 
                 <a href="mailto:cameron@fabric-gps.com">cameron@fabric-gps.com</a> 
                 or open an issue on 
-                <a href="https://github.com/cbattlegear/fabric-roadmap-gps/issues" target="_blank">GitHub</a>.
+                <a href="https://github.com/cbattlegear/fabric-roadmap-gps/issues" target="_blank">GitHub</a>. 
+                This tool exists because the community asked for it — your input shapes where it goes next.
               </p>
             </div>
           </div>
