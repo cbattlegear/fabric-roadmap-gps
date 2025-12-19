@@ -53,6 +53,11 @@ class ReleaseItemModel(Base):
     row_hash = Column(String(64), nullable=False, index=True)
     # Last date row content was changed/inserted (UTC date only)
     last_modified = Column(Date, nullable=False, default=date.today)
+    # Blog article references
+    blog_title = Column(String(500), nullable=True)
+    blog_url = Column(String(1000), nullable=True)
+    # Vector embedding for semantic search (stored as TEXT in SQLAlchemy, actual SQL Server type is vector(1536))
+    release_vector = Column(Text, nullable=True)
 
 
 class EmailSubscriptionModel(Base):
@@ -343,6 +348,11 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
                             setattr(existing, k, v)
                         existing.row_hash = new_hash
                         existing.last_modified = now
+                        # NULL out release_vector and blog info when content changes
+                        # This triggers re-vectorization and re-matching
+                        existing.release_vector = None
+                        existing.blog_title = None
+                        existing.blog_url = None
                         updated += 1
 
     return {"inserted": inserted, "updated": updated, "unchanged": unchanged}

@@ -581,6 +581,8 @@ def api_releases():
             "product_id": r.product_id,
             "product_name": r.product_name,
             "feature_description": r.feature_description,
+            "blog_title": r.blog_title,
+            "blog_url": r.blog_url,
             "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
         }
 
