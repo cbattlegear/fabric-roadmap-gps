@@ -9,8 +9,8 @@ if [[ "$MODE" == "web" ]]; then
   # Run the Flask app with Gunicorn
   exec gunicorn -c gunicorn.conf.py
 elif [[ "$MODE" == "fetch" ]]; then
-  # Run the data fetcher script
-  exec python get_current_releases.py
+  # Run the data fetcher scripts
+  python get_current_releases.py && python scrape_fabric_blog.py --rss && python vectorize_blog_posts.py && exec python match_releases_to_blogs.py
 elif [[ "$MODE" == "email" ]]; then
   # Run the email sending script
   exec python weekly_email_job.py

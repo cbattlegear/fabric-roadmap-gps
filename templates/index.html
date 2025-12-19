@@ -185,6 +185,20 @@ Get real-time feeds and explore what's coming next.
                     <div class="modal-section">
                         <div class="modal-description">${descriptionPrepareHtml(item.feature_description || 'No description provided.')}</div>
                     </div>
+                    ${item.blog_title && item.blog_url ? `
+                    <div class="modal-section blog-related-section">
+                        <h4>📰 Related Blog Article</h4>
+                        <div class="blog-article-card">
+                            <a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" class="blog-article-link">
+                                <div class="blog-article-title">${escapeHtml(item.blog_title)}</div>
+                                <div class="blog-article-meta">
+                                    <span class="blog-article-icon">🔗</span>
+                                    <span class="blog-article-domain">blog.fabric.microsoft.com</span>
+                                </div>
+                            </a>
+                        </div>
+                    </div>
+                    ` : ''}
                     <div class="modal-section" id="history-section">
                         <h4>Change History</h4>
                         <div class="history-loading" style="font-size:.8rem; opacity:.7;">Loading history...</div>
@@ -452,7 +466,10 @@ Get real-time feeds and explore what's coming next.
                             <span class="release-date">Release Date: ${releaseDate}</span>
                         </div>
                         <p class="change-description">${descriptionPrepareHtml(item.feature_description || 'No description available.')}</p>
-                        <div class="change-link-inline" style="margin-top:.5rem; font-size:.75rem; color: var(--fabric-primary);">Click for details ▸</div>
+                        <div style="margin-top:.5rem; font-size:.75rem; display: flex; justify-content: space-between; align-items: center;">
+                            <div class="change-link-inline" style="color: var(--fabric-primary);">Click for details ▸</div>
+                            ${item.blog_title && item.blog_url ? `<a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" style="color: var(--fabric-secondary); text-decoration: none; display: flex; align-items: center; gap: .25rem;" onclick="event.stopPropagation();" title="${escapeHtml(item.blog_title)}">📚 Related blog</a>` : ''}
+                        </div>
                     </div>`;
             }
             bindEvents() {

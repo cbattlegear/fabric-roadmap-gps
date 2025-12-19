@@ -11,3 +11,6 @@ azure-communication-email>=1.0.0
 opentelemetry-instrumentation-sqlalchemy==0.57b0
 opentelemetry-instrumentation-redis==0.57b0
 alembic>=1.16.5
+beautifulsoup4==4.12.2
+requests==2.31.0
+openai>=1.0.0
