@@ -368,7 +368,6 @@ Get real-time feeds and explore what's coming next.
                     const response = await fetch(`/api/releases?${params.toString()}`);
                     const payload = await response.json();
                     const items = Array.isArray(payload) ? payload : (payload.data || []);
-                    items.sort((a, b) => new Date(b.last_modified) - new Date(a.last_modified));
 
                     if (this.page === 1) {
                         this.currentData = items;

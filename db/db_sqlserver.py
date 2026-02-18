@@ -691,6 +691,109 @@ def fetch_history_rows(engine, release_item_id: str):
         conn.close()
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
+def vector_search_releases(
+    engine,
+    query_vector: List[float],
+    limit: Optional[int] = None,
+    offset: Optional[int] = None,
+    product_name: Optional[str] = None,
+    release_type: Optional[str] = None,
+    release_status: Optional[str] = None,
+    modified_within_days: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Search releases ordered by cosine similarity to query_vector."""
+    vector_json = json.dumps(query_vector)
+
+    conditions = ["release_vector IS NOT NULL"]
+    filter_params: List[Any] = []
+
+    if product_name is not None:
+        conditions.append("product_name = ?")
+        filter_params.append(product_name)
+    if release_type is not None:
+        conditions.append("release_type = ?")
+        filter_params.append(release_type)
+    if release_status is not None:
+        conditions.append("release_status = ?")
+        filter_params.append(release_status)
+    if modified_within_days is not None:
+        cutoff = (datetime.utcnow() - timedelta(days=modified_within_days)).date()
+        conditions.append("last_modified >= ?")
+        filter_params.append(cutoff)
+
+    where_sql = " AND ".join(conditions)
+
+    sql = f"""
+    SELECT release_item_id, feature_name, release_date, release_type,
+           release_status, product_id, product_name, feature_description,
+           blog_title, blog_url, last_modified,
+           VECTOR_DISTANCE('cosine', release_vector, CAST(? AS VECTOR(1536))) AS distance
+    FROM release_items
+    WHERE {where_sql}
+    ORDER BY distance ASC
+    OFFSET ? ROWS FETCH NEXT ? ROWS ONLY
+    """
+
+    # Param order: vector (SELECT), filters (WHERE), offset & limit (pagination)
+    all_params = [vector_json] + filter_params + [offset or 0, limit or 50]
+
+    conn = engine.raw_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(sql, all_params)
+        columns = [col[0] for col in cursor.description]
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
+def count_vector_search_releases(
+    engine,
+    product_name: Optional[str] = None,
+    release_type: Optional[str] = None,
+    release_status: Optional[str] = None,
+    modified_within_days: Optional[int] = None,
+) -> int:
+    """Count vectorized releases matching the given filters."""
+    conditions = ["release_vector IS NOT NULL"]
+    params: List[Any] = []
+
+    if product_name is not None:
+        conditions.append("product_name = ?")
+        params.append(product_name)
+    if release_type is not None:
+        conditions.append("release_type = ?")
+        params.append(release_type)
+    if release_status is not None:
+        conditions.append("release_status = ?")
+        params.append(release_status)
+    if modified_within_days is not None:
+        cutoff = (datetime.utcnow() - timedelta(days=modified_within_days)).date()
+        conditions.append("last_modified >= ?")
+        params.append(cutoff)
+
+    where_sql = " AND ".join(conditions)
+    sql = f"SELECT COUNT(*) FROM release_items WHERE {where_sql}"
+
+    conn = engine.raw_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(sql, params)
+        return cursor.fetchone()[0]
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
+@retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
 def healthcheck(engine):
     conn = engine.raw_connection()
     try:
