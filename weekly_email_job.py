@@ -13,7 +13,7 @@ import json
 import requests
 import logging
 from datetime import datetime, date, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from azure.communication.email import EmailClient
 
 from azure.monitor.opentelemetry import configure_azure_monitor
@@ -25,6 +25,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from db.db_sqlserver import (
     make_engine, get_unsent_active_subscriptions, EmailSubscriptionModel, EmailVerificationModel
 )
+
+try:
+    from openai import AzureOpenAI
+    _OPENAI_AVAILABLE = True
+except ImportError:
+    _OPENAI_AVAILABLE = False
 
 os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-email-job'
 
@@ -67,13 +73,25 @@ class WeeklyEmailSender:
             subscriptions = get_unsent_active_subscriptions(engine, 7)
             
             logger.info(f"Found {len(subscriptions)} active subscriptions")
+
+            if not subscriptions:
+                logger.info("No subscriptions to process, exiting")
+                return
+
+            # Fetch all unfiltered changes once and generate AI summary once
+            all_changes = self._fetch_all_changes_unfiltered()
+            ai_summary = self.generate_ai_summary(all_changes)
+            if ai_summary:
+                logger.info("AI summary generated successfully")
+            else:
+                logger.info("AI summary not available, emails will be sent without it")
             
             sent_count = 0
             error_count = 0
             
             for subscription in subscriptions:
                 try:
-                    if self.send_weekly_email(subscription):
+                    if self.send_weekly_email(subscription, ai_summary=ai_summary):
                         sent_count += 1
                         self.update_last_email_sent(subscription.id)
                     else:
@@ -98,7 +116,7 @@ class WeeklyEmailSender:
             logger.error(f"Fatal error in weekly email job: {e}")
             raise
 
-    def send_weekly_email(self, subscription: EmailSubscriptionModel) -> bool:
+    def send_weekly_email(self, subscription: EmailSubscriptionModel, ai_summary: Optional[str] = None) -> bool:
         """Send weekly email to a single subscriber using JSON API"""
         try:
             # Get changes using JSON API with subscriber's filters
@@ -110,8 +128,8 @@ class WeeklyEmailSender:
             
             # Generate email content
             subject = f"Fabric GPS Weekly Update - {len(changes)} Changes"
-            html_content = self.generate_email_html(changes, subscription)
-            text_content = self.generate_email_text(changes, subscription)
+            html_content = self.generate_email_html(changes, subscription, ai_summary=ai_summary)
+            text_content = self.generate_email_text(changes, subscription, ai_summary=ai_summary)
             
             # Send email using Azure Communication Services
             success = self.send_azure_email(
@@ -172,6 +190,78 @@ class WeeklyEmailSender:
                 logger.warning("Pagination exceeded 20 pages; stopping early.")
                 break
         return all_items
+
+    def _fetch_all_changes_unfiltered(self) -> List[Dict[str, Any]]:
+        """Fetch all changes from the past week without subscriber-specific filters."""
+        base_params = {'modified_within_days': 7, 'page_size': 200}
+        items = self._fetch_all_pages(base_params)
+        # Deduplicate
+        seen: Dict[str, Dict[str, Any]] = {}
+        for item in items:
+            rid = item.get('release_item_id')
+            if rid and rid not in seen:
+                seen[rid] = item
+        return list(seen.values())
+
+    def generate_ai_summary(self, changes: List[Dict[str, Any]]) -> Optional[str]:
+        """Generate a single AI summary of all weekly changes using Azure OpenAI.
+
+        Returns the summary text or None if unavailable.
+        """
+        if not changes:
+            return None
+        if not _OPENAI_AVAILABLE:
+            logger.info("OpenAI SDK not installed, skipping AI summary")
+            return None
+        endpoint = os.getenv('AZURE_OPENAI_ENDPOINT')
+        api_key = os.getenv('AZURE_OPENAI_API_KEY')
+        deployment = os.getenv('AZURE_OPENAI_CHAT_DEPLOYMENT', 'gpt-4o-mini')
+        if not endpoint or not api_key:
+            logger.info("Azure OpenAI not configured, skipping AI summary")
+            return None
+        try:
+            client = AzureOpenAI(
+                azure_endpoint=endpoint,
+                api_key=api_key,
+                api_version="2024-02-01"
+            )
+            # Build a compact representation of changes for the prompt
+            change_lines = []
+            for c in changes[:50]:
+                line = (
+                    f"- {c.get('feature_name', 'Unknown')} "
+                    f"[{c.get('product_name', '')}] "
+                    f"({c.get('release_type', '')}, {c.get('release_status', '')})"
+                )
+                change_lines.append(line)
+            changes_text = "\n".join(change_lines)
+
+            response = client.chat.completions.create(
+                model=deployment,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You summarize Microsoft Fabric roadmap changes for a weekly email newsletter. "
+                            "Write a concise 2-4 sentence executive summary highlighting the most important "
+                            "themes and notable changes. Be specific about product areas and feature names. "
+                            "Do not use markdown formatting. Write in a professional but approachable tone."
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Summarize these {len(changes)} Microsoft Fabric roadmap changes from the past week:\n\n{changes_text}"
+                    }
+                ],
+                max_tokens=300,
+                temperature=0.7
+            )
+            summary = response.choices[0].message.content.strip()
+            logger.info(f"AI summary generated ({len(summary)} chars)")
+            return summary
+        except Exception as e:
+            logger.error(f"AI summary generation failed: {e}")
+            return None
 
 # Replace the existing get_changes_from_api method with:
 
@@ -279,7 +369,7 @@ class WeeklyEmailSender:
             f'{self.escape_html(label)}</a>'
         )
 
-    def generate_email_html(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel) -> str:
+    def generate_email_html(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel, ai_summary: Optional[str] = None) -> str:
         """Generate HTML email content styled to match index page design."""
         unsubscribe_url = f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}"
 
@@ -334,6 +424,21 @@ class WeeklyEmailSender:
             )
 
         changes_section = "\n".join(card_blocks)
+
+        # AI summary block (inserted between hero and change cards)
+        summary_html = ""
+        if ai_summary:
+            summary_html = (
+                f'<tr><td style="padding:0 0 18px 0;">'
+                f'<div style="background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px;'
+                f'padding:20px 22px;box-shadow:{CARD_SHADOW};">'
+                f'<h2 style="margin:0 0 10px 0;font-size:16px;color:{TEXT_PRIMARY};font-weight:600;">'
+                f'\U0001f4a1 AI Weekly Summary</h2>'
+                f'<p style="margin:0;font-size:14px;line-height:1.6;color:{TEXT_SECONDARY};">'
+                f'{self.escape_html(ai_summary)}</p>'
+                f'</div></td></tr>'
+            )
+
         footer_links = (
             f'<a href="{self.escape_html(self.base_url)}" style="color:#19433c;text-decoration:none;font-weight:500;">Fabric GPS</a>'
         )
@@ -351,9 +456,9 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
 </head>
 <body style=\"margin:0;padding:0;background:{BODY_BG};\">
 <span style=\"display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;\">{self.escape_html(preheader)}</span>
-<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:{BODY_BG};padding:24px 0;\">\n  <tr>\n    <td align=\"center\" style=\"padding:0 12px;\">\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"max-width:640px;\">\n        <tr>\n          <td style=\"background:{HERO_GRADIENT};color:#ffffff;border-radius:14px; padding:34px 34px 38px 34px; text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);\">\n            <h1 style=\"margin:0 0 10px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;\">🗺️ Fabric GPS Weekly Update</h1>\n            <p style=\"margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);\">Microsoft Fabric roadmap items modified during the past 7 days.</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:28px;\"></td></tr>\n        <tr><td style=\"padding:0;\">{changes_section}</td></tr>\n        <tr>\n          <td>\n            <div style=\"background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px; padding:22px;margin:6px 0 26px 0;box-shadow:{CARD_SHADOW};text-align:center;\">\n              <p style=\"margin:0 0 14px 0;font-size:14px;color:{TEXT_SECONDARY};\">Tune your filters or explore more history on the site.</p>\n              {self._build_button(self.base_url, "Open Fabric GPS")}\n            </div>\n          </td>\n        </tr>\n        <tr>\n          <td style=\"background:#f8f9fa;border:1px solid {CARD_BORDER};border-radius:10px; padding:18px 20px;text-align:center;font-size:12px;color:{TEXT_SECONDARY}; line-height:1.5;\">\n            <p style=\"margin:0 0 6px 0;\">Sent to {self.escape_html(subscription.email)} — you’re subscribed to weekly updates.</p>\n            <p style=\"margin:0 0 6px 0;\">\n              <a href=\"{self.escape_html(unsubscribe_url)}\" style=\"color:#19433c;text-decoration:none;font-weight:500;\">Unsubscribe</a>&nbsp;|&nbsp; Data sourced from Microsoft Fabric Roadmap\n            </p>\n            <p style=\"margin:8px 0 0 0;color:#8a8886;\">{footer_links}</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:30px;\"></td></tr>\n      </table>\n    </td>\n  </tr>\n</table>\n</body>\n</html>\n"""
+<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:{BODY_BG};padding:24px 0;\">\n  <tr>\n    <td align=\"center\" style=\"padding:0 12px;\">\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"max-width:640px;\">\n        <tr>\n          <td style=\"background:{HERO_GRADIENT};color:#ffffff;border-radius:14px; padding:34px 34px 38px 34px; text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);\">\n            <h1 style=\"margin:0 0 10px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;\">🗺️ Fabric GPS Weekly Update</h1>\n            <p style=\"margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);\">Microsoft Fabric roadmap items modified during the past 7 days.</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:28px;\"></td></tr>\n        {summary_html}\n        <tr><td style=\"padding:0;\">{changes_section}</td></tr>\n        <tr>\n          <td>\n            <div style=\"background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px; padding:22px;margin:6px 0 26px 0;box-shadow:{CARD_SHADOW};text-align:center;\">\n              <p style=\"margin:0 0 14px 0;font-size:14px;color:{TEXT_SECONDARY};\">Tune your filters or explore more history on the site.</p>\n              {self._build_button(self.base_url, "Open Fabric GPS")}\n            </div>\n          </td>\n        </tr>\n        <tr>\n          <td style=\"background:#f8f9fa;border:1px solid {CARD_BORDER};border-radius:10px; padding:18px 20px;text-align:center;font-size:12px;color:{TEXT_SECONDARY}; line-height:1.5;\">\n            <p style=\"margin:0 0 6px 0;\">Sent to {self.escape_html(subscription.email)} — you’re subscribed to weekly updates.</p>\n            <p style=\"margin:0 0 6px 0;\">\n              <a href=\"{self.escape_html(unsubscribe_url)}\" style=\"color:#19433c;text-decoration:none;font-weight:500;\">Unsubscribe</a>&nbsp;|&nbsp; Data sourced from Microsoft Fabric Roadmap\n            </p>\n            <p style=\"margin:8px 0 0 0;color:#8a8886;\">{footer_links}</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:30px;\"></td></tr>\n      </table>\n    </td>\n  </tr>\n</table>\n</body>\n</html>\n"""
 
-    def generate_email_text(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel) -> str:
+    def generate_email_text(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel, ai_summary: Optional[str] = None) -> str:
         """Generate plain text email content from JSON API data"""
         unsubscribe_url = f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}"
         
@@ -361,9 +466,20 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
             "FABRIC GPS - WEEKLY UPDATE",
             "=" * 50,
             "",
+        ]
+
+        if ai_summary:
+            text_parts.extend([
+                "AI SUMMARY",
+                "-" * 50,
+                ai_summary,
+                "",
+            ])
+
+        text_parts.extend([
             f"This week's Microsoft Fabric roadmap changes ({len(changes)} items):",
             ""
-        ]
+        ])
         
         for i, change in enumerate(changes, 1):
             release_date = 'TBD'
