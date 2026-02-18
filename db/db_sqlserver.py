@@ -727,7 +727,7 @@ def vector_search_releases(
     SELECT release_item_id, feature_name, release_date, release_type,
            release_status, product_id, product_name, feature_description,
            blog_title, blog_url, last_modified,
-           VECTOR_DISTANCE('cosine', release_vector, CAST(? AS VECTOR(1536))) AS distance
+           VECTOR_DISTANCE('cosine', release_vector, CAST(CAST(? AS NVARCHAR(MAX)) AS VECTOR(1536))) AS distance
     FROM release_items
     WHERE {where_sql}
     ORDER BY distance ASC
