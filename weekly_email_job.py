@@ -253,8 +253,7 @@ class WeeklyEmailSender:
                         "content": f"Summarize these {len(changes)} Microsoft Fabric roadmap changes from the past week:\n\n{changes_text}"
                     }
                 ],
-                max_tokens=300,
-                temperature=0.7
+                max_completion_tokens=300
             )
             summary = response.choices[0].message.content.strip()
             logger.info(f"AI summary generated ({len(summary)} chars)")
