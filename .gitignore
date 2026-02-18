@@ -2,3 +2,4 @@ __pycache__/
 *.py[cod]
 .venv/
 setup_env.sh
+.env

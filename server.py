@@ -36,8 +36,10 @@ from db.db_sqlserver import (
     make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values, fetch_history_rows,
     EmailSubscriptionModel, EmailVerificationModel, create_email_subscription, 
     verify_email_subscription, unsubscribe_email, fetch_history_rows, count_recently_modified_releases,
+    vector_search_releases, count_vector_search_releases,
     healthcheck as db_healthcheck
 )
+from lib.embeddings import get_embedding, is_available as embeddings_available
 
 os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
@@ -586,6 +588,24 @@ def api_releases():
             "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
         }
 
+    def _format_vector_row(row):
+        rd = row.get("release_date")
+        lm = row.get("last_modified")
+        return {
+            "release_item_id": row.get("release_item_id"),
+            "feature_name": row.get("feature_name"),
+            "release_date": rd.isoformat() if rd and hasattr(rd, 'isoformat') else None,
+            "release_type": row.get("release_type"),
+            "release_status": row.get("release_status"),
+            "product_id": row.get("product_id"),
+            "product_name": row.get("product_name"),
+            "feature_description": row.get("feature_description"),
+            "blog_title": row.get("blog_title"),
+            "blog_url": row.get("blog_url"),
+            "last_modified": lm.isoformat() if lm and hasattr(lm, 'isoformat') else None,
+            "distance": round(row.get("distance"), 4) if row.get("distance") is not None else None,
+        }
+
     # Single item path (legacy style, keep existing caching envelope not wrapped)
     if release_item_id:
         # (retain existing code below untouched)
@@ -651,6 +671,12 @@ def api_releases():
             return resp
 
     use_cache = not (q and str(q).strip())
+
+    # Generate embedding for vector search when q is provided
+    query_embedding = None
+    if q and str(q).strip() and embeddings_available():
+        query_embedding = get_embedding(str(q).strip())
+
     # (Remove old non-paginated collection logic and replace with pagination)
     # Always cache pages (including those with search q) using page & page_size in key
     offset = (page - 1) * page_size
@@ -686,15 +712,27 @@ def api_releases():
             if CACHE.try_acquire_lock("api-page", parts):
                 def _refresh_page_bg():
                     try:
-                        total_bg = count_recently_modified_releases(
-                            get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-                            modified_within_days=modified_within_days, q=q
-                        )
-                        rows_bg = get_recently_modified_releases(
-                            get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-                            modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset
-                        )
-                        data_rows_bg = [_row_to_dict(r) for r in rows_bg]
+                        if query_embedding is not None:
+                            total_bg = count_vector_search_releases(
+                                get_engine(), product_name=product_name, release_type=release_type,
+                                release_status=release_status, modified_within_days=modified_within_days
+                            )
+                            vs_rows_bg = vector_search_releases(
+                                get_engine(), query_embedding, limit=page_size, offset=offset,
+                                product_name=product_name, release_type=release_type,
+                                release_status=release_status, modified_within_days=modified_within_days
+                            )
+                            data_rows_bg = [_format_vector_row(r) for r in vs_rows_bg]
+                        else:
+                            total_bg = count_recently_modified_releases(
+                                get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
+                                modified_within_days=modified_within_days, q=q
+                            )
+                            rows_bg = get_recently_modified_releases(
+                                get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
+                                modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset
+                            )
+                            data_rows_bg = [_row_to_dict(r) for r in rows_bg]
                         total_pages_bg = (total_bg + page_size - 1) // page_size if total_bg else 1
                         pagination_bg = {
                             "page": page,
@@ -725,15 +763,27 @@ def api_releases():
             return resp
 
     # Cache miss: compute total + page rows
-    total = count_recently_modified_releases(
-        get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-        modified_within_days=modified_within_days, q=q
-    )
-    rows = get_recently_modified_releases(
-        get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-        modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset
-    )
-    data_rows = [_row_to_dict(r) for r in rows]
+    if query_embedding is not None:
+        total = count_vector_search_releases(
+            get_engine(), product_name=product_name, release_type=release_type,
+            release_status=release_status, modified_within_days=modified_within_days
+        )
+        vs_rows = vector_search_releases(
+            get_engine(), query_embedding, limit=page_size, offset=offset,
+            product_name=product_name, release_type=release_type,
+            release_status=release_status, modified_within_days=modified_within_days
+        )
+        data_rows = [_format_vector_row(r) for r in vs_rows]
+    else:
+        total = count_recently_modified_releases(
+            get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
+            modified_within_days=modified_within_days, q=q
+        )
+        rows = get_recently_modified_releases(
+            get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
+            modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset
+        )
+        data_rows = [_row_to_dict(r) for r in rows]
     total_pages = (total + page_size - 1) // page_size if total else 1
     pagination = {
         "page": page,

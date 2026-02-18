@@ -74,7 +74,10 @@ Get real-time feeds and explore what's coming next.
                         </div>
                         <div class="filter-group">
                             <label for="search-input">Search:</label>
-                            <input id="search-input" class="filter-select" type="search" placeholder="Search features, descriptions, products..." />
+                            <div class="search-input-wrapper">
+                                <input id="search-input" class="filter-select" type="search" placeholder="Search features, descriptions, products..." />
+                                <div class="search-spinner" id="search-spinner"></div>
+                            </div>
                         </div>
                         <!-- <button id="apply-filters" class="button button-primary">Apply Filters</button> -->
                         <button id="clear-filters" class="button button-secondary">Clear</button>
@@ -359,8 +362,10 @@ Get real-time feeds and explore what's coming next.
                     if (filters.release_type) params.append('release_type', filters.release_type);
                     if (filters.release_status) params.append('release_status', filters.release_status);
                     if (filters.modified_within_days) params.append('modified_within_days', filters.modified_within_days);
-                    if (filters.q && String(filters.q).trim().length >= this.minSearchLength) {
+                    const hasSearchQuery = filters.q && String(filters.q).trim().length >= this.minSearchLength;
+                    if (hasSearchQuery) {
                         params.append('q', String(filters.q).trim());
+                        this.toggleSearchSpinner(true);
                     }
                     params.append('page', String(this.page));
                     params.append('page_size', String(this.pageSize));
@@ -368,7 +373,6 @@ Get real-time feeds and explore what's coming next.
                     const response = await fetch(`/api/releases?${params.toString()}`);
                     const payload = await response.json();
                     const items = Array.isArray(payload) ? payload : (payload.data || []);
-                    items.sort((a, b) => new Date(b.last_modified) - new Date(a.last_modified));
 
                     if (this.page === 1) {
                         this.currentData = items;
@@ -405,6 +409,7 @@ Get real-time feeds and explore what's coming next.
                         // Non-initial load error: keep old content; optionally flash a toast (not implemented)
                     }
                 } finally {
+                    this.toggleSearchSpinner(false);
                     if (isInitialLoad) {
                         this.showLoading(false);
                     }
@@ -556,6 +561,11 @@ Get real-time feeds and explore what's coming next.
                 const el = document.getElementById('loading-more-indicator');
                 if (!el) return;
                 el.style.display = show ? 'block' : 'none';
+            }
+            toggleSearchSpinner(show) {
+                const el = document.getElementById('search-spinner');
+                if (!el) return;
+                el.classList.toggle('active', show);
             }
             
             showLoading(show) {

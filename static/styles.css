@@ -513,6 +513,33 @@ body {
   border-color: var(--fabric-neutral-grey-60);
 }
 
+.search-input-wrapper {
+  position: relative;
+}
+
+.search-input-wrapper .filter-select {
+  width: 100%;
+  padding-right: 32px;
+}
+
+.search-spinner {
+  display: none;
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--fabric-neutral-grey-30);
+  border-top: 2px solid var(--fabric-primary);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+.search-spinner.active {
+  display: block;
+}
+
 .loading-indicator {
   display: flex;
   align-items: center;

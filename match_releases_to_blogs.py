@@ -339,6 +339,85 @@ class ReleaseBlogMatcher:
             raise
 
 
+    def get_all_matched_releases(self) -> List[Dict]:
+        """Fetch all releases that already have a blog match and a vector."""
+        try:
+            query = """
+            SELECT release_item_id, feature_name, product_name,
+                   blog_title, blog_url, vector_distance
+            FROM release_items
+            WHERE blog_url IS NOT NULL
+              AND release_vector IS NOT NULL
+            ORDER BY last_modified DESC
+            """
+            self.cursor.execute(query)
+            rows = self.cursor.fetchall()
+            return [
+                {
+                    'release_item_id': row[0],
+                    'feature_name': row[1] or '',
+                    'product_name': row[2] or '',
+                    'blog_title': row[3] or '',
+                    'blog_url': row[4] or '',
+                    'vector_distance': row[5],
+                }
+                for row in rows
+            ]
+        except Exception as e:
+            logger.error(f"Error fetching matched releases: {e}")
+            raise
+
+    def rerank_all_matches(self):
+        """Re-check all matched releases for a better blog article.
+
+        For each release that already has a blog match, query for the
+        closest blog post. If a closer match is found (lower distance),
+        update the release with the new blog info.
+        """
+        try:
+            releases = self.get_all_matched_releases()
+            if not releases:
+                logger.info("No matched releases to rerank")
+                return
+
+            logger.info(f"Reranking blog matches for {len(releases)} releases")
+            improved_count = 0
+
+            for i, release in enumerate(releases, 1):
+                try:
+                    blog_match = self.find_most_related_blog(release['release_item_id'])
+                    if not blog_match:
+                        continue
+
+                    new_title, new_url, new_distance = blog_match
+                    if new_distance > self.MAXIMUM_VECTOR_DISTANCE:
+                        continue
+
+                    old_distance = release.get('vector_distance')
+                    # Update if the new match is closer or the matched blog changed
+                    if old_distance is None or new_distance < old_distance:
+                        logger.info(
+                            f"  ↑ [{i}/{len(releases)}] {release['feature_name']}: "
+                            f"distance {old_distance} → {new_distance:.4f} "
+                            f"('{new_title}')"
+                        )
+                        self.update_release_blog_info(
+                            release['release_item_id'], new_title, new_url, new_distance
+                        )
+                        improved_count += 1
+
+                except Exception as e:
+                    logger.error(f"Error reranking release {release['release_item_id']}: {e}")
+
+            logger.info("=" * 60)
+            logger.info(f"Reranking complete! {improved_count} matches improved out of {len(releases)} checked")
+            logger.info("=" * 60)
+
+        except Exception as e:
+            logger.error(f"Fatal error during reranking: {e}")
+            raise
+
+
 def main():
     """Main entry point"""
     matcher = None
@@ -346,6 +425,7 @@ def main():
         matcher = ReleaseBlogMatcher()
         matcher.connect()
         matcher.vectorize_and_match_all_releases()
+        matcher.rerank_all_matches()
     
     except Exception as e:
         logger.error(f"Script failed: {e}")
