@@ -1,0 +1,6 @@
+# Auto-detect text files and normalise to LF in the repo
+* text=auto
+
+# Force LF for files that must run on Linux (Docker)
+*.sh text eol=lf
+Dockerfile text eol=lf
