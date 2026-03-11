@@ -357,6 +357,8 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
 
     return {"inserted": inserted, "updated": updated, "unchanged": unchanged}
 
+VALID_SORT_OPTIONS = ("last_modified", "release_date")
+
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
 def get_recently_modified_releases(
     engine,
@@ -367,10 +369,11 @@ def get_recently_modified_releases(
     modified_within_days: Optional[int] = None,
     q: Optional[str] = None,
     offset: Optional[int] = None,
+    sort: Optional[str] = None,
 ) -> List[ReleaseItemModel]:
     """
-    Return releases most recently modified (by last_modified desc), filtered & paginated.
-    Supports optional text search via `q` and pagination via `limit` & `offset`.
+    Return releases sorted by *sort* column (desc), filtered & paginated.
+    ``sort`` must be one of ``VALID_SORT_OPTIONS`` (default ``"last_modified"``).
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
 
@@ -399,7 +402,12 @@ def get_recently_modified_releases(
             )
     if filters:
         stmt = stmt.where(*filters)
-    stmt = stmt.order_by(ReleaseItemModel.last_modified.desc(), ReleaseItemModel.release_date.desc(), ReleaseItemModel.release_item_id.desc())
+
+    if sort == "release_date":
+        stmt = stmt.order_by(ReleaseItemModel.release_date.desc(), ReleaseItemModel.last_modified.desc(), ReleaseItemModel.release_item_id.desc())
+    else:
+        stmt = stmt.order_by(ReleaseItemModel.last_modified.desc(), ReleaseItemModel.release_date.desc(), ReleaseItemModel.release_item_id.desc())
+
     if offset is not None:
         stmt = stmt.offset(offset)
     if limit is not None:
