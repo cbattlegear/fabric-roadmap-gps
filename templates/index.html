@@ -73,6 +73,13 @@ Get real-time feeds and explore what's coming next.
                             </select>
                         </div>
                         <div class="filter-group">
+                            <label for="sort-select">Sort By:</label>
+                            <select id="sort-select" class="filter-select">
+                                <option value="last_modified">Last Modified</option>
+                                <option value="release_date">Release Date</option>
+                            </select>
+                        </div>
+                        <div class="filter-group">
                             <label for="search-input">Search:</label>
                             <div class="search-input-wrapper">
                                 <input id="search-input" class="filter-select" type="search" placeholder="Search features, descriptions, products..." />
@@ -362,6 +369,7 @@ Get real-time feeds and explore what's coming next.
                     if (filters.release_type) params.append('release_type', filters.release_type);
                     if (filters.release_status) params.append('release_status', filters.release_status);
                     if (filters.modified_within_days) params.append('modified_within_days', filters.modified_within_days);
+                    if (filters.sort && filters.sort !== 'last_modified') params.append('sort', filters.sort);
                     const hasSearchQuery = filters.q && String(filters.q).trim().length >= this.minSearchLength;
                     if (hasSearchQuery) {
                         params.append('q', String(filters.q).trim());
@@ -491,7 +499,7 @@ Get real-time feeds and explore what's coming next.
                  }
 
                      // AUTO APPLY ON SELECT CHANGE
-                const autoSelectIds = ['product-filter','type-filter','status-filter','days-filter'];
+                const autoSelectIds = ['product-filter','type-filter','status-filter','days-filter','sort-select'];
                 autoSelectIds.forEach(id => {
                     const el = document.getElementById(id);
                     if (!el) return;
@@ -530,6 +538,7 @@ Get real-time feeds and explore what's coming next.
                     release_type: document.getElementById('type-filter').value,
                     release_status: document.getElementById('status-filter').value,
                     modified_within_days: document.getElementById('days-filter').value,
+                    sort: document.getElementById('sort-select').value,
                     q: (document.getElementById('search-input') && document.getElementById('search-input').value) || ''
                 };
             }
@@ -539,6 +548,7 @@ Get real-time feeds and explore what's coming next.
                 document.getElementById('type-filter').value = '';
                 document.getElementById('status-filter').value = '';
                 document.getElementById('days-filter').value = '';
+                document.getElementById('sort-select').value = 'last_modified';
                 const si = document.getElementById('search-input');
                 if (si) si.value = '';
                 this.page = 1;

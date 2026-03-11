@@ -37,7 +37,8 @@ from db.db_sqlserver import (
     EmailSubscriptionModel, EmailVerificationModel, create_email_subscription, 
     verify_email_subscription, unsubscribe_email, fetch_history_rows, count_recently_modified_releases,
     vector_search_releases, count_vector_search_releases,
-    healthcheck as db_healthcheck
+    healthcheck as db_healthcheck,
+    VALID_SORT_OPTIONS,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 
@@ -562,6 +563,10 @@ def api_releases():
     q = request.args.get("q")  # partial search
     page = request.args.get("page", type=int) or 1
     page_size = request.args.get("page_size", type=int) or 50
+    sort = request.args.get("sort")
+
+    if sort not in VALID_SORT_OPTIONS:
+        sort = "last_modified"
 
     if page < 1:
         page = 1
@@ -689,7 +694,8 @@ def api_releases():
         str(modified_within_days), 
         q or "", 
         str(page), 
-        str(page_size)
+        str(page_size),
+        sort,
     )
     cached = CACHE.get("api-page", parts)
     now_ts = _time.time()
@@ -730,7 +736,7 @@ def api_releases():
                             )
                             rows_bg = get_recently_modified_releases(
                                 get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-                                modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset
+                                modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset, sort=sort
                             )
                             data_rows_bg = [_row_to_dict(r) for r in rows_bg]
                         total_pages_bg = (total_bg + page_size - 1) // page_size if total_bg else 1
@@ -781,7 +787,7 @@ def api_releases():
         )
         rows = get_recently_modified_releases(
             get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-            modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset
+            modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset, sort=sort
         )
         data_rows = [_row_to_dict(r) for r in rows]
     total_pages = (total + page_size - 1) // page_size if total else 1
@@ -806,6 +812,7 @@ def api_releases():
             "modified_within_days": modified_within_days,
             "q": q,
             "page_size": page_size,
+            "sort": sort if sort != "last_modified" else None,
         }.items() if v not in (None, "")
     }
     def _link(p):

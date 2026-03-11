@@ -39,7 +39,7 @@
             <section class="endpoint-section">
                 <h2><span class="method-badge method-get">GET</span> JSON API</h2>
                 <p><strong>Endpoint:</strong> <code>/api/releases</code></p>
-                <p><strong>Description:</strong> Returns a <em>paginated envelope</em> of releases. Always sorted by <code>last_modified</code> (desc), then <code>release_date</code>. Supports filtering, full-text style partial search (simple <code>ILIKE %q%</code>) and page-based navigation. All collection responses are wrapped; a single-item lookup via <code>release_item_id</code> returns just the object (legacy compatibility) without the envelope.</p>
+                <p><strong>Description:</strong> Returns a <em>paginated envelope</em> of releases. Sorted by <code>last_modified</code> (desc) by default, or by <code>release_date</code> (desc) when specified via the <code>sort</code> parameter. Supports filtering, full-text style partial search (simple <code>ILIKE %q%</code>) and page-based navigation. All collection responses are wrapped; a single-item lookup via <code>release_item_id</code> returns just the object (legacy compatibility) without the envelope.</p>
                 
                 <h3>Parameters</h3>
                 <ul>
@@ -48,6 +48,7 @@
                     <li><code>release_status</code> - Exact match on release status</li>
                     <li><code>modified_within_days</code> - Items modified within last N days (1–30)</li>
                     <li><code>q</code> - Case-insensitive substring search across <code>feature_name</code>, <code>feature_description</code>, <code>product_name</code></li>
+                    <li><code>sort</code> - Sort order: <code>last_modified</code> (default) or <code>release_date</code></li>
                     <li><code>page</code> - 1-based page number (default 1)</li>
                     <li><code>page_size</code> - Items per page (default 50, max 200, min 1)</li>
                     <li><code>release_item_id</code> - If provided, bypasses pagination and returns a single release object</li>
