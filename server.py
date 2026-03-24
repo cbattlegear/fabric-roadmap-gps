@@ -616,6 +616,7 @@ def api_releases():
             "blog_title": r.blog_title,
             "blog_url": r.blog_url,
             "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
+            "active": r.active,
         }
 
     def _format_vector_row(row):
@@ -633,6 +634,7 @@ def api_releases():
             "blog_title": row.get("blog_title"),
             "blog_url": row.get("blog_url"),
             "last_modified": lm.isoformat() if lm and hasattr(lm, 'isoformat') else None,
+            "active": row.get("active"),
             "distance": round(row.get("distance"), 4) if row.get("distance") is not None else None,
         }
 
