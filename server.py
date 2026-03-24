@@ -19,6 +19,7 @@ import logging
 # Import the `configure_azure_monitor()` function from the
 # `azure.monitor.opentelemetry` package.
 from azure.monitor.opentelemetry import configure_azure_monitor
+from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
@@ -65,7 +66,6 @@ otelLogger.setLevel(logging.INFO)
 otelLogger.info('Fabric-GPS Website started')
 
 if os.getenv("CURRENT_ENVIRONMENT") == "development":
-    from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
 
@@ -96,6 +96,31 @@ FROM_EMAIL = os.getenv('FROM_EMAIL', 'noreply@yourdomain.com')
 FROM_NAME = os.getenv('FROM_NAME', 'Fabric GPS')
 BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')
 ASYNC_EMAIL_VERIFICATION = os.getenv('ASYNC_EMAIL_VERIFICATION', '1') != '0'
+
+
+@app.before_request
+def track_traffic_source():
+    """Classify each request into a traffic source for App Insights."""
+    span = trace.get_current_span()
+
+    utm_source = request.args.get('utm_source', '')
+    if utm_source:
+        traffic_source = utm_source
+    elif request.path.startswith('/rss'):
+        traffic_source = 'rss'
+    elif request.path.startswith('/api/'):
+        traffic_source = 'api'
+    else:
+        traffic_source = 'web'
+
+    span.set_attribute('traffic_source', traffic_source)
+
+    utm_medium = request.args.get('utm_medium', '')
+    utm_campaign = request.args.get('utm_campaign', '')
+    if utm_medium:
+        span.set_attribute('utm_medium', utm_medium)
+    if utm_campaign:
+        span.set_attribute('utm_campaign', utm_campaign)
 
 
 def get_email_client():

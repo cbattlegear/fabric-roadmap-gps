@@ -65,6 +65,18 @@ class WeeklyEmailSender:
         # Initialize Azure Email Client
         self.email_client = EmailClient.from_connection_string(self.connection_string)
 
+    @staticmethod
+    def _add_utm(url: str, source: str = 'email', medium: str = 'email',
+                 campaign: str = 'weekly-digest') -> str:
+        """Append UTM tracking parameters to a URL, respecting hash fragments."""
+        params = f"utm_source={source}&utm_medium={medium}&utm_campaign={campaign}"
+        if '#' in url:
+            base, fragment = url.split('#', 1)
+            sep = '&' if '?' in base else '?'
+            return f"{base}{sep}{params}#{fragment}"
+        sep = '&' if '?' in url else '?'
+        return f"{url}{sep}{params}"
+
     def send_weekly_emails(self):
         """Send weekly emails to all active subscribers"""
         try:
@@ -370,7 +382,7 @@ class WeeklyEmailSender:
 
     def generate_email_html(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel, ai_summary: Optional[str] = None) -> str:
         """Generate HTML email content styled to match index page design."""
-        unsubscribe_url = f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}"
+        unsubscribe_url = self._add_utm(f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}")
 
         # Style tokens (aligned with site)
         BODY_BG = "#f3f2f1"
@@ -405,7 +417,7 @@ class WeeklyEmailSender:
             modified_date = fmt_date(change.get('last_modified'), fallback="Unknown")
             release_type_variant = "success" if release_type == "General availability" else "warning"
             release_status_variant = "success" if release_status == "Shipped" else "warning"
-            detail_url = f"{self.base_url}/#release/{rel_id}" if rel_id else self.base_url
+            detail_url = self._add_utm(f"{self.base_url}/#release/{rel_id}") if rel_id else self._add_utm(self.base_url)
             badges_html = (
                 self._build_badge(product_name, "product") +
                 self._build_badge(release_type, release_type_variant) +
@@ -439,7 +451,7 @@ class WeeklyEmailSender:
             )
 
         footer_links = (
-            f'<a href="{self.escape_html(self.base_url)}" style="color:#19433c;text-decoration:none;font-weight:500;">Fabric GPS</a>'
+            f'<a href="{self.escape_html(self._add_utm(self.base_url))}" style="color:#19433c;text-decoration:none;font-weight:500;">Fabric GPS</a>'
         )
 
         return f"""\
@@ -455,12 +467,12 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
 </head>
 <body style=\"margin:0;padding:0;background:{BODY_BG};\">
 <span style=\"display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;\">{self.escape_html(preheader)}</span>
-<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:{BODY_BG};padding:24px 0;\">\n  <tr>\n    <td align=\"center\" style=\"padding:0 12px;\">\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"max-width:640px;\">\n        <tr>\n          <td style=\"background:{HERO_GRADIENT};color:#ffffff;border-radius:14px; padding:34px 34px 38px 34px; text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);\">\n            <h1 style=\"margin:0 0 10px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;\">🗺️ Fabric GPS Weekly Update</h1>\n            <p style=\"margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);\">Microsoft Fabric roadmap items modified during the past 7 days.</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:28px;\"></td></tr>\n        {summary_html}\n        <tr><td style=\"padding:0;\">{changes_section}</td></tr>\n        <tr>\n          <td>\n            <div style=\"background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px; padding:22px;margin:6px 0 26px 0;box-shadow:{CARD_SHADOW};text-align:center;\">\n              <p style=\"margin:0 0 14px 0;font-size:14px;color:{TEXT_SECONDARY};\">Tune your filters or explore more history on the site.</p>\n              {self._build_button(self.base_url, "Open Fabric GPS")}\n            </div>\n          </td>\n        </tr>\n        <tr>\n          <td style=\"background:#f8f9fa;border:1px solid {CARD_BORDER};border-radius:10px; padding:18px 20px;text-align:center;font-size:12px;color:{TEXT_SECONDARY}; line-height:1.5;\">\n            <p style=\"margin:0 0 6px 0;\">Sent to {self.escape_html(subscription.email)} — you’re subscribed to weekly updates.</p>\n            <p style=\"margin:0 0 6px 0;\">\n              <a href=\"{self.escape_html(unsubscribe_url)}\" style=\"color:#19433c;text-decoration:none;font-weight:500;\">Unsubscribe</a>&nbsp;|&nbsp; Data sourced from Microsoft Fabric Roadmap\n            </p>\n            <p style=\"margin:8px 0 0 0;color:#8a8886;\">{footer_links}</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:30px;\"></td></tr>\n      </table>\n    </td>\n  </tr>\n</table>\n</body>\n</html>\n"""
+<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:{BODY_BG};padding:24px 0;\">\n  <tr>\n    <td align=\"center\" style=\"padding:0 12px;\">\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"max-width:640px;\">\n        <tr>\n          <td style=\"background:{HERO_GRADIENT};color:#ffffff;border-radius:14px; padding:34px 34px 38px 34px; text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);\">\n            <h1 style=\"margin:0 0 10px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;\">🗺️ Fabric GPS Weekly Update</h1>\n            <p style=\"margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);\">Microsoft Fabric roadmap items modified during the past 7 days.</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:28px;\"></td></tr>\n        {summary_html}\n        <tr><td style=\"padding:0;\">{changes_section}</td></tr>\n        <tr>\n          <td>\n            <div style=\"background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px; padding:22px;margin:6px 0 26px 0;box-shadow:{CARD_SHADOW};text-align:center;\">\n              <p style=\"margin:0 0 14px 0;font-size:14px;color:{TEXT_SECONDARY};\">Tune your filters or explore more history on the site.</p>\n              {self._build_button(self._add_utm(self.base_url), "Open Fabric GPS")}\n            </div>\n          </td>\n        </tr>\n        <tr>\n          <td style=\"background:#f8f9fa;border:1px solid {CARD_BORDER};border-radius:10px; padding:18px 20px;text-align:center;font-size:12px;color:{TEXT_SECONDARY}; line-height:1.5;\">\n            <p style=\"margin:0 0 6px 0;\">Sent to {self.escape_html(subscription.email)} — you’re subscribed to weekly updates.</p>\n            <p style=\"margin:0 0 6px 0;\">\n              <a href=\"{self.escape_html(unsubscribe_url)}\" style=\"color:#19433c;text-decoration:none;font-weight:500;\">Unsubscribe</a>&nbsp;|&nbsp; Data sourced from Microsoft Fabric Roadmap\n            </p>\n            <p style=\"margin:8px 0 0 0;color:#8a8886;\">{footer_links}</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:30px;\"></td></tr>\n      </table>\n    </td>\n  </tr>\n</table>\n</body>\n</html>\n"""
 
     def generate_email_text(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel, ai_summary: Optional[str] = None) -> str:
         """Generate plain text email content from JSON API data"""
-        unsubscribe_url = f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}"
-        
+        unsubscribe_url = self._add_utm(f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}")
+
         text_parts = [
             "FABRIC GPS - WEEKLY UPDATE",
             "=" * 50,
@@ -508,7 +520,7 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
         
         text_parts.extend([
             "-" * 50,
-            f"Visit {self.base_url} to explore the full roadmap.",
+            f"Visit {self._add_utm(self.base_url)} to explore the full roadmap.",
             "",
             f"Unsubscribe: {unsubscribe_url}",
             "Data sourced from Microsoft Fabric Roadmap"
@@ -519,7 +531,7 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
     def send_azure_email(self, to_email: str, subject: str, html_content: str, text_content: str, unsubscribe_token: str) -> bool:
         """Send an email using Azure Communication Services"""
         try:
-            unsubscribe_url = f"{self.base_url}/unsubscribe?token={unsubscribe_token}"
+            unsubscribe_url = self._add_utm(f"{self.base_url}/unsubscribe?token={unsubscribe_token}")
             
             message = {
                 "senderAddress": self.from_email,
