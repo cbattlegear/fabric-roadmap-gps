@@ -92,6 +92,13 @@ class EmailVerificationModel(Base):
     used_at = Column(DateTime, nullable=True)
 
 
+class EmailContentCacheModel(Base):
+    __tablename__ = "email_content_cache"
+    id = Column(Integer, primary_key=True, default=1)
+    generated_at = Column(DateTime, nullable=False)
+    content_json = Column(Text, nullable=False)  # JSON blob: {changes: [...], ai_summary: "..."}
+
+
 def _is_transient_sql_azure_error(exc: Exception) -> bool:
     """
     Try to detect common transient SQL Azure / network errors.
