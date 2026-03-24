@@ -561,6 +561,10 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
             POLLER_WAIT_TIME = 10
 
             poller = self.email_client.begin_send(message)
+            # Once begin_send() succeeds the email is queued with Azure.
+            # Polling only checks delivery status — a timeout does NOT mean
+            # the email wasn't sent.  Treat polling failures as warnings,
+            # not send failures, to avoid duplicate emails on retry.
             time_elapsed = 0
             while not poller.done():
                 print("Email send poller status: " + poller.status())
@@ -569,7 +573,8 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
                 time_elapsed += POLLER_WAIT_TIME
 
                 if time_elapsed > 18 * POLLER_WAIT_TIME:
-                    raise RuntimeError("Polling timed out.")
+                    logger.warning(f"Polling timed out for {to_email} — email was already accepted by Azure, treating as sent")
+                    return True
 
             if poller.result()["status"] == "Succeeded":
                 print(f"Successfully sent the email (operation id: {poller.result()['id']})")
