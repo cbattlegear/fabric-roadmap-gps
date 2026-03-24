@@ -10,6 +10,7 @@ Run this script weekly via cron job:
 import os
 import sys
 import json
+import time
 import requests
 import logging
 from datetime import datetime, date, timedelta
@@ -100,11 +101,20 @@ class WeeklyEmailSender:
             
             sent_count = 0
             error_count = 0
+            # Azure Communication Services quota: 30 emails/minute
+            MIN_SEND_INTERVAL = 2.0  # seconds between sends (60/30)
+            last_send_time = 0.0
             
             for subscription in subscriptions:
                 try:
+                    # Throttle to stay within send quota
+                    elapsed = time.monotonic() - last_send_time
+                    if elapsed < MIN_SEND_INTERVAL:
+                        time.sleep(MIN_SEND_INTERVAL - elapsed)
+
                     if self.send_weekly_email(subscription, ai_summary=ai_summary):
                         sent_count += 1
+                        last_send_time = time.monotonic()
                         self.update_last_email_sent(subscription.id)
                     else:
                         error_count += 1
@@ -561,26 +571,10 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
             POLLER_WAIT_TIME = 10
 
             poller = self.email_client.begin_send(message)
-            # Once begin_send() succeeds the email is queued with Azure.
-            # Polling only checks delivery status — a timeout does NOT mean
-            # the email wasn't sent.  Treat polling failures as warnings,
-            # not send failures, to avoid duplicate emails on retry.
-            time_elapsed = 0
-            while not poller.done():
-                print("Email send poller status: " + poller.status())
-
-                poller.wait(POLLER_WAIT_TIME)
-                time_elapsed += POLLER_WAIT_TIME
-
-                if time_elapsed > 18 * POLLER_WAIT_TIME:
-                    logger.warning(f"Polling timed out for {to_email} — email was already accepted by Azure, treating as sent")
-                    return True
-
-            if poller.result()["status"] == "Succeeded":
-                print(f"Successfully sent the email (operation id: {poller.result()['id']})")
-                return True
-            else:
-                raise RuntimeError(str(poller.result()["error"]))
+            # begin_send() queues the email with Azure — no need to poll
+            # for delivery status. Log the operation for traceability.
+            logger.info(f"Email queued for {to_email} (operation id: {poller.result()['id'] if poller.done() else 'pending'})")
+            return True
             
         except Exception as e:
             logger.error(f"Azure Communication Services error sending to {to_email}: {e}")
