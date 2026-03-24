@@ -205,7 +205,7 @@ class WeeklyEmailSender:
 
     def _fetch_all_changes_unfiltered(self) -> List[Dict[str, Any]]:
         """Fetch all changes from the past week without subscriber-specific filters."""
-        base_params = {'modified_within_days': 7, 'page_size': 200}
+        base_params = {'modified_within_days': 7, 'page_size': 200, 'include_inactive': 'true'}
         items = self._fetch_all_pages(base_params)
         # Deduplicate
         seen: Dict[str, Dict[str, Any]] = {}
@@ -240,10 +240,12 @@ class WeeklyEmailSender:
             # Build a compact representation of changes for the prompt
             change_lines = []
             for c in changes[:50]:
+                removed_tag = " [REMOVED FROM ROADMAP]" if c.get('active') is False else ""
                 line = (
                     f"- {c.get('feature_name', 'Unknown')} "
                     f"[{c.get('product_name', '')}] "
                     f"({c.get('release_type', '')}, {c.get('release_status', '')})"
+                    f"{removed_tag}"
                 )
                 change_lines.append(line)
             changes_text = "\n".join(change_lines)
@@ -256,7 +258,9 @@ class WeeklyEmailSender:
                         "content": (
                             "You summarize Microsoft Fabric roadmap changes for a weekly email newsletter. "
                             "Write a concise 2-4 sentence executive summary highlighting the most important "
-                            "themes and notable changes. Be specific about product areas and feature names. "
+                            "themes and notable changes. Items tagged [REMOVED FROM ROADMAP] have been taken "
+                            "off the public roadmap - mention significant removals if any. "
+                            "Be specific about product areas and feature names. "
                             "Do not use markdown formatting. Write in a professional but approachable tone."
                         )
                     },
@@ -285,7 +289,8 @@ class WeeklyEmailSender:
         try:
             BASE_PARAMS = {
                 'modified_within_days': 7,
-                'page_size': 200  # request larger page size to reduce pagination loops
+                'page_size': 200,  # request larger page size to reduce pagination loops
+                'include_inactive': 'true',
             }
 
             aggregated: List[Dict[str, Any]] = []
@@ -362,6 +367,7 @@ class WeeklyEmailSender:
             "success": ("#107c10", "#ffffff"),
             "warning": ("#ca5010", "#ffffff"),
             "neutral": ("#605e5c", "#ffffff"),
+            "removed": ("#d13438", "#ffffff"),
         }
         bg, fg = colors.get(variant, colors["neutral"])
         return (
@@ -417,8 +423,11 @@ class WeeklyEmailSender:
             modified_date = fmt_date(change.get('last_modified'), fallback="Unknown")
             release_type_variant = "success" if release_type == "General availability" else "warning"
             release_status_variant = "success" if release_status == "Shipped" else "warning"
+            is_removed = change.get('active') is False
             detail_url = self._add_utm(f"{self.base_url}/#release/{rel_id}") if rel_id else self._add_utm(self.base_url)
+            removed_badge = self._build_badge("Removed", "removed") if is_removed else ""
             badges_html = (
+                removed_badge +
                 self._build_badge(product_name, "product") +
                 self._build_badge(release_type, release_type_variant) +
                 self._build_badge(release_status, release_status_variant)
@@ -508,7 +517,7 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
                     modified_date = change['last_modified']
             
             text_parts.extend([
-                f"{i}. {change.get('feature_name', 'Unnamed Feature')}",
+                f"{i}. {change.get('feature_name', 'Unnamed Feature')}{' [REMOVED]' if change.get('active') is False else ''}",
                 f"   Product: {change.get('product_name', 'Unknown')}",
                 f"   Type: {change.get('release_type', 'Unknown')}",
                 f"   Status: {change.get('release_status', 'Unknown')}",

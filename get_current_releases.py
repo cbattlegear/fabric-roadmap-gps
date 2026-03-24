@@ -8,7 +8,7 @@ import os
 from unidecode import unidecode
 
 from lib.release_item import ReleaseItem
-from db.db_sqlserver import make_engine, init_db, save_releases
+from db.db_sqlserver import make_engine, init_db, save_releases, deactivate_missing_releases
 from db.redis_cache import RedisCache
 
 # Import the `configure_azure_monitor()` function from the
@@ -57,6 +57,7 @@ if __name__ == '__main__':
     r.raise_for_status()
     families = extract_product_families(r.text)
     product_releases = {}
+    all_fetched_ids: set = set()
     change_count = 0
     for product in families:
         print(f"Product Family: {product['name']} (ID: {product['id']})")
@@ -111,9 +112,20 @@ if __name__ == '__main__':
         items = [ReleaseItem.from_dict(r) for r in release_items]
         product_releases[product['id']] = items
 
+        # Track all IDs seen in this fetch for removal detection
+        for item in items:
+            rid = str(item.release_item_id) if item.release_item_id else None
+            if rid:
+                all_fetched_ids.add(rid)
+
         stats = save_releases(engine, items)
         print("DB save stats:", stats)
         change_count += stats['updated'] + stats['inserted']
+
+    # Mark releases no longer on the roadmap as inactive
+    deactivation_stats = deactivate_missing_releases(engine, all_fetched_ids)
+    print("Deactivation stats:", deactivation_stats)
+    change_count += deactivation_stats['deactivated']
 
     if change_count > 0:
         # Cache settings: 24h fresh + 24h stale-while-revalidate window

@@ -184,9 +184,14 @@ Get real-time feeds and explore what's coming next.
                 const lm = item.last_modified ? new Date(item.last_modified).toLocaleDateString() : 'Unknown';
                 const typeClass = item.release_type === 'General availability' ? 'success' : 'warn';
                 const statusClass = item.release_status === 'Shipped' ? 'success' : 'warn';
+                const isInactive = item.active === false;
+                const removedBanner = isInactive
+                    ? '<div style="background:rgba(209,52,56,0.1); border:1px solid var(--fabric-semantic-error); border-radius:8px; padding:8px 14px; margin-bottom:12px; display:flex; align-items:center; gap:8px; font-size:.85rem; color:var(--fabric-semantic-error); font-weight:600;">⚠️ This item has been removed from the Microsoft Fabric Roadmap</div>'
+                    : '';
                 this.content.innerHTML = `
                     <div class="modal-header">
                         <h2 class="modal-title">${escapeHtml(item.feature_name || 'Unnamed Feature')}</h2>
+                        ${removedBanner}
                         <div class="modal-meta-row">
                             <span class="modal-release-info">Status: ${escapeHtml(item.release_status || 'Unknown Status')} ${escapeHtml(item.release_type || 'Unknown Type')} on ${escapeHtml(relDate)}</span>
                             <span class="modal-last-modified">Last Modified: ${escapeHtml(lm)}</span>
@@ -377,6 +382,7 @@ Get real-time feeds and explore what's coming next.
                     }
                     params.append('page', String(this.page));
                     params.append('page_size', String(this.pageSize));
+                    params.append('include_inactive', 'true');
 
                     const response = await fetch(`/api/releases?${params.toString()}`);
                     const payload = await response.json();
@@ -463,12 +469,16 @@ Get real-time feeds and explore what's coming next.
 
                 const releaseTypeClass = item.release_type == 'General availability' ? 'badge-success' : 'badge-warning';
                 const releaseStatusClass = item.release_status == 'Shipped' ? 'badge-success' : 'badge-warning';
+                const isInactive = item.active === false;
+                const inactiveClass = isInactive ? ' change-item-inactive' : '';
+                const removedBadge = isInactive ? '<span class="change-badge badge-removed">Removed</span>' : '';
 
                 return `
-                    <div class="change-item" data-id="${escapeHtml(item.release_item_id)}" role="button" tabindex="0" aria-label="View details for ${escapeHtml(item.feature_name || 'feature')}">
+                    <div class="change-item${inactiveClass}" data-id="${escapeHtml(item.release_item_id)}" role="button" tabindex="0" aria-label="View details for ${escapeHtml(item.feature_name || 'feature')}">
                         <div class="change-header">
                             <h3 class="change-title">${escapeHtml(item.feature_name || 'Unnamed Feature')}</h3>
                             <div class="change-badges">
+                                ${removedBadge}
                                 <span class="change-badge badge-product">${escapeHtml(item.product_name || 'Unknown')}</span>
                                 <span class="change-badge ${releaseTypeClass}">${escapeHtml(item.release_type || 'Unknown')}</span>
                                 <span class="change-badge ${releaseStatusClass}">${escapeHtml(item.release_status || 'Unknown')}</span>

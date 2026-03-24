@@ -589,6 +589,7 @@ def api_releases():
     page = request.args.get("page", type=int) or 1
     page_size = request.args.get("page_size", type=int) or 50
     sort = request.args.get("sort")
+    include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true", "yes")
 
     if sort not in VALID_SORT_OPTIONS:
         sort = "last_modified"
@@ -616,6 +617,7 @@ def api_releases():
             "blog_title": r.blog_title,
             "blog_url": r.blog_url,
             "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
+            "active": r.active,
         }
 
     def _format_vector_row(row):
@@ -633,6 +635,7 @@ def api_releases():
             "blog_title": row.get("blog_title"),
             "blog_url": row.get("blog_url"),
             "last_modified": lm.isoformat() if lm and hasattr(lm, 'isoformat') else None,
+            "active": row.get("active"),
             "distance": round(row.get("distance"), 4) if row.get("distance") is not None else None,
         }
 
@@ -721,6 +724,7 @@ def api_releases():
         str(page), 
         str(page_size),
         sort,
+        str(include_inactive),
     )
     cached = CACHE.get("api-page", parts)
     now_ts = _time.time()
@@ -746,22 +750,25 @@ def api_releases():
                         if query_embedding is not None:
                             total_bg = count_vector_search_releases(
                                 get_engine(), product_name=product_name, release_type=release_type,
-                                release_status=release_status, modified_within_days=modified_within_days
+                                release_status=release_status, modified_within_days=modified_within_days,
+                                include_inactive=include_inactive
                             )
                             vs_rows_bg = vector_search_releases(
                                 get_engine(), query_embedding, limit=page_size, offset=offset,
                                 product_name=product_name, release_type=release_type,
-                                release_status=release_status, modified_within_days=modified_within_days
+                                release_status=release_status, modified_within_days=modified_within_days,
+                                include_inactive=include_inactive
                             )
                             data_rows_bg = [_format_vector_row(r) for r in vs_rows_bg]
                         else:
                             total_bg = count_recently_modified_releases(
                                 get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-                                modified_within_days=modified_within_days, q=q
+                                modified_within_days=modified_within_days, q=q, include_inactive=include_inactive
                             )
                             rows_bg = get_recently_modified_releases(
                                 get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-                                modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset, sort=sort
+                                modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset, sort=sort,
+                                include_inactive=include_inactive
                             )
                             data_rows_bg = [_row_to_dict(r) for r in rows_bg]
                         total_pages_bg = (total_bg + page_size - 1) // page_size if total_bg else 1
@@ -797,22 +804,25 @@ def api_releases():
     if query_embedding is not None:
         total = count_vector_search_releases(
             get_engine(), product_name=product_name, release_type=release_type,
-            release_status=release_status, modified_within_days=modified_within_days
+            release_status=release_status, modified_within_days=modified_within_days,
+            include_inactive=include_inactive
         )
         vs_rows = vector_search_releases(
             get_engine(), query_embedding, limit=page_size, offset=offset,
             product_name=product_name, release_type=release_type,
-            release_status=release_status, modified_within_days=modified_within_days
+            release_status=release_status, modified_within_days=modified_within_days,
+            include_inactive=include_inactive
         )
         data_rows = [_format_vector_row(r) for r in vs_rows]
     else:
         total = count_recently_modified_releases(
             get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-            modified_within_days=modified_within_days, q=q
+            modified_within_days=modified_within_days, q=q, include_inactive=include_inactive
         )
         rows = get_recently_modified_releases(
             get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-            modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset, sort=sort
+            modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset, sort=sort,
+            include_inactive=include_inactive
         )
         data_rows = [_row_to_dict(r) for r in rows]
     total_pages = (total + page_size - 1) // page_size if total else 1

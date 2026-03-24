@@ -58,6 +58,8 @@ class ReleaseItemModel(Base):
     blog_url = Column(String(1000), nullable=True)
     # Vector embedding for semantic search (stored as TEXT in SQLAlchemy, actual SQL Server type is vector(1536))
     release_vector = Column(Text, nullable=True)
+    # Whether this release is still present on the Fabric roadmap
+    active = Column(Boolean, nullable=False, server_default='1', default=True)
 
 
 class EmailSubscriptionModel(Base):
@@ -336,10 +338,16 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
                         **row_values,
                         row_hash=new_hash,
                         last_modified=now,
+                        active=True,
                     )
                     session.add(model)
                     inserted += 1
                 else:
+                    # Re-activate if previously removed from roadmap
+                    if not existing.active:
+                        existing.active = True
+                        existing.last_modified = now
+
                     if (existing.row_hash or "") == new_hash:
                         unchanged += 1
                     else:
@@ -357,6 +365,62 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
 
     return {"inserted": inserted, "updated": updated, "unchanged": unchanged}
 
+
+@retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
+def deactivate_missing_releases(engine, current_ids: set) -> Dict[str, int]:
+    """Mark releases not in *current_ids* as inactive.
+
+    First-run guard: if no rows are already inactive (i.e. the ``active``
+    column was just added), deactivations do **not** update ``last_modified``
+    so the backlog of removals won't pollute change-tracking or email digests.
+    On subsequent runs the ``last_modified`` date is updated so that the
+    removal surfaces through normal feeds / notifications.
+
+    Returns counts: ``{'deactivated': n, 'already_inactive': m}``.
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    deactivated = already_inactive = 0
+
+    with SessionLocal() as session:
+        with session.begin():
+            # Determine if this is the first run by checking for any inactive rows
+            has_inactive = session.scalar(
+                select(func.count()).select_from(ReleaseItemModel)
+                .where(ReleaseItemModel.active == False)  # noqa: E712
+            ) or 0
+            is_first_run = has_inactive == 0
+
+            now = date.today()
+
+            # Find all currently-active rows whose IDs are not in the fetch
+            active_rows = session.scalars(
+                select(ReleaseItemModel)
+                .where(ReleaseItemModel.active == True)  # noqa: E712
+            ).all()
+
+            for row in active_rows:
+                if row.release_item_id not in current_ids:
+                    row.active = False
+                    if not is_first_run:
+                        row.last_modified = now
+                    deactivated += 1
+
+            # Count rows that were already inactive (informational)
+            already_inactive = session.scalar(
+                select(func.count()).select_from(ReleaseItemModel)
+                .where(
+                    ReleaseItemModel.active == False,  # noqa: E712
+                    ReleaseItemModel.release_item_id.notin_(current_ids) if current_ids else True,
+                )
+            ) or 0
+            # Subtract what we just deactivated (those weren't counted before commit)
+            already_inactive = max(0, already_inactive - deactivated)
+
+    logger.info("Deactivation stats: deactivated=%d, already_inactive=%d, first_run=%s",
+                deactivated, already_inactive, is_first_run)
+    return {"deactivated": deactivated, "already_inactive": already_inactive}
+
+
 VALID_SORT_OPTIONS = ("last_modified", "release_date")
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
@@ -370,15 +434,19 @@ def get_recently_modified_releases(
     q: Optional[str] = None,
     offset: Optional[int] = None,
     sort: Optional[str] = None,
+    include_inactive: bool = False,
 ) -> List[ReleaseItemModel]:
     """
     Return releases sorted by *sort* column (desc), filtered & paginated.
     ``sort`` must be one of ``VALID_SORT_OPTIONS`` (default ``"last_modified"``).
+    Only active releases are returned unless *include_inactive* is True.
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
 
     stmt = select(ReleaseItemModel)
     filters = []
+    if not include_inactive:
+        filters.append(ReleaseItemModel.active == True)  # noqa: E712
     if product_name is not None:
         filters.append(ReleaseItemModel.product_name == product_name)
     if release_type is not None:
@@ -424,11 +492,14 @@ def count_recently_modified_releases(
     release_status: Optional[str] = None,
     modified_within_days: Optional[int] = None,
     q: Optional[str] = None,
+    include_inactive: bool = False,
 ) -> int:
     """Return total count of releases matching filters/search."""
     SessionLocal = sessionmaker(bind=engine, future=True)
     stmt = select(func.count()).select_from(ReleaseItemModel)
     filters = []
+    if not include_inactive:
+        filters.append(ReleaseItemModel.active == True)  # noqa: E712
     if product_name is not None:
         filters.append(ReleaseItemModel.product_name == product_name)
     if release_type is not None:
@@ -708,6 +779,7 @@ def vector_search_releases(
     release_type: Optional[str] = None,
     release_status: Optional[str] = None,
     modified_within_days: Optional[int] = None,
+    include_inactive: bool = False,
 ) -> List[Dict[str, Any]]:
     """Search releases ordered by cosine similarity to query_vector."""
     vector_json = json.dumps(query_vector)
@@ -715,6 +787,8 @@ def vector_search_releases(
     conditions = ["release_vector IS NOT NULL"]
     filter_params: List[Any] = []
 
+    if not include_inactive:
+        conditions.append("active = 1")
     if product_name is not None:
         conditions.append("product_name = ?")
         filter_params.append(product_name)
@@ -734,7 +808,7 @@ def vector_search_releases(
     sql = f"""
     SELECT release_item_id, feature_name, release_date, release_type,
            release_status, product_id, product_name, feature_description,
-           blog_title, blog_url, last_modified,
+           blog_title, blog_url, last_modified, active,
            VECTOR_DISTANCE('cosine', release_vector, CAST(CAST(? AS NVARCHAR(MAX)) AS VECTOR(1536))) AS distance
     FROM release_items
     WHERE {where_sql}
@@ -766,11 +840,14 @@ def count_vector_search_releases(
     release_type: Optional[str] = None,
     release_status: Optional[str] = None,
     modified_within_days: Optional[int] = None,
+    include_inactive: bool = False,
 ) -> int:
     """Count vectorized releases matching the given filters."""
     conditions = ["release_vector IS NOT NULL"]
     params: List[Any] = []
 
+    if not include_inactive:
+        conditions.append("active = 1")
     if product_name is not None:
         conditions.append("product_name = ?")
         params.append(product_name)

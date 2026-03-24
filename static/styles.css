@@ -633,6 +633,20 @@ body {
   color: var(--fabric-neutral-grey-160);
 }
 
+.badge-removed {
+  border-color: var(--fabric-semantic-error);
+  color: var(--fabric-semantic-error);
+  background-color: rgba(209, 52, 56, 0.08);
+}
+
+.change-item-inactive {
+  opacity: 0.6;
+}
+
+.change-item-inactive:hover {
+  opacity: 0.85;
+}
+
 .change-meta {
   display: flex;
   justify-content: space-between;
