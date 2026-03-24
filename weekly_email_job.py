@@ -10,6 +10,7 @@ Run this script weekly via cron job:
 import os
 import sys
 import json
+import time
 import requests
 import logging
 from datetime import datetime, date, timedelta
@@ -23,7 +24,8 @@ from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from db.db_sqlserver import (
-    make_engine, get_unsent_active_subscriptions, EmailSubscriptionModel, EmailVerificationModel
+    make_engine, get_unsent_active_subscriptions, EmailSubscriptionModel,
+    EmailVerificationModel, EmailContentCacheModel
 )
 
 try:
@@ -52,6 +54,8 @@ logger.info('Fabric-GPS Email Batch Job started')
 
 
 class WeeklyEmailSender:
+    CONTENT_CACHE_TTL = 24 * 60 * 60  # 24 hours in seconds
+
     def __init__(self):
         # Azure Communication Services configuration
         self.connection_string = os.getenv('AZURE_COMMUNICATION_CONNECTION_STRING')
@@ -77,6 +81,64 @@ class WeeklyEmailSender:
         sep = '&' if '?' in url else '?'
         return f"{url}{sep}{params}"
 
+    def _load_or_generate_content(self):
+        """Return (all_changes, ai_summary), using a 24-hour DB cache.
+
+        On the first run of the day the data is fetched from the API and
+        an AI summary is generated, then stored in the email_content_cache
+        table. Subsequent hourly runs within the TTL reuse the cached
+        content so every subscriber batch gets identical emails regardless
+        of when their batch is processed.
+        """
+        from sqlalchemy.orm import sessionmaker
+
+        engine = make_engine()
+        SessionLocal = sessionmaker(bind=engine, future=True)
+
+        # Try reading the cache from DB
+        try:
+            with SessionLocal() as session:
+                row = session.get(EmailContentCacheModel, 1)
+                if row and row.generated_at:
+                    age_seconds = (datetime.utcnow() - row.generated_at).total_seconds()
+                    if age_seconds < self.CONTENT_CACHE_TTL:
+                        cached = json.loads(row.content_json)
+                        logger.info("Using cached email content (age: %.0f min)", age_seconds / 60)
+                        return cached['changes'], cached.get('ai_summary')
+                    logger.info("Content cache expired, regenerating")
+        except Exception as e:
+            logger.warning(f"Could not read content cache, regenerating: {e}")
+
+        # Generate fresh content
+        all_changes = self._fetch_all_changes_unfiltered()
+        ai_summary = self.generate_ai_summary(all_changes)
+        if ai_summary:
+            logger.info("AI summary generated successfully")
+        else:
+            logger.info("AI summary not available, emails will be sent without it")
+
+        # Write cache to DB
+        try:
+            content = json.dumps({'changes': all_changes, 'ai_summary': ai_summary},
+                                 separators=(',', ':'))
+            with SessionLocal() as session:
+                with session.begin():
+                    row = session.get(EmailContentCacheModel, 1)
+                    if row:
+                        row.generated_at = datetime.utcnow()
+                        row.content_json = content
+                    else:
+                        session.add(EmailContentCacheModel(
+                            id=1,
+                            generated_at=datetime.utcnow(),
+                            content_json=content,
+                        ))
+            logger.info("Email content cached in DB (%d changes)", len(all_changes))
+        except Exception as e:
+            logger.warning(f"Could not write content cache: {e}")
+
+        return all_changes, ai_summary
+
     def send_weekly_emails(self):
         """Send weekly emails to all active subscribers"""
         try:
@@ -90,21 +152,26 @@ class WeeklyEmailSender:
                 logger.info("No subscriptions to process, exiting")
                 return
 
-            # Fetch all unfiltered changes once and generate AI summary once
-            all_changes = self._fetch_all_changes_unfiltered()
-            ai_summary = self.generate_ai_summary(all_changes)
-            if ai_summary:
-                logger.info("AI summary generated successfully")
-            else:
-                logger.info("AI summary not available, emails will be sent without it")
+            # Load or generate email content (cached for 24h so all
+            # hourly batches use the same data)
+            all_changes, ai_summary = self._load_or_generate_content()
             
             sent_count = 0
             error_count = 0
+            # Azure Communication Services quota: 30 emails/minute
+            MIN_SEND_INTERVAL = 2.0  # seconds between sends (60/30)
+            last_send_time = 0.0
             
             for subscription in subscriptions:
                 try:
+                    # Throttle to stay within send quota
+                    elapsed = time.monotonic() - last_send_time
+                    if elapsed < MIN_SEND_INTERVAL:
+                        time.sleep(MIN_SEND_INTERVAL - elapsed)
+
                     if self.send_weekly_email(subscription, ai_summary=ai_summary):
                         sent_count += 1
+                        last_send_time = time.monotonic()
                         self.update_last_email_sent(subscription.id)
                     else:
                         error_count += 1
@@ -282,41 +349,19 @@ class WeeklyEmailSender:
 
     def get_changes_from_api(self, subscription: EmailSubscriptionModel) -> List[Dict[str, Any]]:
         """
-        Get last week's changes via paginated API, honoring subscriber filters.
-        De-duplicates across multiple product queries, applies additional filters,
-        sorts desc by last_modified, and caps to 50 items.
+        Get last week's changes honoring subscriber filters.
+        Filters from the cached unfiltered content when available,
+        falling back to a live API fetch if no cache exists.
         """
         try:
-            BASE_PARAMS = {
-                'modified_within_days': 7,
-                'page_size': 200,  # request larger page size to reduce pagination loops
-                'include_inactive': 'true',
-            }
+            all_changes, _ = self._load_or_generate_content()
+            items = list(all_changes)
 
-            aggregated: List[Dict[str, Any]] = []
-
+            # Apply optional product filter
             if subscription.product_filter:
-                products = [p.strip() for p in subscription.product_filter.split(',') if p.strip()]
+                products = {p.strip().lower() for p in subscription.product_filter.split(',') if p.strip()}
                 if products:
-                    for product in products:
-                        per_product_params = dict(BASE_PARAMS)
-                        per_product_params['product_name'] = product
-                        aggregated.extend(self._fetch_all_pages(per_product_params))
-                else:
-                    aggregated.extend(self._fetch_all_pages(BASE_PARAMS))
-            else:
-                aggregated.extend(self._fetch_all_pages(BASE_PARAMS))
-
-            # Deduplicate by release_item_id
-            deduped: Dict[str, Dict[str, Any]] = {}
-            for item in aggregated:
-                rid = item.get('release_item_id')
-                if not rid:
-                    continue
-                # Keep first occurrence (they should be identical across pages/products)
-                if rid not in deduped:
-                    deduped[rid] = item
-            items = list(deduped.values())
+                    items = [c for c in items if (c.get('product_name') or '').lower() in products]
 
             # Apply optional release type/status filters
             if subscription.release_type_filter:
@@ -561,21 +606,10 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
             POLLER_WAIT_TIME = 10
 
             poller = self.email_client.begin_send(message)
-            time_elapsed = 0
-            while not poller.done():
-                print("Email send poller status: " + poller.status())
-
-                poller.wait(POLLER_WAIT_TIME)
-                time_elapsed += POLLER_WAIT_TIME
-
-                if time_elapsed > 18 * POLLER_WAIT_TIME:
-                    raise RuntimeError("Polling timed out.")
-
-            if poller.result()["status"] == "Succeeded":
-                print(f"Successfully sent the email (operation id: {poller.result()['id']})")
-                return True
-            else:
-                raise RuntimeError(str(poller.result()["error"]))
+            # begin_send() queues the email with Azure — no need to poll
+            # for delivery status. Log the operation for traceability.
+            logger.info(f"Email queued for {to_email} (operation id: {poller.result()['id'] if poller.done() else 'pending'})")
+            return True
             
         except Exception as e:
             logger.error(f"Azure Communication Services error sending to {to_email}: {e}")

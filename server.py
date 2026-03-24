@@ -38,6 +38,7 @@ from db.db_sqlserver import (
     EmailSubscriptionModel, EmailVerificationModel, create_email_subscription, 
     verify_email_subscription, unsubscribe_email, fetch_history_rows, count_recently_modified_releases,
     vector_search_releases, count_vector_search_releases,
+    record_bounce,
     healthcheck as db_healthcheck,
     VALID_SORT_OPTIONS,
 )
@@ -96,6 +97,8 @@ FROM_EMAIL = os.getenv('FROM_EMAIL', 'noreply@yourdomain.com')
 FROM_NAME = os.getenv('FROM_NAME', 'Fabric GPS')
 BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')
 ASYNC_EMAIL_VERIFICATION = os.getenv('ASYNC_EMAIL_VERIFICATION', '1') != '0'
+# ACS resource ID for validating Event Grid webhook events
+ACS_RESOURCE_ID = os.getenv('ACS_RESOURCE_ID', '')
 
 
 @app.before_request
@@ -1138,6 +1141,54 @@ def api_release_history(release_item_id: str):
 @app.get("/about")
 def about_page():
     return render_template('about.html')
+
+
+@app.post("/webhooks/email-events")
+def email_events_webhook():
+    """Handle Azure Event Grid email delivery events (bounces).
+
+    Security:
+    - Validates the Event Grid subscription handshake
+    - Rejects events not from the configured ACS resource ID
+    - Always returns 200 to prevent information leakage
+    - Rate-limits bounce counting to once per subscriber per day
+    """
+    try:
+        events = request.get_json(force=True, silent=True)
+        if not events or not isinstance(events, list):
+            return jsonify({"status": "ok"}), 200
+
+        for event in events:
+            event_type = event.get("eventType", "")
+
+            # Event Grid subscription validation handshake
+            if event_type == "Microsoft.EventGrid.SubscriptionValidationEvent":
+                validation_code = event.get("data", {}).get("validationCode", "")
+                otelLogger.info("Event Grid validation handshake received")
+                return jsonify({"validationResponse": validation_code}), 200
+
+            # Validate the event comes from our ACS resource
+            topic = event.get("topic", "")
+            if ACS_RESOURCE_ID and topic != ACS_RESOURCE_ID:
+                otelLogger.warning("Rejected email event from unknown resource: %s", topic)
+                continue
+
+            # Handle bounce/suppression events
+            if event_type == "Microsoft.Communication.EmailDeliveryReportReceived":
+                data = event.get("data", {})
+                status = data.get("status", "")
+                recipient = data.get("recipient", {}).get("address", "")
+
+                if status in ("Bounced", "Suppressed") and recipient:
+                    result = record_bounce(get_engine(), recipient)
+                    if result:
+                        otelLogger.info("Bounce recorded for %s: %s", recipient, result)
+
+    except Exception as e:
+        otelLogger.error("Error processing email webhook: %s", e)
+
+    # Always return 200 to prevent email enumeration
+    return jsonify({"status": "ok"}), 200
 
 @app.get("/healthcheck")
 def healthcheck():

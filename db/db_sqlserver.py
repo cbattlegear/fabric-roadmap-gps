@@ -79,6 +79,10 @@ class EmailSubscriptionModel(Base):
     release_type_filter = Column(String(200), nullable=True)  # Comma-separated release types
     release_status_filter = Column(String(200), nullable=True)  # Comma-separated release statuses
 
+    # Bounce tracking
+    bounce_count = Column(Integer, nullable=False, server_default='0', default=0)
+    last_bounced_at = Column(DateTime, nullable=True)
+
 
 class EmailVerificationModel(Base):
     __tablename__ = "email_verifications"
@@ -90,6 +94,13 @@ class EmailVerificationModel(Base):
     expires_at = Column(DateTime, nullable=False)
     is_used = Column(Boolean, default=False, nullable=False)
     used_at = Column(DateTime, nullable=True)
+
+
+class EmailContentCacheModel(Base):
+    __tablename__ = "email_content_cache"
+    id = Column(Integer, primary_key=True, default=1)
+    generated_at = Column(DateTime, nullable=False)
+    content_json = Column(Text, nullable=False)  # JSON blob: {changes: [...], ai_summary: "..."}
 
 
 def _is_transient_sql_azure_error(exc: Exception) -> bool:
@@ -692,6 +703,45 @@ def unsubscribe_email(engine, token: str) -> bool:
         session.execute(stmt)
         session.commit()
         return True
+
+
+BOUNCE_DEACTIVATION_THRESHOLD = 3
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def record_bounce(engine, email: str) -> Optional[Dict[str, Any]]:
+    """Record a bounce for a subscriber. Deactivates after threshold.
+
+    Returns a dict with the outcome, or None if no matching subscriber.
+    Only counts one bounce per calendar day to prevent rapid deactivation.
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    now = datetime.utcnow()
+
+    with SessionLocal() as session:
+        with session.begin():
+            sub = session.scalar(
+                select(EmailSubscriptionModel)
+                .where(EmailSubscriptionModel.email == email)
+                .where(EmailSubscriptionModel.is_active == True)  # noqa: E712
+            )
+            if not sub:
+                return None
+
+            # Rate-limit: one bounce count per calendar day
+            if sub.last_bounced_at and sub.last_bounced_at.date() == now.date():
+                return {"action": "skipped", "reason": "already_bounced_today",
+                        "bounce_count": sub.bounce_count}
+
+            sub.bounce_count = (sub.bounce_count or 0) + 1
+            sub.last_bounced_at = now
+
+            if sub.bounce_count >= BOUNCE_DEACTIVATION_THRESHOLD:
+                sub.is_active = False
+                logger.warning("Deactivated subscriber %s after %d bounces",
+                               email, sub.bounce_count)
+                return {"action": "deactivated", "bounce_count": sub.bounce_count}
+
+            return {"action": "recorded", "bounce_count": sub.bounce_count}
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
