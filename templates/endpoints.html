@@ -47,11 +47,12 @@
                     <li><code>release_type</code> - Exact match on release type</li>
                     <li><code>release_status</code> - Exact match on release status</li>
                     <li><code>modified_within_days</code> - Items modified within last N days (1–30)</li>
-                    <li><code>q</code> - Case-insensitive substring search across <code>feature_name</code>, <code>feature_description</code>, <code>product_name</code></li>
+                    <li><code>q</code> - Case-insensitive substring search across <code>feature_name</code>, <code>feature_description</code>, <code>product_name</code>. When Azure OpenAI embeddings are configured, <code>q</code> uses vector (semantic) search instead.</li>
                     <li><code>sort</code> - Sort order: <code>last_modified</code> (default) or <code>release_date</code></li>
                     <li><code>page</code> - 1-based page number (default 1)</li>
                     <li><code>page_size</code> - Items per page (default 50, max 200, min 1)</li>
                     <li><code>release_item_id</code> - If provided, bypasses pagination and returns a single release object</li>
+                    <li><code>include_inactive</code> - Include releases removed from the roadmap (<code>true</code> or <code>1</code>). Default: only active releases are returned.</li>
                 </ul>
 
                 <p style="margin-top: var(--spacing-s);"><strong>Notes:</strong></p>
@@ -107,7 +108,10 @@
             "product_id": "uuid|null",
             "product_name": "string",
             "feature_description": "string|null",
-            "last_modified": "YYYY-MM-DD"  
+            "blog_title": "string|null",
+            "blog_url": "string|null",
+            "last_modified": "YYYY-MM-DD",
+            "active": true
         }
         // ... up to page_size items
     ],
@@ -140,16 +144,27 @@
     "product_id": "uuid|null",
     "product_name": "string",
     "feature_description": "string|null",
-    "last_modified": "YYYY-MM-DD"
+    "blog_title": "string|null",
+    "blog_url": "string|null",
+    "last_modified": "YYYY-MM-DD",
+    "active": true
 }</code></pre>
 
                                 <h3>History Endpoint <code>/api/releases/history/&lt;release_item_id&gt;</code></h3>
+                                <p>Returns the change history for a single release item, newest first. Each entry shows which fields changed. Possible change descriptions include field diffs (e.g. <code>Release Date 2025-06-01 -&gt; 2025-09-01</code>), <code>Roadmap Item Added</code>, <code>Removed from Roadmap</code>, and <code>Restored to Roadmap</code>.</p>
                                 <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>[
     {
-        "changed_columns": ["FeatureDescription", "ReleaseDate"],
-        "last_modified": "2025-01-12"
+        "changed_columns": "Removed from Roadmap",
+        "last_modified": "2026-03-20"
     },
-    // ... newest first
+    {
+        "changed_columns": "Release Status In Development -> Shipped",
+        "last_modified": "2026-02-15"
+    },
+    {
+        "changed_columns": "Roadmap Item Added",
+        "last_modified": "2025-01-12"
+    }
 ]</code></pre>
 
                                 <h3>Filter Options <code>/api/filter-options</code></h3>
@@ -190,7 +205,7 @@
                 <ul>
                                         <li><strong>Redis Fresh Window:</strong> 24h (immediate responses)</li>
                                         <li><strong>Redis Stale Window:</strong> +24h (served while background refresh occurs)</li>
-                                        <li><strong>Key Dimensions (collection):</strong> product_name, release_type, release_status, modified_within_days, q, page, page_size</li>
+                                        <li><strong>Key Dimensions (collection):</strong> product_name, release_type, release_status, modified_within_days, q, page, page_size, sort, include_inactive</li>
                                         <li><strong>Key Dimensions (single item):</strong> release_item_id</li>
                                         <li><strong>Background Refresh:</strong> Locking avoids thundering herd; stale responses annotated with <code>X-Cache: STALE</code></li>
                                         <li><strong>Client Cache:</strong> Shorter 30m TTL encourages conditional revalidation with <code>ETag</code></li>
