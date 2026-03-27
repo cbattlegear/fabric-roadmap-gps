@@ -8,6 +8,7 @@ import os
 from unidecode import unidecode
 
 from lib.release_item import ReleaseItem
+from lib.frontdoor import purge_cache as purge_frontdoor_cache
 from db.db_sqlserver import make_engine, init_db, save_releases, deactivate_missing_releases
 # Import the `configure_azure_monitor()` function from the
 # `azure.monitor.opentelemetry` package.
@@ -124,5 +125,9 @@ if __name__ == '__main__':
     deactivation_stats = deactivate_missing_releases(engine, all_fetched_ids)
     print("Deactivation stats:", deactivation_stats)
     change_count += deactivation_stats['deactivated']
+
+    if change_count > 0:
+        otelLogger.info(f'Purging Front Door cache due to {change_count} changes')
+        purge_frontdoor_cache()
 
     otelLogger.info(f'Fabric-GPS Database Refresh completed with {change_count} changes')
