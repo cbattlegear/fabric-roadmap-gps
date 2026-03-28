@@ -8,9 +8,8 @@ import os
 from unidecode import unidecode
 
 from lib.release_item import ReleaseItem
+from lib.frontdoor import purge_cache as purge_frontdoor_cache
 from db.db_sqlserver import make_engine, init_db, save_releases, deactivate_missing_releases
-from db.redis_cache import RedisCache
-
 # Import the `configure_azure_monitor()` function from the
 # `azure.monitor.opentelemetry` package.
 from azure.monitor.opentelemetry import configure_azure_monitor
@@ -128,13 +127,7 @@ if __name__ == '__main__':
     change_count += deactivation_stats['deactivated']
 
     if change_count > 0:
-        # Cache settings: 24h fresh + 24h stale-while-revalidate window
-        _TTL_SECONDS = 24 * 60 * 60  # 24 hours fresh
-        _STALE_TTL_SECONDS = _TTL_SECONDS  # additional stale window
-        _LOCK_TTL_SECONDS = 60  # lock TTL to avoid stampede during refresh
-
-        # Redis cache instance (fresh = 24h, stale = 24h)
-        CACHE = RedisCache(ttl_seconds=_TTL_SECONDS, lock_ttl_seconds=_LOCK_TTL_SECONDS, stale_ttl_seconds=_STALE_TTL_SECONDS)
-        CACHE.flush()
+        otelLogger.info(f'Purging Front Door cache due to {change_count} changes')
+        purge_frontdoor_cache()
 
     otelLogger.info(f'Fabric-GPS Database Refresh completed with {change_count} changes')

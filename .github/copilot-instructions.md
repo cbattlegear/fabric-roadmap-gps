@@ -23,11 +23,11 @@ Fabric GPS is a Python/Flask application that tracks Microsoft Fabric roadmap re
 
 ### Caching
 
-`db/redis_cache.py` provides a `RedisCache` class with stale-while-revalidate semantics (24h fresh + 24h stale window). The cache gracefully degrades when Redis is unavailable. The `get_current_releases.py` fetch job flushes the cache when changes are detected.
+Caching is handled by Azure Front Door at the CDN edge. The server sets HTTP cache headers (`Cache-Control`, `ETag`, `Last-Modified`) on all API and RSS responses. `Cache-Control: public, max-age=14400, stale-while-revalidate=3600` provides a 4-hour fresh window with 1-hour stale-while-revalidate. When the `fetch` job detects data changes, it purges the Front Door cache via the ARM REST API (`lib/frontdoor.py`), authenticated with `DefaultAzureCredential`.
 
 ### Observability
 
-Azure Monitor / OpenTelemetry is wired into Flask, SQLAlchemy, and Redis via `azure-monitor-opentelemetry` and the `opentelemetry-instrumentation-*` packages. Each mode sets its own `OTEL_SERVICE_NAME`. Telemetry is disabled when `CURRENT_ENVIRONMENT=development`.
+Azure Monitor / OpenTelemetry is wired into Flask and SQLAlchemy via `azure-monitor-opentelemetry` and the `opentelemetry-instrumentation-*` packages. Each mode sets its own `OTEL_SERVICE_NAME`. Telemetry is disabled when `CURRENT_ENVIRONMENT=development`.
 
 ## Build & Run
 
@@ -67,5 +67,5 @@ alembic revision --autogenerate -m "description"
 - **Row-hash change detection**: `release_items` uses a SHA-256 hash (`row_hash`) computed from normalized content fields. Only insert/update when the hash changes, and null out `release_vector`, `blog_title`, `blog_url` on content change to trigger downstream re-processing.
 - **`ReleaseItem` dataclass** (`lib/release_item.py`): Used by `get_current_releases.py` for parsing API JSON. Field mapping uses PascalCase keys from the Fabric API (e.g., `FeatureName`, `ReleaseType`) mapped to snake_case model attributes.
 - **Templates**: Jinja2 HTML templates in `templates/`, static assets in `static/`. The frontend is server-rendered.
-- **Environment variables**: All configuration is via env vars — see `.env.example`. Key vars: `SQLSERVER_CONN`, `REDIS_URL`, `AZURE_COMMUNICATION_CONNECTION_STRING`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `APP_MODE`, `CURRENT_ENVIRONMENT`, `BASE_URL`.
+- **Environment variables**: All configuration is via env vars — see `.env.example`. Key vars: `SQLSERVER_CONN`, `AZURE_COMMUNICATION_CONNECTION_STRING`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `APP_MODE`, `CURRENT_ENVIRONMENT`, `BASE_URL`.
 - **Naming convention for SQLAlchemy constraints**: Defined in `db/db_sqlserver.py` metadata (`ix_`, `uq_`, `ck_`, `fk_`, `pk_` prefixes). Alembic's `env.py` references `Base.metadata` from this module.

@@ -2,23 +2,10 @@
 
 Small Flask server that exposes an RSS 2.0 feed and basic REST API for the Fabric Roadmap
 
-## Redis-backed caching
+## Caching
 
-This app uses Redis for response caching (RSS, API, and index) with stale-while-revalidate.
+Caching is handled by Azure Front Door at the CDN edge. The server sets HTTP cache headers on all API and RSS responses:
 
-- Fresh window: 24 hours
-- Stale-while-revalidate window: additional 24 hours
-- ETag and Last-Modified headers are set; 304 responses are supported.
-
-Enable Redis via environment variables (any of the following):
-
-- REDIS_URL (e.g. `redis://:password@hostname:6379/0`)
-- REDIS_HOST (default `localhost`)
-- REDIS_PORT (default `6379`)
-- REDIS_DB (default `0`)
-- REDIS_PASSWORD (optional)
-- APP_CACHE_NS (optional key namespace, default `fabric-gps`)
-
-If Redis is not configured/reachable, the app gracefully falls back to no-cache for that request.
-
-In Docker/Kubernetes, point `REDIS_URL` at your Redis service, e.g. `REDIS_URL=redis://redis:6379/0`.
+- `Cache-Control: public, max-age=14400, stale-while-revalidate=3600` (4h fresh, 1h stale)
+- `ETag` — Weak content hash for conditional GET (send `If-None-Match` to receive 304)
+- `Last-Modified` — Timestamp for conditional requests
