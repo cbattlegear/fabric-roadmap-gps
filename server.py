@@ -77,7 +77,9 @@ if os.getenv("CURRENT_ENVIRONMENT") == "development":
 ENGINE = None
 
 # Cache-Control max-age for HTTP responses (Azure Front Door caching)
-_FRONT_END_TTL = 30 * 60  # 30 minutes
+# Purge on data changes handles real-time freshness; TTL is a fallback safety net.
+_FRONT_END_TTL = 4 * 60 * 60  # 4 hours fresh
+_STALE_TTL = 1 * 60 * 60     # 1 hour stale-while-revalidate
 
 # Email configuration
 EMAIL_CLIENT = None
@@ -373,7 +375,7 @@ def _make_cached_response(body: str, mimetype: str = "application/json; charset=
         return Response(status=304)
     resp = Response(body, mimetype=mimetype)
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f'public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL // 2}'
+    resp.headers['Cache-Control'] = f'public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_STALE_TTL}'
     resp.headers['Last-Modified'] = format_datetime(datetime.now(timezone.utc))
     return resp
 

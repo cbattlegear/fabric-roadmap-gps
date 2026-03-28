@@ -194,7 +194,7 @@
                                 <ul>
                                         <li><strong>ETag</strong> - Weak hash for conditional GET (send <code>If-None-Match</code> to receive 304)</li>
                                         <li><strong>Last-Modified</strong> - Based on build time (collection) or entity timestamp</li>
-                                        <li><strong>Cache-Control</strong> - <code>public, max-age=1800, stale-while-revalidate=900</code> (30 min fresh, 15 min serve-stale)</li>
+                                        <li><strong>Cache-Control</strong> - <code>public, max-age=14400, stale-while-revalidate=3600</code> (4h fresh, 1h serve-stale)</li>
                                 </ul>
                                 <p>Caching is handled by Azure Front Door at the CDN edge. The server sets appropriate HTTP cache headers on responses.</p>
             </section>
@@ -204,7 +204,7 @@
                                 <p>Summary of caching strategy:</p>
                 <ul>
                                         <li><strong>CDN Cache (Azure Front Door):</strong> Responses cached at edge based on Cache-Control headers</li>
-                                        <li><strong>Cache-Control:</strong> <code>public, max-age=1800, stale-while-revalidate=900</code> (30 min fresh, 15 min stale)</li>
+                                        <li><strong>Cache-Control:</strong> <code>public, max-age=14400, stale-while-revalidate=3600</code> (4h fresh, 1h stale)</li>
                                         <li><strong>ETag:</strong> Weak content hash enables conditional GET (304 Not Modified)</li>
                                         <li><strong>Last-Modified:</strong> Build timestamp for conditional revalidation</li>
                 </ul>
