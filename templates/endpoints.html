@@ -194,21 +194,19 @@
                                 <ul>
                                         <li><strong>ETag</strong> - Weak hash for conditional GET (send <code>If-None-Match</code> to receive 304)</li>
                                         <li><strong>Last-Modified</strong> - Based on build time (collection) or entity timestamp</li>
-                                        <li><strong>Cache-Control</strong> - <code>public, max-age=1800, stale-while-revalidate=900</code> (30 min fresh, 15 min serve-stale)</li>
+                                        <li><strong>Cache-Control</strong> - <code>public, max-age=14400, stale-while-revalidate=3600</code> (4h fresh, 1h serve-stale)</li>
                                 </ul>
-                                <p>Server-side Redis cache keeps a 24h fresh + 24h stale copy; client-facing headers use shorter periods for responsiveness.</p>
+                                <p>Caching is handled by Azure Front Door at the CDN edge. The server sets appropriate HTTP cache headers on responses.</p>
             </section>
 
             <section class="endpoint-section">
                 <h2>Caching & Performance</h2>
-                                <p>Summary of server-side caching layers:</p>
+                                <p>Summary of caching strategy:</p>
                 <ul>
-                                        <li><strong>Redis Fresh Window:</strong> 24h (immediate responses)</li>
-                                        <li><strong>Redis Stale Window:</strong> +24h (served while background refresh occurs)</li>
-                                        <li><strong>Key Dimensions (collection):</strong> product_name, release_type, release_status, modified_within_days, q, page, page_size, sort, include_inactive</li>
-                                        <li><strong>Key Dimensions (single item):</strong> release_item_id</li>
-                                        <li><strong>Background Refresh:</strong> Locking avoids thundering herd; stale responses annotated with <code>X-Cache: STALE</code></li>
-                                        <li><strong>Client Cache:</strong> Shorter 30m TTL encourages conditional revalidation with <code>ETag</code></li>
+                                        <li><strong>CDN Cache (Azure Front Door):</strong> Responses cached at edge based on Cache-Control headers</li>
+                                        <li><strong>Cache-Control:</strong> <code>public, max-age=14400, stale-while-revalidate=3600</code> (4h fresh, 1h stale)</li>
+                                        <li><strong>ETag:</strong> Weak content hash enables conditional GET (304 Not Modified)</li>
+                                        <li><strong>Last-Modified:</strong> Build timestamp for conditional revalidation</li>
                 </ul>
             </section>
     </div>

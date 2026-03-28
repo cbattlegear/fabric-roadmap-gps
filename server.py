@@ -6,14 +6,11 @@ import logging
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional, List
 
-from flask import Flask, request, Response, jsonify, render_template
+from flask import Flask, request, Response, jsonify, render_template, redirect
 from html import escape
 from email.utils import format_datetime
-import time as _time
 import hashlib
-from sqlalchemy import select
 from sqlalchemy.orm import sessionmaker
-from db.redis_cache import RedisCache
 
 import logging
 # Import the `configure_azure_monitor()` function from the
@@ -23,7 +20,7 @@ from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
-from opentelemetry.instrumentation.redis import RedisInstrumentor
+
 
 # Azure Communication Services for email
 try:
@@ -48,7 +45,6 @@ os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
 app = Flask(__name__)
 
-RedisInstrumentor().instrument()
 FlaskInstrumentor().instrument_app(app, excluded_urls="healthcheck")
 
 logger_name = __name__
@@ -79,17 +75,11 @@ if os.getenv("CURRENT_ENVIRONMENT") == "development":
     tracer_provider.add_span_processor(span_processor)
 
 ENGINE = None
-REDIS = None
 
-# Cache settings: 24h fresh + 24h stale-while-revalidate window
-_TTL_SECONDS = 24 * 60 * 60  # 24 hours fresh
-_STALE_TTL_SECONDS = _TTL_SECONDS  # additional stale window
-_LOCK_TTL_SECONDS = 60  # lock TTL to avoid stampede during refresh
-
-_FRONT_END_TTL = 30 * 60  # 30 minutes
-
-# Redis cache instance (fresh = 24h, stale = 24h)
-CACHE = RedisCache(ttl_seconds=_TTL_SECONDS, lock_ttl_seconds=_LOCK_TTL_SECONDS, stale_ttl_seconds=_STALE_TTL_SECONDS)
+# Cache-Control max-age for HTTP responses (Azure Front Door caching)
+# Purge on data changes handles real-time freshness; TTL is a fallback safety net.
+_FRONT_END_TTL = 4 * 60 * 60  # 4 hours fresh
+_STALE_TTL = 1 * 60 * 60     # 1 hour stale-while-revalidate
 
 # Email configuration
 EMAIL_CLIENT = None
@@ -99,6 +89,30 @@ BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')
 ASYNC_EMAIL_VERIFICATION = os.getenv('ASYNC_EMAIL_VERIFICATION', '1') != '0'
 # ACS resource ID for validating Event Grid webhook events
 ACS_RESOURCE_ID = os.getenv('ACS_RESOURCE_ID', '')
+
+
+CANONICAL_HOST = os.getenv('CANONICAL_HOST', '')
+REDIRECT_HOSTS = {h.strip() for h in os.getenv('REDIRECT_HOSTS', '').split(',') if h.strip()}
+
+_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/api/subscribe", "/api/verify-email")
+
+
+@app.after_request
+def prevent_caching_sensitive_pages(response):
+    """Prevent Front Door / browsers from caching pages with user tokens."""
+    if request.path.startswith(_NO_CACHE_PATHS):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+@app.before_request
+def redirect_to_canonical_host():
+    """301 redirect specific hosts (e.g. apex domain) to the canonical host."""
+    if CANONICAL_HOST and request.host in REDIRECT_HOSTS:
+        return redirect(
+            f"https://{CANONICAL_HOST}{request.full_path}".rstrip("?"),
+            code=301,
+        )
 
 
 @app.before_request
@@ -364,10 +378,22 @@ def build_rss_xml(rows: List[ReleaseItemModel],
     return "\n".join(parts)
 
 
+def _make_cached_response(body: str, mimetype: str = "application/json; charset=utf-8") -> Response:
+    """Build a Response with ETag, Cache-Control, and Last-Modified headers for Front Door caching."""
+    etag = 'W/"' + hashlib.sha256(body.encode('utf-8')).hexdigest() + '"'
+    inm = request.headers.get("If-None-Match")
+    if inm and inm == etag:
+        return Response(status=304)
+    resp = Response(body, mimetype=mimetype)
+    resp.headers['ETag'] = etag
+    resp.headers['Cache-Control'] = f'public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_STALE_TTL}'
+    resp.headers['Last-Modified'] = format_datetime(datetime.now(timezone.utc))
+    return resp
+
+
 @app.get("/rss")
 @app.get("/rss.xml")
 def rss_feed():
-    # Optional filters via query string; exact matches per current helper
     product_name = request.args.get("product_name")
     release_type = request.args.get("release_type")
     release_status = request.args.get("release_status")
@@ -377,56 +403,6 @@ def rss_feed():
         limit = 25
     limit = max(1, min(limit, 25))
 
-    # Redis-backed cache key from parameters
-    parts = (product_name or "", release_type or "", release_status or "", str(limit))
-    cached = CACHE.get("rss", parts)
-    now_ts = _time.time()
-    if cached:
-        otelLogger.info(f"Cache hit for RSS feed {'/'.join(parts)}")
-        fresh_until = cached.get("fresh_until_ts", 0)
-        stale_until = cached.get("stale_until_ts", 0)
-        built_iso = cached.get("built_iso")
-        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
-        # fresh
-        if now_ts <= fresh_until:
-            inm = request.headers.get("If-None-Match")
-            if inm and inm == cached.get("etag"):
-                return Response(status=304)
-            resp = Response(cached.get("body", ""), mimetype="application/rss+xml; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            return resp
-        # stale but within serveable window
-        if now_ts <= stale_until:
-            # Attempt to acquire refresh lock and refresh in background
-            if CACHE.try_acquire_lock("rss", parts):
-                def _refresh_rss_bg():
-                    try:
-                        rows_bg = get_recently_modified_releases(
-                            get_engine(),
-                            limit=int(parts[3]),
-                            product_name=parts[0] or None,
-                            release_type=parts[1] or None,
-                            release_status=parts[2] or None,
-                        )
-                        xml_bg = build_rss_xml(rows_bg, description=f"Up to {parts[3]} most recently modified releases")
-                        built_bg = datetime.now(timezone.utc)
-                        etag_bg = 'W/"' + hashlib.sha256(xml_bg.encode('utf-8')).hexdigest() + '"'
-                        CACHE.set("rss", parts, xml_bg, etag_bg, built_bg)
-                    finally:
-                        CACHE.release_lock("rss", parts)
-
-                threading.Thread(target=_refresh_rss_bg, daemon=True).start()
-            resp = Response(cached.get("body", ""), mimetype="application/rss+xml; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            resp.headers['X-Cache'] = 'STALE'
-            return resp
-
-    otelLogger.info(f"Cache miss for RSS feed {'/'.join(parts)}")
-    # No cache: build synchronously
     rows = get_recently_modified_releases(
         get_engine(),
         limit=limit,
@@ -435,14 +411,7 @@ def rss_feed():
         release_status=release_status,
     )
     xml = build_rss_xml(rows, description=f"Up to {limit} most recently modified releases")
-    built_dt = datetime.now(timezone.utc)
-    etag = 'W/"' + hashlib.sha256(xml.encode('utf-8')).hexdigest() + '"'
-    CACHE.set("rss", parts, xml, etag, built_dt)
-    resp = Response(xml, mimetype="application/rss+xml; charset=utf-8")
-    resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-    resp.headers['Last-Modified'] = format_datetime(built_dt)
-    return resp
+    return _make_cached_response(xml, mimetype="application/rss+xml; charset=utf-8")
 
 
 @app.get("/")
@@ -454,54 +423,8 @@ def index():
 @app.get("/endpoints")
 def endpoints():
     """API documentation page (moved from old index)"""
-    parts = ("endpoints",)
-    cached = CACHE.get("endpoints", parts)
-    now_ts = _time.time()
-    if cached:
-        otelLogger.info(f"Cache hit for /endpoints")
-        fresh_until = cached.get("fresh_until_ts", 0)
-        stale_until = cached.get("stale_until_ts", 0)
-        built_iso = cached.get("built_iso")
-        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
-        if now_ts <= fresh_until:
-            inm = request.headers.get("If-None-Match")
-            if inm and inm == cached.get("etag"):
-                return Response(status=304)
-            return Response(cached.get("body", ""), mimetype="text/html; charset=utf-8", headers={
-                'ETag': cached.get("etag", ""),
-                'Cache-Control': f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}",
-                'Last-Modified': format_datetime(built_dt)
-            })
-        if now_ts <= stale_until:
-            if CACHE.try_acquire_lock("endpoints", parts):
-                def _refresh_endpoints_bg():
-                    try:
-                        html_bg = _build_endpoints_html()
-                        etag_bg = 'W/"' + hashlib.sha256(html_bg.encode('utf-8')).hexdigest() + '"'
-                        built_bg = datetime.now(timezone.utc)
-                        CACHE.set("endpoints", parts, html_bg, etag_bg, built_bg)
-                    finally:
-                        CACHE.release_lock("endpoints", parts)
-
-                threading.Thread(target=_refresh_endpoints_bg, daemon=True).start()
-            return Response(cached.get("body", ""), mimetype="text/html; charset=utf-8", headers={
-                'ETag': cached.get("etag", ""),
-                'Cache-Control': f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}",
-                'Last-Modified': format_datetime(built_dt),
-                'X-Cache': 'STALE'
-            })
-
-    # No cache or expired beyond stale window: build synchronously
-    otelLogger.info(f"Cache miss for /endpoints")
     html = _build_endpoints_html()
-    etag = 'W/"' + hashlib.sha256(html.encode('utf-8')).hexdigest() + '"'
-    built_dt = datetime.now(timezone.utc)
-    CACHE.set("endpoints", parts, html, etag, built_dt)
-    return Response(html, mimetype="text/html; charset=utf-8", headers={
-        'ETag': etag,
-        'Cache-Control': f"public, max-age={_TTL_SECONDS}, stale-while-revalidate={_STALE_TTL_SECONDS}",
-        'Last-Modified': format_datetime(built_dt)
-    })
+    return _make_cached_response(html, mimetype="text/html; charset=utf-8")
 
 
 def _build_endpoints_html() -> str:
@@ -642,53 +565,8 @@ def api_releases():
             "distance": round(row.get("distance"), 4) if row.get("distance") is not None else None,
         }
 
-    # Single item path (legacy style, keep existing caching envelope not wrapped)
+    # Single item path
     if release_item_id:
-        # (retain existing code below untouched)
-        parts_item = (release_item_id,)
-        now_ts_item = _time.time()
-        cached_item = CACHE.get("api-item", parts_item)
-        if cached_item:
-            fresh_until = cached_item.get("fresh_until_ts", 0)
-            stale_until = cached_item.get("stale_until_ts", 0)
-            built_iso = cached_item.get("built_iso")
-            built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
-            if now_ts_item <= fresh_until:
-                inm = request.headers.get("If-None-Match")
-                if inm and inm == cached_item.get("etag"):
-                    return Response(status=304)
-                resp = Response(cached_item.get("body", ""), mimetype="application/json; charset=utf-8")
-                resp.headers['ETag'] = cached_item.get("etag", "")
-                resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-                resp.headers['Last-Modified'] = format_datetime(built_dt)
-                return resp
-            if now_ts_item <= stale_until:
-                if CACHE.try_acquire_lock("api-item", parts_item):
-                    def _refresh_item_bg():
-                        try:
-                            engine_bg = get_engine()
-                            SessionLocal_bg = sessionmaker(bind=engine_bg, future=True)
-                            with SessionLocal_bg() as session_bg:
-                                row_bg = session_bg.get(ReleaseItemModel, release_item_id)
-                                if not row_bg:
-                                    # If item disappeared, release cache so next request 404s
-                                    CACHE.release_lock("api-item", parts_item)
-                                    return
-                                data_bg = _row_to_dict(row_bg)
-                                json_bg = json.dumps(data_bg, sort_keys=True, separators=(",", ":"))
-                                etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
-                                built_bg = datetime.now(timezone.utc)
-                                CACHE.set("api-item", parts_item, json_bg, etag_bg, built_bg)
-                        finally:
-                            CACHE.release_lock("api-item", parts_item)
-                    threading.Thread(target=_refresh_item_bg, daemon=True).start()
-                resp = Response(cached_item.get("body", ""), mimetype="application/json; charset=utf-8")
-                resp.headers['ETag'] = cached_item.get("etag", "")
-                resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-                resp.headers['Last-Modified'] = format_datetime(built_dt)
-                resp.headers['X-Cache'] = 'STALE'
-                return resp
-        # Cache miss path
         engine = get_engine()
         SessionLocal = sessionmaker(bind=engine, future=True)
         with SessionLocal() as session:
@@ -697,113 +575,16 @@ def api_releases():
                 return jsonify({"error": "release_item_id not found"}), 404
             data = _row_to_dict(row)
             json_item = json.dumps(data, sort_keys=True, separators=(",", ":"))
-            etag_item = 'W/"' + hashlib.sha256(json_item.encode('utf-8')).hexdigest() + '"'
-            built_dt_item = datetime.now(timezone.utc)
-            CACHE.set("api-item", parts_item, json_item, etag_item, built_dt_item)
-            resp = Response(json_item, mimetype="application/json; charset=utf-8")
-            resp.headers['ETag'] = etag_item
-            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt_item)
-            return resp
-
-    use_cache = not (q and str(q).strip())
+            return _make_cached_response(json_item)
 
     # Generate embedding for vector search when q is provided
     query_embedding = None
     if q and str(q).strip() and embeddings_available():
         query_embedding = get_embedding(str(q).strip())
 
-    # (Remove old non-paginated collection logic and replace with pagination)
-    # Always cache pages (including those with search q) using page & page_size in key
     offset = (page - 1) * page_size
 
-    # Cache key parts now include page & page_size
-    parts = (
-        product_name or "", 
-        release_type or "", 
-        release_status or "", 
-        str(modified_within_days), 
-        q or "", 
-        str(page), 
-        str(page_size),
-        sort,
-        str(include_inactive),
-    )
-    cached = CACHE.get("api-page", parts)
-    now_ts = _time.time()
-
-    if cached:
-        fresh_until = cached.get("fresh_until_ts", 0)
-        stale_until = cached.get("stale_until_ts", 0)
-        built_iso = cached.get("built_iso")
-        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
-        if now_ts <= fresh_until:
-            inm = request.headers.get("If-None-Match")
-            if inm and inm == cached.get("etag"):
-                return Response(status=304)
-            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            return resp
-        if now_ts <= stale_until:
-            if CACHE.try_acquire_lock("api-page", parts):
-                def _refresh_page_bg():
-                    try:
-                        if query_embedding is not None:
-                            total_bg = count_vector_search_releases(
-                                get_engine(), product_name=product_name, release_type=release_type,
-                                release_status=release_status, modified_within_days=modified_within_days,
-                                include_inactive=include_inactive
-                            )
-                            vs_rows_bg = vector_search_releases(
-                                get_engine(), query_embedding, limit=page_size, offset=offset,
-                                product_name=product_name, release_type=release_type,
-                                release_status=release_status, modified_within_days=modified_within_days,
-                                include_inactive=include_inactive
-                            )
-                            data_rows_bg = [_format_vector_row(r) for r in vs_rows_bg]
-                        else:
-                            total_bg = count_recently_modified_releases(
-                                get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-                                modified_within_days=modified_within_days, q=q, include_inactive=include_inactive
-                            )
-                            rows_bg = get_recently_modified_releases(
-                                get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-                                modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset, sort=sort,
-                                include_inactive=include_inactive
-                            )
-                            data_rows_bg = [_row_to_dict(r) for r in rows_bg]
-                        total_pages_bg = (total_bg + page_size - 1) // page_size if total_bg else 1
-                        pagination_bg = {
-                            "page": page,
-                            "page_size": page_size,
-                            "total_items": total_bg,
-                            "total_pages": total_pages_bg,
-                            "has_next": page < total_pages_bg,
-                            "has_prev": page > 1,
-                            "next_page": page + 1 if page < total_pages_bg else None,
-                            "prev_page": page - 1 if page > 1 else None,
-                        }
-                        envelope_bg = {
-                            "data": data_rows_bg,
-                            "pagination": pagination_bg,
-                        }
-                        json_bg = json.dumps(envelope_bg, sort_keys=True, separators=(",", ":"))
-                        etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
-                        built_bg = datetime.now(timezone.utc)
-                        CACHE.set("api-page", parts, json_bg, etag_bg, built_bg)
-                    finally:
-                        CACHE.release_lock("api-page", parts)
-                threading.Thread(target=_refresh_page_bg, daemon=True).start()
-            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            resp.headers['X-Cache'] = 'STALE'
-            return resp
-
-    # Cache miss: compute total + page rows
+    # Build response data
     if query_embedding is not None:
         total = count_vector_search_releases(
             get_engine(), product_name=product_name, release_type=release_type,
@@ -871,13 +652,7 @@ def api_releases():
         "links": links,
     }
     json_str = json.dumps(envelope, sort_keys=True, separators=(",", ":"))
-    etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
-    built_dt = datetime.now(timezone.utc)
-    CACHE.set("api-page", parts, json_str, etag, built_dt)
-    resp = Response(json_str, mimetype="application/json; charset=utf-8")
-    resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-    resp.headers['Last-Modified'] = format_datetime(built_dt)
+    resp = _make_cached_response(json_str)
     if links.get("next") or links.get("prev"):
         link_header_parts = []
         if links.get("next"): link_header_parts.append(f"<{links['next']}>; rel=\"next\"")
@@ -890,73 +665,14 @@ def api_releases():
 @app.get("/api/filter-options")
 def api_filter_options():
     """Return JSON object with all available filter options"""
-    # Redis-backed cache key for filter options
-    parts = ("filter-options",)
-    cached = CACHE.get("filter-options", parts)
-    now_ts = _time.time()
-    
-    if cached:
-        fresh_until = cached.get("fresh_until_ts", 0)
-        stale_until = cached.get("stale_until_ts", 0)
-        built_iso = cached.get("built_iso")
-        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
-        
-        # Fresh cache
-        if now_ts <= fresh_until:
-            inm = request.headers.get("If-None-Match")
-            if inm and inm == cached.get("etag"):
-                return Response(status=304)
-            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            return resp
-        
-        # Stale but serveable
-        if now_ts <= stale_until:
-            if CACHE.try_acquire_lock("filter-options", parts):
-                def _refresh_filter_options_bg():
-                    try:
-                        engine_bg = get_engine()
-                        filter_data_bg = {
-                            "product_names": get_distinct_values(engine_bg, 'product_name'),
-                            "release_types": get_distinct_values(engine_bg, 'release_type'),
-                            "release_statuses": get_distinct_values(engine_bg, 'release_status')
-                        }
-                        json_bg = json.dumps(filter_data_bg, separators=(',', ':'))
-                        etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
-                        built_bg = datetime.now(timezone.utc)
-                        CACHE.set("filter-options", parts, json_bg, etag_bg, built_bg)
-                    finally:
-                        CACHE.release_lock("filter-options", parts)
-
-                threading.Thread(target=_refresh_filter_options_bg, daemon=True).start()
-            
-            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            resp.headers['X-Cache'] = 'STALE'
-            return resp
-
-    # No cache or expired: build synchronously
     engine = get_engine()
     filter_data = {
         "product_names": get_distinct_values(engine, 'product_name'),
         "release_types": get_distinct_values(engine, 'release_type'),
         "release_statuses": get_distinct_values(engine, 'release_status')
     }
-    
     json_str = json.dumps(filter_data, separators=(',', ':'))
-    etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
-    built_dt = datetime.now(timezone.utc)
-    CACHE.set("filter-options", parts, json_str, etag, built_dt)
-    
-    resp = Response(json_str, mimetype="application/json; charset=utf-8")
-    resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-    resp.headers['Last-Modified'] = format_datetime(built_dt)
-    return resp
+    return _make_cached_response(json_str)
 
 
 @app.route("/api/subscribe", methods=["POST"])
@@ -1085,57 +801,10 @@ def api_release_history(release_item_id: str):
     Stored procedure expected: [dbo].[GetReleaseItemHistoryById]
     Returns columns: VersionNum, release_item_id, ChangedColumns, last_modified
     We only expose ChangedColumns and last_modified sorted desc by VersionNum.
-    Caching: keyed by release_item_id similar to other endpoints (fresh+stale semantics).
     """
-    # Cache key parts (single dimension)
-    parts = (release_item_id,)
-    cached = CACHE.get("history", parts)
-    now_ts = _time.time()
-
-    if cached:
-        fresh_until = cached.get("fresh_until_ts", 0)
-        stale_until = cached.get("stale_until_ts", 0)
-        built_iso = cached.get("built_iso")
-        built_dt = datetime.fromisoformat(built_iso) if built_iso else datetime.now(timezone.utc)
-        if now_ts <= fresh_until:
-            inm = request.headers.get("If-None-Match")
-            if inm and inm == cached.get("etag"):
-                return Response(status=304)
-            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            return resp
-        if now_ts <= stale_until:
-            if CACHE.try_acquire_lock("history", parts):
-                def _refresh_history_bg():
-                    try:
-                        data_bg = fetch_history_rows(get_engine(), release_item_id)
-                        json_bg = json.dumps(data_bg, sort_keys=True, separators=(",", ":"))
-                        etag_bg = 'W/"' + hashlib.sha256(json_bg.encode('utf-8')).hexdigest() + '"'
-                        built_bg = datetime.now(timezone.utc)
-                        CACHE.set("history", parts, json_bg, etag_bg, built_bg)
-                    finally:
-                        CACHE.release_lock("history", parts)
-                threading.Thread(target=_refresh_history_bg, daemon=True).start()
-            resp = Response(cached.get("body", ""), mimetype="application/json; charset=utf-8")
-            resp.headers['ETag'] = cached.get("etag", "")
-            resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-            resp.headers['Last-Modified'] = format_datetime(built_dt)
-            resp.headers['X-Cache'] = 'STALE'
-            return resp
-
-    # Cache miss or expired
     rows = fetch_history_rows(get_engine(), release_item_id)
     json_str = json.dumps(rows, sort_keys=True, separators=(",", ":"))
-    etag = 'W/"' + hashlib.sha256(json_str.encode('utf-8')).hexdigest() + '"'
-    built_dt = datetime.now(timezone.utc)
-    CACHE.set("history", parts, json_str, etag, built_dt)
-    resp = Response(json_str, mimetype="application/json; charset=utf-8")
-    resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f"public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_FRONT_END_TTL/2}"
-    resp.headers['Last-Modified'] = format_datetime(built_dt)
-    return resp
+    return _make_cached_response(json_str)
 
 
 @app.get("/about")
@@ -1193,13 +862,11 @@ def email_events_webhook():
 @app.get("/healthcheck")
 def healthcheck():
     sql_health = db_healthcheck(get_engine())
-    redis_health = CACHE.ping()
     return jsonify(
         {
             "web_server_status": "healthy",
             "sql_status": "healthy" if sql_health else "unhealthy",
-            "redis_status": "healthy" if redis_health else "unhealthy",
-        }), 200 #if sql_health and redis_health else 503
+        }), 200
 
 
 @app.context_processor
