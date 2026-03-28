@@ -93,6 +93,16 @@ ACS_RESOURCE_ID = os.getenv('ACS_RESOURCE_ID', '')
 
 CANONICAL_HOST = os.getenv('CANONICAL_HOST', '')
 
+_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/api/subscribe", "/api/verify-email")
+
+
+@app.after_request
+def prevent_caching_sensitive_pages(response):
+    """Prevent Front Door / browsers from caching pages with user tokens."""
+    if request.path.startswith(_NO_CACHE_PATHS):
+        response.headers['Cache-Control'] = 'no-store'
+    return response
+
 
 @app.before_request
 def redirect_to_canonical_host():
