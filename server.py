@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional, List
 
-from flask import Flask, request, Response, jsonify, render_template
+from flask import Flask, request, Response, jsonify, render_template, redirect
 from html import escape
 from email.utils import format_datetime
 import hashlib
@@ -87,6 +87,19 @@ BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')
 ASYNC_EMAIL_VERIFICATION = os.getenv('ASYNC_EMAIL_VERIFICATION', '1') != '0'
 # ACS resource ID for validating Event Grid webhook events
 ACS_RESOURCE_ID = os.getenv('ACS_RESOURCE_ID', '')
+
+
+CANONICAL_HOST = os.getenv('CANONICAL_HOST', '')
+
+
+@app.before_request
+def redirect_to_canonical_host():
+    """301 redirect non-canonical hosts (e.g. apex domain) to the canonical host."""
+    if CANONICAL_HOST and request.host != CANONICAL_HOST:
+        return redirect(
+            f"https://{CANONICAL_HOST}{request.full_path}".rstrip("?"),
+            code=301,
+        )
 
 
 @app.before_request
