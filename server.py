@@ -92,6 +92,7 @@ ACS_RESOURCE_ID = os.getenv('ACS_RESOURCE_ID', '')
 
 
 CANONICAL_HOST = os.getenv('CANONICAL_HOST', '')
+REDIRECT_HOSTS = {h.strip() for h in os.getenv('REDIRECT_HOSTS', '').split(',') if h.strip()}
 
 _NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/api/subscribe", "/api/verify-email")
 
@@ -106,8 +107,8 @@ def prevent_caching_sensitive_pages(response):
 
 @app.before_request
 def redirect_to_canonical_host():
-    """301 redirect non-canonical hosts (e.g. apex domain) to the canonical host."""
-    if CANONICAL_HOST and request.host != CANONICAL_HOST:
+    """301 redirect specific hosts (e.g. apex domain) to the canonical host."""
+    if CANONICAL_HOST and request.host in REDIRECT_HOSTS:
         return redirect(
             f"https://{CANONICAL_HOST}{request.full_path}".rstrip("?"),
             code=301,
