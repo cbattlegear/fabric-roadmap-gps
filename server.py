@@ -45,7 +45,7 @@ os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
 app = Flask(__name__)
 
-FlaskInstrumentor().instrument_app(app)
+FlaskInstrumentor().instrument_app(app, excluded_urls="healthcheck")
 
 logger_name = __name__
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
