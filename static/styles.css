@@ -56,6 +56,7 @@ body {
   max-width: 1200px;
   margin: 0 auto;
   padding: 0 var(--spacing-l);
+  overflow: hidden;
 }
 
 .header {
@@ -115,6 +116,8 @@ body {
   box-shadow: var(--elevation-2);
   transition: box-shadow 0.2s ease, transform 0.2s ease;
   border: 1px solid var(--fabric-neutral-grey-30);
+  overflow: hidden;
+  min-width: 0;
 }
 
 .card:hover {
@@ -133,6 +136,8 @@ body {
   color: var(--fabric-neutral-grey-90);
   margin-bottom: var(--spacing-l);
   line-height: 1.6;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .card-actions {
@@ -594,6 +599,8 @@ body {
   padding: var(--spacing-m);
   transition: all 0.2s ease;
   position: relative;
+  overflow: hidden;
+  min-width: 0;
 }
 
 .change-item:hover {
@@ -683,6 +690,8 @@ body {
   color: var(--fabric-neutral-grey-90);
   line-height: 1.5;
   margin: 0;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .change-description a,
@@ -791,10 +800,10 @@ a:focus-visible {
 }
 
 /* Modal Styles */
-.modal { position: fixed; inset: 0; display: none; z-index: 1000; }
+.modal { position: fixed; top: 0; right: 0; bottom: 0; left: 0; display: none; z-index: 1000; }
 .modal[aria-hidden="false"] { display: block; }
-.modal-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); backdrop-filter: blur(2px); }
-.modal-dialog { position: relative; background: #fff; width: min(760px, 92%); max-height: 85vh; overflow-y: auto; margin: 4rem auto; padding: var(--spacing-xl); border-radius: 12px; box-shadow: var(--elevation-8); animation: modalIn .25s ease; }
+.modal-backdrop { position: absolute; top: 0; right: 0; bottom: 0; left: 0; background: rgba(0,0,0,0.45); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+.modal-dialog { position: relative; background: #fff; width: min(760px, 92%); max-height: 85vh; overflow-y: auto; overflow-x: hidden; margin: 4rem auto; padding: var(--spacing-xl); border-radius: 12px; box-shadow: var(--elevation-8); animation: modalIn .25s ease; }
 @media (max-width: 600px){ .modal-dialog { margin: 2.5rem auto; padding: var(--spacing-l); } }
 @keyframes modalIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 .modal-close { position: absolute; top: .75rem; right: .75rem; background: transparent; border: none; font-size: 1.75rem; line-height: 1; cursor: pointer; color: var(--fabric-neutral-grey-90); }
@@ -812,7 +821,7 @@ a:focus-visible {
 .modal-release-info { color: var(--fabric-neutral-grey-90); font-weight: bold;}
 .modal-section { margin-bottom: var(--spacing-l); }
 .modal-section h4 { margin: 0 0 .5rem; font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; color: var(--fabric-neutral-grey-90); }
-.modal-description { line-height: 1.6; white-space: pre-wrap; }
+.modal-description { line-height: 1.6; white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word; }
 .modal-actions-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: var(--spacing-m); justify-content: space-between; align-items: center; }
 .link-copy { background: var(--fabric-neutral-grey-20); border: 1px solid var(--fabric-neutral-grey-30); padding: .4rem .75rem; border-radius: 4px; cursor: pointer; font-weight: 600; }
 .link-copy:hover { background: var(--fabric-neutral-grey-30); }
