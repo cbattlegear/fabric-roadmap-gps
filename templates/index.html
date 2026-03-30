@@ -17,8 +17,10 @@ Get real-time feeds and explore what's coming next.
                         Subscribe to our RSS feed to get the latest roadmap updates delivered directly to your feed reader.
                         Perfect for staying informed about new features and release dates.
                     </p>
-                    <a href="/rss" class="button button-primary">View RSS Feed</a>
-                    <a href="/rss.xml" class="button button-secondary" style="margin-left: 0.5rem;">Download XML</a>
+                    <div class="card-actions">
+                        <a href="/rss" class="button button-primary">View RSS Feed</a>
+                        <a href="/rss.xml" class="button button-secondary">Download XML</a>
+                    </div>
                 </div>
 
                 <div class="card">
@@ -27,8 +29,10 @@ Get real-time feeds and explore what's coming next.
                         Access structured roadmap data through our REST API. Filter by product, release type, status,
                         or recent changes. Perfect for integrations and custom applications.
                     </p>
-                    <a href="/api/releases" class="button button-primary">Explore API</a>
-                    <a href="/endpoints" class="button button-secondary" style="margin-left: 0.5rem;">Documentation</a>
+                    <div class="card-actions">
+                        <a href="/api/releases" class="button button-primary">Explore API</a>
+                        <a href="/endpoints" class="button button-secondary">Documentation</a>
+                    </div>
                 </div>
 
                 <div class="card">
@@ -37,7 +41,9 @@ Get real-time feeds and explore what's coming next.
                         Get one concise Monday email summarizing the week's Microsoft Fabric roadmap changes—focused
                         highlights that prep you for the week without noise or inbox clutter.
                     </p>
-                    <a href="/subscribe" class="button button-primary">Subscribe Now</a>
+                    <div class="card-actions">
+                        <a href="/subscribe" class="button button-primary">Subscribe Now</a>
+                    </div>
                 </div>
             </section>
 
@@ -488,7 +494,7 @@ Get real-time feeds and explore what's coming next.
                             <span class="change-date">Last Modified: ${date}</span>
                             <span class="release-date">Release Date: ${releaseDate}</span>
                         </div>
-                        <p class="change-description">${descriptionPrepareHtml(item.feature_description || 'No description available.')}</p>
+                        <div class="change-description">${descriptionPrepareHtml(item.feature_description || 'No description available.')}</div>
                         <div style="margin-top:.5rem; font-size:.75rem; display: flex; justify-content: space-between; align-items: center;">
                             <div class="change-link-inline" style="color: var(--fabric-primary);">Click for details ▸</div>
                             ${item.blog_title && item.blog_url ? `<a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" style="color: var(--fabric-secondary); text-decoration: none; display: flex; align-items: center; gap: .25rem;" onclick="event.stopPropagation();" title="${escapeHtml(item.blog_title)}">📚 Related blog</a>` : ''}
