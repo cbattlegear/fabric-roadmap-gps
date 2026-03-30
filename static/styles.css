@@ -65,6 +65,19 @@ body {
   margin-bottom: var(--spacing-xl);
 }
 
+.header-inner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--spacing-s);
+}
+
+.header-nav {
+  display: flex;
+  gap: 1rem;
+}
+
 .hero-section {
   text-align: center;
   padding: var(--spacing-xxl) 0;
@@ -675,7 +688,8 @@ body {
 .change-description a,
 .modal-description a {
   word-break: break-all;
-  overflow-wrap: anywhere;
+  -webkit-word-break: break-all;
+  overflow-wrap: break-word;
 }
 
 .no-results {
