@@ -77,9 +77,9 @@ if os.getenv("CURRENT_ENVIRONMENT") == "development":
 ENGINE = None
 
 # Cache-Control max-age for HTTP responses (Azure Front Door caching)
-# Purge on data changes handles real-time freshness; TTL is a fallback safety net.
-_FRONT_END_TTL = 4 * 60 * 60  # 4 hours fresh
-_STALE_TTL = 1 * 60 * 60     # 1 hour stale-while-revalidate
+# With a 1-hour TTL the cache stays reasonably fresh without needing active purges.
+_FRONT_END_TTL = 1 * 60 * 60  # 1 hour fresh
+_STALE_TTL = 10 * 60          # 10 minute stale-while-revalidate
 
 # Email configuration
 EMAIL_CLIENT = None

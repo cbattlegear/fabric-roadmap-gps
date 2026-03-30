@@ -23,7 +23,7 @@ Fabric GPS is a Python/Flask application that tracks Microsoft Fabric roadmap re
 
 ### Caching
 
-Caching is handled by Azure Front Door at the CDN edge. The server sets HTTP cache headers (`Cache-Control`, `ETag`, `Last-Modified`) on all API and RSS responses. `Cache-Control: public, max-age=14400, stale-while-revalidate=3600` provides a 4-hour fresh window with 1-hour stale-while-revalidate. When the `fetch` job detects data changes, it purges the Front Door cache via the ARM REST API (`lib/frontdoor.py`), authenticated with `DefaultAzureCredential`.
+Caching is handled by Azure Front Door at the CDN edge. The server sets HTTP cache headers (`Cache-Control`, `ETag`, `Last-Modified`) on all API and RSS responses. `Cache-Control: public, max-age=3600` provides a 1-hour fresh window.
 
 ### Observability
 
