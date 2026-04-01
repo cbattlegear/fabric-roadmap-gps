@@ -49,6 +49,11 @@ Get real-time feeds and explore what's coming next.
 
             <section class="recent-changes-section">
                 <h2 class="section-title">Recent Changes</h2>
+                <div id="stale-data-banner" class="stale-data-banner" style="display: none;">
+                    <span class="stale-data-icon">⚠️</span>
+                    <span class="stale-data-text">You're viewing cached data that may be out of date.</span>
+                    <button class="stale-data-refresh" onclick="location.reload(true)">Refresh now</button>
+                </div>
                 <div class="recent-changes-content">
                     <div class="filters-container">
                         <div class="filter-group">
@@ -391,6 +396,15 @@ Get real-time feeds and explore what's coming next.
                     params.append('include_inactive', 'true');
 
                     const response = await fetch(`/api/releases?${params.toString()}`);
+
+                    // Check if the response is stale cached data
+                    const age = parseInt(response.headers.get('Age') || '0', 10);
+                    const maxAge = 3600; // matches server _FRONT_END_TTL
+                    const banner = document.getElementById('stale-data-banner');
+                    if (banner) {
+                        banner.style.display = age > maxAge ? 'flex' : 'none';
+                    }
+
                     const payload = await response.json();
                     const items = Array.isArray(payload) ? payload : (payload.data || []);
 
