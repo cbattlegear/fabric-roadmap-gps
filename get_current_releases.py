@@ -12,7 +12,6 @@ from db.db_sqlserver import make_engine, init_db, save_releases, deactivate_miss
 # Import the `configure_azure_monitor()` function from the
 # `azure.monitor.opentelemetry` package.
 from azure.monitor.opentelemetry import configure_azure_monitor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-refresh'
 
