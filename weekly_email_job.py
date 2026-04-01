@@ -18,7 +18,6 @@ from typing import List, Dict, Any, Optional
 from azure.communication.email import EmailClient
 
 from azure.monitor.opentelemetry import configure_azure_monitor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 # Add the project root to Python path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -143,7 +142,6 @@ class WeeklyEmailSender:
         """Send weekly emails to all active subscribers"""
         try:
             engine = make_engine()
-            SQLAlchemyInstrumentor().instrument(engine=engine)
             subscriptions = get_unsent_active_subscriptions(engine, 7)
             
             logger.info(f"Found {len(subscriptions)} active subscriptions")

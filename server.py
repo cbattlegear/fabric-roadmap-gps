@@ -19,7 +19,6 @@ from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry import trace
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
-from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
 
 
 # Azure Communication Services for email
@@ -301,7 +300,6 @@ def get_engine():
     if ENGINE is None:
         ENGINE = make_engine()
         init_db(ENGINE)
-        SQLAlchemyInstrumentor().instrument(engine=ENGINE)
     return ENGINE
 
 
