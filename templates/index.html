@@ -397,12 +397,13 @@ Get real-time feeds and explore what's coming next.
 
                     const response = await fetch(`/api/releases?${params.toString()}`);
 
-                    // Check if the response is stale cached data
-                    const age = parseInt(response.headers.get('Age') || '0', 10);
+                    // Check if the response data is stale by comparing Last-Modified to now
+                    const lastModified = response.headers.get('Last-Modified');
                     const maxAge = 3600; // matches server _FRONT_END_TTL
                     const banner = document.getElementById('stale-data-banner');
-                    if (banner) {
-                        banner.style.display = age > maxAge ? 'flex' : 'none';
+                    if (banner && lastModified) {
+                        const ageSeconds = (Date.now() - new Date(lastModified).getTime()) / 1000;
+                        banner.style.display = ageSeconds > maxAge ? 'flex' : 'none';
                     }
 
                     const payload = await response.json();
