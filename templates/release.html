@@ -1,0 +1,134 @@
+{% extends 'base.html' %}
+{% block title %}{{ release.feature_name }} — Microsoft Fabric Roadmap | Fabric GPS{% endblock %}
+{% block meta_description %}{{ release.feature_description[:155] | replace('\n', ' ') if release.feature_description else 'View details for ' + release.feature_name + ' on the Microsoft Fabric roadmap.' }}{% endblock %}
+{% block og_title %}{{ release.feature_name }} — Microsoft Fabric Roadmap | Fabric GPS{% endblock %}
+{% block og_description %}{{ release.feature_description[:200] | replace('\n', ' ') if release.feature_description else 'View details for ' + release.feature_name + ' on the Microsoft Fabric roadmap.' }}{% endblock %}
+{% block twitter_title %}{{ release.feature_name }} — Microsoft Fabric Roadmap | Fabric GPS{% endblock %}
+{% block twitter_description %}{{ release.feature_description[:200] | replace('\n', ' ') if release.feature_description else 'View details for ' + release.feature_name + ' on the Microsoft Fabric roadmap.' }}{% endblock %}
+
+{% block herotitle %}{{ release.feature_name }}{% endblock %}
+{% block herosubtitle %}{{ release.product_name }} · {{ release.release_type }} · {{ release.release_status }}{% endblock %}
+
+{% block content %}
+<div class="container">
+    {% if not release %}
+    <section class="recent-changes-section">
+        <div class="no-results">
+            <p>Release item not found.</p>
+            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">← Back to Roadmap</a>
+        </div>
+    </section>
+    {% else %}
+    <section class="recent-changes-section">
+        <div class="release-detail">
+            <div class="release-detail-meta">
+                <div class="change-badges">
+                    <span class="change-badge badge-product">{{ release.product_name }}</span>
+                    <span class="change-badge badge-success">{{ release.release_type }}</span>
+                    <span class="change-badge badge-warning">{{ release.release_status }}</span>
+                    {% if not release.active %}
+                    <span class="change-badge badge-removed">Removed</span>
+                    {% endif %}
+                </div>
+                <div class="change-meta" style="margin-top: var(--spacing-m);">
+                    {% if release.last_modified %}
+                    <span class="change-date">Last Modified: {{ release.last_modified.strftime('%B %d, %Y') if release.last_modified else 'Unknown' }}</span>
+                    {% endif %}
+                    {% if release.release_date %}
+                    <span class="release-date">Release Date: {{ release.release_date.strftime('%B %d, %Y') if release.release_date else 'TBD' }}</span>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="modal-section" style="margin-top: var(--spacing-l);">
+                <h2 style="font-size: 1.1rem; margin-bottom: var(--spacing-s);">Description</h2>
+                <div class="change-description">{{ release.feature_description or 'No description available.' }}</div>
+            </div>
+
+            {% if release.blog_title and release.blog_url %}
+            <div class="modal-section blog-related-section" style="margin-top: var(--spacing-l);">
+                <h3>📰 Related Blog Article</h3>
+                <div class="blog-article-card">
+                    <a href="{{ release.blog_url }}" target="_blank" rel="noopener noreferrer" class="blog-article-link">
+                        <div class="blog-article-title">{{ release.blog_title }}</div>
+                        <div class="blog-article-meta">
+                            <span class="blog-article-icon">🔗</span>
+                            <span class="blog-article-domain">blog.fabric.microsoft.com</span>
+                        </div>
+                    </a>
+                </div>
+            </div>
+            {% endif %}
+
+            {% if history %}
+            <div class="modal-section" style="margin-top: var(--spacing-l);">
+                <h2 style="font-size: 1.1rem; margin-bottom: var(--spacing-s);">Change History</h2>
+                <ol style="list-style: none; padding: 0; margin: 0;">
+                    {% for h in history %}
+                    <li style="margin: .5rem 0; line-height: 1.4;">
+                        <div style="font-size: .7rem; letter-spacing: .05em; text-transform: uppercase; color: var(--fabric-neutral-grey-90);">{{ h.last_modified[:10] if h.last_modified else 'Unknown' }}</div>
+                        <div style="margin-top: 2px; font-size: .75rem;">
+                            {% if h.changed_columns %}
+                                {% for col in h.changed_columns %}
+                                <code style="background: var(--fabric-neutral-grey-20); padding: 2px 4px; border-radius: 3px;">{{ col }}</code>
+                                {% endfor %}
+                            {% else %}
+                                <span style="opacity: .6;">(no column list)</span>
+                            {% endif %}
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ol>
+            </div>
+            {% endif %}
+
+            <div class="modal-actions-row" style="margin-top: var(--spacing-l);">
+                <span class="modal-action-buttons">
+                    <a href="javascript:history.back()" class="button button-primary">← Back to Roadmap</a>
+                    <button class="link-copy" id="copy-release-link">Copy Direct Link</button>
+                    <a href="/api/releases?release_item_id={{ release.release_item_id }}" class="button button-secondary" target="_blank" rel="noopener">View API JSON</a>
+                </span>
+                <span class="modal-workload-name">Workload: {{ release.product_name or 'Unknown Workload' }}</span>
+            </div>
+        </div>
+    </section>
+    {% endif %}
+</div>
+
+{% if release %}
+<script type="application/ld+json">
+{
+    "@context": "https://schema.org",
+    "@type": "Article",
+    "headline": "{{ release.feature_name | e }}",
+    "description": "{{ (release.feature_description[:200] | replace('\n', ' ') | e) if release.feature_description else '' }}",
+    "dateModified": "{{ release.last_modified.isoformat() if release.last_modified else '' }}",
+    "publisher": {
+        "@type": "Organization",
+        "name": "Fabric GPS"
+    },
+    "mainEntityOfPage": {
+        "@type": "WebPage",
+        "@id": "{{ request.url }}"
+    }
+}
+</script>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('copy-release-link');
+    if (btn) {
+        btn.addEventListener('click', () => {
+            navigator.clipboard.writeText(location.href).then(() => {
+                const old = btn.textContent;
+                btn.textContent = 'Link Copied';
+                setTimeout(() => btn.textContent = old, 1500);
+            });
+        });
+    }
+});
+</script>
+{% endblock %}

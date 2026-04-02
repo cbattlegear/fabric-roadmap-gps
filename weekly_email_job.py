@@ -60,7 +60,8 @@ class WeeklyEmailSender:
         self.connection_string = os.getenv('AZURE_COMMUNICATION_CONNECTION_STRING')
         self.from_email = os.getenv('FROM_EMAIL', 'noreply@yourdomain.com')
         self.from_name = os.getenv('FROM_NAME', 'Fabric GPS')
-        self.base_url = os.getenv('BASE_URL', 'http://localhost:8000')
+        canonical = os.getenv('CANONICAL_HOST', '')
+        self.base_url = f"https://{canonical}" if canonical else os.getenv('BASE_URL', 'http://localhost:8000')
         
         if not self.connection_string:
             raise ValueError("AZURE_COMMUNICATION_CONNECTION_STRING environment variable is required")
@@ -467,7 +468,7 @@ class WeeklyEmailSender:
             release_type_variant = "success" if release_type == "General availability" else "warning"
             release_status_variant = "success" if release_status == "Shipped" else "warning"
             is_removed = change.get('active') is False
-            detail_url = self._add_utm(f"{self.base_url}/#release/{rel_id}") if rel_id else self._add_utm(self.base_url)
+            detail_url = self._add_utm(f"{self.base_url}/release/{rel_id}") if rel_id else self._add_utm(self.base_url)
             removed_badge = self._build_badge("Removed", "removed") if is_removed else ""
             badges_html = (
                 removed_badge +
