@@ -1,6 +1,7 @@
 
     {% extends 'base.html' %}
-    {% block title %}Fabric GPS - Microsoft Fabric Roadmap Tracker{% endblock %}
+    {% block title %}Fabric GPS — Microsoft Fabric Roadmap Tracker{% endblock %}
+    {% block meta_description %}Track every Microsoft Fabric roadmap change in real time. Filter by product, release type, or status. Get RSS feeds, JSON APIs, and weekly email digests of new and updated Fabric features.{% endblock %}
 
     
 {% block herotitle%}Microsoft Fabric Roadmap Tracker{% endblock %}
@@ -244,7 +245,7 @@ Get real-time feeds and explore what's coming next.
                 const copyBtn = this.content.querySelector('[data-copy-link]');
                 if (copyBtn) {
                     copyBtn.addEventListener('click', () => {
-                        const link = `${location.origin}${location.pathname}#release/${id}`;
+                        const link = `${location.origin}/release/${id}`;
                         navigator.clipboard.writeText(link).then(()=>{
                             const old = copyBtn.textContent; copyBtn.textContent='Link Copied'; setTimeout(()=>copyBtn.textContent=old,1500);
                         });
@@ -285,7 +286,7 @@ Get real-time feeds and explore what's coming next.
                 if (loading) loading.textContent = msg;
             }
             escape(t){ const d=document.createElement('div'); d.textContent=t||''; return d.innerHTML; }
-            checkHashOnLoad(){ if (location.hash.startsWith('#release/')) { const id = location.hash.split('#release/')[1]; if (id) this.openById(id); } }
+            checkHashOnLoad(){ if (location.hash.startsWith('#release/')) { const id = location.hash.split('#release/')[1]; if (id) window.location.replace(`/release/${id}`); } }
         }
 
         // Extend RecentChanges to open modal on item click
@@ -307,7 +308,10 @@ Get real-time feeds and explore what's coming next.
 
             async init() {
                 await this.loadFilterOptions();
-                await this.loadRecentChanges({ reset: true });
+                this.restoreFiltersFromUrl();
+                if (!this.restoreStateFromSession()) {
+                    await this.loadRecentChanges({ reset: true });
+                }
                 this.bindEvents();
                 this.setupInfiniteScroll();
             }
@@ -470,7 +474,8 @@ Get real-time feeds and explore what's coming next.
                 container.querySelectorAll('.change-item').forEach(card => {
                     card.addEventListener('click', () => {
                         const id = card.getAttribute('data-id');
-                        window.__releaseModal.openById(id);
+                        this.saveStateToSession();
+                        window.location.href = `/release/${id}`;
                     });
                 });
             }
@@ -538,8 +543,9 @@ Get real-time feeds and explore what's coming next.
                         if (this.loadingMore) return;
                         if (this._filterChangeTimer) clearTimeout(this._filterChangeTimer);
                         this._filterChangeTimer = setTimeout(() => {
+                            this.syncFiltersToUrl();
                             this.loadRecentChanges({ reset: true });
-                        }, 60); // tiny debounce to collapse rapid changes
+                        }, 60);// tiny debounce to collapse rapid changes
                     });
                 });
 
@@ -585,7 +591,68 @@ Get real-time feeds and explore what's coming next.
                 this.page = 1;
                 this.allPagesLoaded = false;
                 this.currentData = [];
+                this.syncFiltersToUrl();
              }
+
+            syncFiltersToUrl() {
+                const filters = this.getActiveFilters();
+                const params = new URLSearchParams();
+                if (filters.product_name) params.set('product_name', filters.product_name);
+                if (filters.release_type) params.set('release_type', filters.release_type);
+                if (filters.release_status) params.set('release_status', filters.release_status);
+                if (filters.modified_within_days) params.set('modified_within_days', filters.modified_within_days);
+                if (filters.sort && filters.sort !== 'last_modified') params.set('sort', filters.sort);
+                if (filters.q && filters.q.trim().length >= this.minSearchLength) params.set('q', filters.q.trim());
+                const qs = params.toString();
+                history.replaceState(null, '', qs ? `/?${qs}` : '/');
+            }
+
+            restoreFiltersFromUrl() {
+                const params = new URLSearchParams(location.search);
+                const map = {
+                    'product_name': 'product-filter',
+                    'release_type': 'type-filter',
+                    'release_status': 'status-filter',
+                    'modified_within_days': 'days-filter',
+                    'sort': 'sort-select',
+                    'q': 'search-input'
+                };
+                for (const [param, elId] of Object.entries(map)) {
+                    const val = params.get(param);
+                    const el = document.getElementById(elId);
+                    if (val && el) el.value = val;
+                }
+            }
+
+            saveStateToSession() {
+                try {
+                    sessionStorage.setItem('fabricgps_state', JSON.stringify({
+                        url: location.search,
+                        data: this.currentData,
+                        page: this.page,
+                        allPagesLoaded: this.allPagesLoaded,
+                        pagination: this.pagination,
+                        scrollY: window.scrollY
+                    }));
+                } catch(e) { /* sessionStorage full or unavailable */ }
+            }
+
+            restoreStateFromSession() {
+                try {
+                    const raw = sessionStorage.getItem('fabricgps_state');
+                    if (!raw) return false;
+                    const state = JSON.parse(raw);
+                    if (state.url !== location.search) return false;
+                    this.currentData = state.data || [];
+                    this.page = state.page || 1;
+                    this.allPagesLoaded = state.allPagesLoaded || false;
+                    this.pagination = state.pagination || null;
+                    this.hasLoadedOnce = true;
+                    this.renderChanges();
+                    requestAnimationFrame(() => window.scrollTo(0, state.scrollY || 0));
+                    return true;
+                } catch(e) { return false; }
+            }
             updateLoadMoreButton() {
                 const btn = document.getElementById('load-more-btn');
                 if (!btn) return;
@@ -645,6 +712,7 @@ Get real-time feeds and explore what's coming next.
                         // do not search yet
                         return;
                     }
+                    this.syncFiltersToUrl();
                     this.loadRecentChanges({ reset: true });
                 }, delay);
              }

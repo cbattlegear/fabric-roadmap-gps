@@ -93,6 +93,9 @@ ACS_RESOURCE_ID = os.getenv('ACS_RESOURCE_ID', '')
 CANONICAL_HOST = os.getenv('CANONICAL_HOST', '')
 REDIRECT_HOSTS = {h.strip() for h in os.getenv('REDIRECT_HOSTS', '').split(',') if h.strip()}
 
+# Use canonical host for email URLs if configured, otherwise fall back to BASE_URL
+EMAIL_BASE_URL = f"https://{CANONICAL_HOST}" if CANONICAL_HOST else BASE_URL
+
 _NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/api/subscribe", "/api/verify-email")
 
 
@@ -163,7 +166,7 @@ def send_verification_email(email: str, verification_token: str) -> bool:
         return False
     
     try:
-        verification_url = f"{BASE_URL}/verify-email?token={verification_token}"
+        verification_url = f"{EMAIL_BASE_URL}/verify-email?token={verification_token}"
 
         # HTML email content (restyled to match weekly email design language)
         html_content = f"""<!DOCTYPE html>
@@ -317,7 +320,7 @@ def _to_rfc2822(dt_or_date: Optional[date]) -> Optional[str]:
 
 
 def _item_link(row: ReleaseItemModel) -> str:
-    return f"https://roadmap.fabric.microsoft.com/?product={escape(urllib.parse.quote_plus(row.product_name.lower().replace(' ', '')))}"
+    return f"{EMAIL_BASE_URL}/release/{row.release_item_id}"
 
 def _description(row: ReleaseItemModel) -> str:
     desc = ""
@@ -360,7 +363,7 @@ def build_rss_xml(rows: List[ReleaseItemModel],
             "    <item>",
             f"      <title>{escape(item_title)}</title>",
             f"      <link>{escape(item_link)}</link>",
-            f"      <guid isPermaLink=\"false\">{escape(guid)}</guid>",
+            f"      <guid isPermaLink=\"true\">{escape(item_link)}</guid>",
             f"      <pubDate>{pub_date}</pubDate>",
             f"      <category>{escape(r.release_type or '')}</category>",
             f"      <category>{escape(r.release_status or '')}</category>",
@@ -408,7 +411,7 @@ def rss_feed():
         release_type=release_type,
         release_status=release_status,
     )
-    xml = build_rss_xml(rows, description=f"Up to {limit} most recently modified releases")
+    xml = build_rss_xml(rows, link=EMAIL_BASE_URL, description=f"Up to {limit} most recently modified releases")
     return _make_cached_response(xml, mimetype="application/rss+xml; charset=utf-8")
 
 
@@ -810,6 +813,19 @@ def about_page():
     return render_template('about.html')
 
 
+@app.get("/release/<release_item_id>")
+def release_detail(release_item_id):
+    """Server-rendered release detail page for SEO."""
+    engine = get_engine()
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        row = session.get(ReleaseItemModel, release_item_id)
+        if not row:
+            return render_template('release.html', release=None, history=None), 404
+        history = fetch_history_rows(engine, release_item_id)
+        return render_template('release.html', release=row, history=history)
+
+
 @app.post("/webhooks/email-events")
 def email_events_webhook():
     """Handle Azure Event Grid email delivery events (bounces).
@@ -857,6 +873,68 @@ def email_events_webhook():
     # Always return 200 to prevent email enumeration
     return jsonify({"status": "ok"}), 200
 
+@app.get("/robots.txt")
+def robots_txt():
+    """Serve robots.txt for search engine crawlers."""
+    base = request.url_root.rstrip('/')
+    body = f"""User-agent: *
+Allow: /
+Disallow: /verify-email
+Disallow: /unsubscribe
+Disallow: /api/subscribe
+Disallow: /api/verify-email
+Disallow: /healthcheck
+Disallow: /webhooks/
+
+Sitemap: {base}/sitemap.xml
+"""
+    return Response(body, mimetype="text/plain")
+
+
+@app.get("/sitemap.xml")
+def sitemap_xml():
+    """Serve a dynamic XML sitemap for search engines."""
+    base = request.url_root.rstrip('/')
+    pages = [
+        {"loc": "/",          "priority": "1.0", "changefreq": "hourly"},
+        {"loc": "/about",     "priority": "0.7", "changefreq": "monthly"},
+        {"loc": "/endpoints", "priority": "0.6", "changefreq": "monthly"},
+        {"loc": "/subscribe", "priority": "0.6", "changefreq": "monthly"},
+        {"loc": "/rss",       "priority": "0.5", "changefreq": "hourly"},
+    ]
+    urls = ""
+    for p in pages:
+        urls += f"""  <url>
+    <loc>{base}{p["loc"]}</loc>
+    <changefreq>{p["changefreq"]}</changefreq>
+    <priority>{p["priority"]}</priority>
+  </url>
+"""
+    # Add individual release pages
+    engine = get_engine()
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        releases = session.query(
+            ReleaseItemModel.release_item_id,
+            ReleaseItemModel.last_modified
+        ).filter(ReleaseItemModel.active == True).all()
+        for r in releases:
+            lastmod = ""
+            if r.last_modified and hasattr(r.last_modified, 'strftime'):
+                lastmod = f"\n    <lastmod>{r.last_modified.strftime('%Y-%m-%d')}</lastmod>"
+            urls += f"""  <url>
+    <loc>{base}/release/{r.release_item_id}</loc>{lastmod}
+    <changefreq>weekly</changefreq>
+    <priority>0.8</priority>
+  </url>
+"""
+    body = f"""<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+{urls}</urlset>
+"""
+    return Response(body, mimetype="application/xml")
+
+
 @app.get("/healthcheck")
 def healthcheck():
     sql_health = db_healthcheck(get_engine())
@@ -876,4 +954,4 @@ def inject_nav():
         {"label": "Subscribe", "url": "/subscribe"},
         {"label": "About", "url": "/about"},
     ]
-    return {"nav_items": nav_items, "current_year": datetime.utcnow().year}
+    return {"nav_items": nav_items, "current_year": datetime.utcnow().year, "canonical_base": EMAIL_BASE_URL}

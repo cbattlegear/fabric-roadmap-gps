@@ -3,7 +3,25 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>{% block title %}Fabric Roadmap GPS{% endblock %}</title>
+    <title>{% block title %}Fabric GPS — Microsoft Fabric Roadmap Tracker{% endblock %}</title>
+    <meta name="description" content="{% block meta_description %}Track Microsoft Fabric roadmap changes with Fabric GPS. Get real-time updates, RSS feeds, filtered APIs, and weekly email summaries of new and updated Fabric features.{% endblock %}">
+    <link rel="canonical" href="{{ canonical_base }}{{ request.path }}" />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Fabric GPS" />
+    <meta property="og:title" content="{% block og_title %}Fabric GPS — Microsoft Fabric Roadmap Tracker{% endblock %}" />
+    <meta property="og:description" content="{% block og_description %}Track Microsoft Fabric roadmap changes with real-time updates, RSS feeds, filtered APIs, and weekly email summaries.{% endblock %}" />
+    <meta property="og:url" content="{{ canonical_base }}{{ request.path }}" />
+    <meta property="og:image" content="{{ canonical_base }}/static/fabric_gps_logo.png" />
+
+    <!-- Twitter Card -->
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="{% block twitter_title %}Fabric GPS — Microsoft Fabric Roadmap Tracker{% endblock %}" />
+    <meta name="twitter:description" content="{% block twitter_description %}Track Microsoft Fabric roadmap changes with real-time updates, RSS feeds, filtered APIs, and weekly email summaries.{% endblock %}" />
+    <meta name="twitter:image" content="{{ canonical_base }}/static/fabric_gps_logo.png" />
+
+    <link rel="alternate" type="application/rss+xml" title="Fabric GPS — Microsoft Fabric Roadmap Updates" href="/rss" />
     <link rel="stylesheet" href="/static/styles.css" />
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
@@ -17,6 +35,27 @@
     });
     </script>
     {% block extra_head %}{% endblock %}
+
+    <!-- Structured Data -->
+    <script type="application/ld+json">
+    {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Fabric GPS",
+        "alternateName": "Microsoft Fabric Roadmap Tracker",
+        "url": "{{ canonical_base }}",
+        "description": "Track Microsoft Fabric roadmap changes with real-time updates, RSS feeds, filtered APIs, and weekly email summaries.",
+        "publisher": {
+            "@type": "Organization",
+            "name": "Fabric GPS",
+            "url": "{{ canonical_base }}",
+            "logo": {
+                "@type": "ImageObject",
+                "url": "{{ canonical_base }}/static/fabric_gps_logo.png"
+            }
+        }
+    }
+    </script>
 </head>
 <body>
     <header class="header">
@@ -24,7 +63,7 @@
             <div class="header-inner">
                 <h1 style="margin: 0;">
                     <a id="logo" href="/">
-                        <img src="/static/fabric_gps_logo.svg" alt="Fabric GPS" style="height: 38px; width: auto;">
+                        <img src="/static/fabric_gps_logo.svg" alt="Fabric GPS — Microsoft Fabric Roadmap Tracker" style="height: 38px; width: auto;">
                     </a>
                 </h1>
                 <nav class="header-nav">
@@ -47,10 +86,11 @@
     <footer class="footer">
         <div class="container">
             <p>
+                <a href="/rss" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">RSS Feed</a>
                 <a href="/endpoints" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">API Documentation</a>
                 <a href="/subscribe" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">Email Notifications</a>
-                &copy; 2025 Fabric GPS. Data sourced from Microsoft Fabric Roadmap. Updated every hour.
-                This page is not affliated with Microsoft and is a personal project to make viewing
+                &copy; 2026 Fabric GPS. Data sourced from Microsoft Fabric Roadmap. Updated every hour.
+                This page is not affiliated with Microsoft and is a personal project to make viewing
                 Microsoft Fabric changes easier for everyone.
             </p>
         </div>
