@@ -876,7 +876,7 @@ def email_events_webhook():
 @app.get("/robots.txt")
 def robots_txt():
     """Serve robots.txt for search engine crawlers."""
-    base = request.url_root.rstrip('/')
+    base = EMAIL_BASE_URL
     body = f"""User-agent: *
 Allow: /
 Disallow: /verify-email
@@ -894,7 +894,7 @@ Sitemap: {base}/sitemap.xml
 @app.get("/sitemap.xml")
 def sitemap_xml():
     """Serve a dynamic XML sitemap for search engines."""
-    base = request.url_root.rstrip('/')
+    base = EMAIL_BASE_URL
     pages = [
         {"loc": "/",          "priority": "1.0", "changefreq": "hourly"},
         {"loc": "/about",     "priority": "0.7", "changefreq": "monthly"},
