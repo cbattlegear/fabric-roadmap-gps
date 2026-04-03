@@ -387,7 +387,7 @@ def _make_cached_response(body: str, mimetype: str = "application/json; charset=
         return Response(status=304)
     resp = Response(body, mimetype=mimetype)
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f'public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_STALE_TTL}'
+    resp.headers['Cache-Control'] = f'public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_STALE_TTL}, must-revalidate'
     resp.headers['Last-Modified'] = format_datetime(datetime.now(timezone.utc))
     return resp
 
