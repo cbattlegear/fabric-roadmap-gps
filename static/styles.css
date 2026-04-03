@@ -189,50 +189,6 @@ body {
   margin-bottom: var(--spacing-xl);
 }
 
-.features-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-  gap: var(--spacing-l);
-}
-
-.feature-item {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-m);
-}
-
-.feature-icon {
-  width: 24px;
-  height: 24px;
-  flex-shrink: 0;
-  margin-top: 2px;
-}
-
-.feature-content h3 {
-  font-size: var(--font-size-subtitle);
-  font-weight: 600;
-  margin: 0 0 var(--spacing-s) 0;
-  color: var(--fabric-neutral-grey-160);
-}
-
-.feature-content p {
-  margin: 0;
-  color: var(--fabric-neutral-grey-90);
-  line-height: 1.5;
-}
-
-/* Status indicators */
-.status-live {
-  background-color: var(--fabric-semantic-success);
-  color: white;
-  padding: var(--spacing-xs) var(--spacing-s);
-  border-radius: 12px;
-  font-size: var(--font-size-caption);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
 /* Footer */
 .footer {
   text-align: center;
@@ -694,8 +650,7 @@ body {
   word-break: break-word;
 }
 
-.change-description a,
-.modal-description a {
+.change-description a {
   word-break: break-all;
   -webkit-word-break: break-all;
   overflow-wrap: break-word;
@@ -722,44 +677,6 @@ body {
   gap: var(--spacing-s);
   margin-top: var(--spacing-m);
   flex-wrap: wrap;
-}
-
-.subscription-input {
-  flex: 1;
-  min-width: 200px;
-  padding: var(--spacing-s);
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.9);
-  color: var(--fabric-neutral-grey-160);
-  font-size: var(--font-size-body);
-}
-
-.subscription-input:focus {
-  outline: none;
-  border-color: rgba(255, 255, 255, 0.8);
-  background: white;
-}
-
-.subscription-input::placeholder {
-  color: var(--fabric-neutral-grey-90);
-}
-
-.subscription-btn {
-  white-space: nowrap;
-  background: rgba(255, 255, 255, 0.2) !important;
-  border: 1px solid rgba(255, 255, 255, 0.3) !important;
-  color: white !important;
-}
-
-.subscription-btn:hover {
-  background: rgba(255, 255, 255, 0.3) !important;
-  border-color: rgba(255, 255, 255, 0.5) !important;
-}
-
-.subscription-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
 }
 
 .subscription-message {
@@ -802,7 +719,6 @@ a:focus-visible {
 /* Shared Component Styles (used by release detail page) */
 .modal-section { margin-bottom: var(--spacing-l); }
 .modal-section h4 { margin: 0 0 .5rem; font-size: .85rem; text-transform: uppercase; letter-spacing: .05em; color: var(--fabric-neutral-grey-90); }
-.modal-description { line-height: 1.6; white-space: pre-wrap; overflow-wrap: break-word; word-break: break-word; }
 .modal-actions-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: var(--spacing-m); justify-content: space-between; align-items: center; }
 .modal-workload-name { font-size: var(--font-size-caption); color: var(--fabric-neutral-grey-90); }
 .link-copy { background: var(--fabric-neutral-grey-20); border: 1px solid var(--fabric-neutral-grey-30); padding: .4rem .75rem; border-radius: 4px; cursor: pointer; font-weight: 600; }

@@ -3,7 +3,7 @@ import os
 import urllib.parse
 import threading
 import logging
-from datetime import datetime, date, time, timezone, timedelta
+from datetime import datetime, date, time, timezone
 from typing import Optional, List
 
 from flask import Flask, request, Response, jsonify, render_template, redirect
@@ -17,7 +17,6 @@ import logging
 # `azure.monitor.opentelemetry` package.
 from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry import trace
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 
 
