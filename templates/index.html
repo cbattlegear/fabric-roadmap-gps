@@ -50,11 +50,6 @@ Get real-time feeds and explore what's coming next.
 
             <section class="recent-changes-section">
                 <h2 class="section-title">Recent Changes</h2>
-                <div id="stale-data-banner" class="stale-data-banner" style="display: none;">
-                    <span class="stale-data-icon">⚠️</span>
-                    <span class="stale-data-text">You're viewing cached data that may be out of date.</span>
-                    <button class="stale-data-refresh" onclick="location.reload(true)">Refresh now</button>
-                </div>
                 <div class="recent-changes-content">
                     <div class="filters-container">
                         <div class="filter-group">
@@ -309,9 +304,7 @@ Get real-time feeds and explore what's coming next.
             async init() {
                 await this.loadFilterOptions();
                 this.restoreFiltersFromUrl();
-                if (!this.restoreStateFromSession()) {
-                    await this.loadRecentChanges({ reset: true });
-                }
+                await this.loadRecentChanges({ reset: true });
                 this.bindEvents();
                 this.setupInfiniteScroll();
             }
@@ -401,15 +394,6 @@ Get real-time feeds and explore what's coming next.
 
                     const response = await fetch(`/api/releases?${params.toString()}`);
 
-                    // Check if the response data is stale by comparing Last-Modified to now
-                    const lastModified = response.headers.get('Last-Modified');
-                    const maxAge = 3600; // matches server _FRONT_END_TTL
-                    const banner = document.getElementById('stale-data-banner');
-                    if (banner && lastModified) {
-                        const ageSeconds = (Date.now() - new Date(lastModified).getTime()) / 1000;
-                        banner.style.display = ageSeconds > maxAge ? 'flex' : 'none';
-                    }
-
                     const payload = await response.json();
                     const items = Array.isArray(payload) ? payload : (payload.data || []);
 
@@ -474,7 +458,6 @@ Get real-time feeds and explore what's coming next.
                 container.querySelectorAll('.change-item').forEach(card => {
                     card.addEventListener('click', () => {
                         const id = card.getAttribute('data-id');
-                        this.saveStateToSession();
                         window.location.href = `/release/${id}`;
                     });
                 });
@@ -622,36 +605,6 @@ Get real-time feeds and explore what's coming next.
                     const el = document.getElementById(elId);
                     if (val && el) el.value = val;
                 }
-            }
-
-            saveStateToSession() {
-                try {
-                    sessionStorage.setItem('fabricgps_state', JSON.stringify({
-                        url: location.search,
-                        data: this.currentData,
-                        page: this.page,
-                        allPagesLoaded: this.allPagesLoaded,
-                        pagination: this.pagination,
-                        scrollY: window.scrollY
-                    }));
-                } catch(e) { /* sessionStorage full or unavailable */ }
-            }
-
-            restoreStateFromSession() {
-                try {
-                    const raw = sessionStorage.getItem('fabricgps_state');
-                    if (!raw) return false;
-                    const state = JSON.parse(raw);
-                    if (state.url !== location.search) return false;
-                    this.currentData = state.data || [];
-                    this.page = state.page || 1;
-                    this.allPagesLoaded = state.allPagesLoaded || false;
-                    this.pagination = state.pagination || null;
-                    this.hasLoadedOnce = true;
-                    this.renderChanges();
-                    requestAnimationFrame(() => window.scrollTo(0, state.scrollY || 0));
-                    return true;
-                } catch(e) { return false; }
             }
             updateLoadMoreButton() {
                 const btn = document.getElementById('load-more-btn');
