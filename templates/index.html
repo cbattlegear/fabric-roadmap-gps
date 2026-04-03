@@ -117,15 +117,6 @@ Get real-time feeds and explore what's coming next.
                 </div>
             </section>
         </div>
-    <div id="release-modal" class="modal" aria-hidden="true" role="dialog" aria-modal="true">
-        <div class="modal-backdrop" data-modal-close></div>
-        <div class="modal-dialog" role="document">
-            <button class="modal-close" title="Close" data-modal-close>&times;</button>
-            <div id="modal-content" class="modal-content">
-                <!-- Filled dynamically -->
-            </div>
-        </div>
-    </div>
 {% endblock %}
 {% block scripts %}
 <script src="https://cdn.jsdelivr.net/npm/markdown-it@14.1/dist/markdown-it.min.js"></script>
@@ -155,136 +146,14 @@ Get real-time feeds and explore what's coming next.
             return unescapeStr;
         }
 
-        class ReleaseModal {
-            constructor() {
-                this.modal = document.getElementById('release-modal');
-                this.content = document.getElementById('modal-content');
-                this.bindGlobal();
-                this.checkHashOnLoad();
+        // Redirect old hash-based release URLs to new route
+        function checkHashRedirect() {
+            if (location.hash.startsWith('#release/')) {
+                const id = location.hash.split('#release/')[1];
+                if (id) window.location.replace(`/release/${id}`);
             }
-            bindGlobal() {
-                document.querySelectorAll('[data-modal-close]').forEach(el => {
-                    el.addEventListener('click', () => this.hide());
-                });
-                document.addEventListener('keydown', (e) => {
-                    if (e.key === 'Escape' && this.isOpen()) this.hide();
-                });
-            }
-            isOpen() { return this.modal.getAttribute('aria-hidden') === 'false'; }
-            show() { this.modal.setAttribute('aria-hidden', 'false'); document.body.style.overflow='hidden'; }
-            hide() { this.modal.setAttribute('aria-hidden', 'true'); document.body.style.overflow=''; this.clearHashIfMatches(); }
-            clearHashIfMatches(){ if (location.hash.startsWith('#release/')) { history.replaceState(null,'',location.pathname+location.search); } }
-            async openById(id) {
-                try {
-                    const r = await fetch(`/api/releases?release_item_id=${encodeURIComponent(id)}`);
-                    if (!r.ok){ this.renderError(`Item not found (${id})`); return; }
-                    const data = await r.json();
-                    this.renderItemShell(data); // initial render without history
-                    this.show();
-                    if(!location.hash.includes(id)) { history.replaceState(null,'',`#release/${id}`); }
-                    // Fetch history (non-blocking)
-                    this.loadHistory(id);
-                } catch(err){ this.renderError('Error loading item'); }
-            }
-            renderItemShell(item){
-                const relDate = item.release_date ? new Date(item.release_date).toLocaleDateString() : 'TBD';
-                const lm = item.last_modified ? new Date(item.last_modified).toLocaleDateString() : 'Unknown';
-                const typeClass = item.release_type === 'General availability' ? 'success' : 'warn';
-                const statusClass = item.release_status === 'Shipped' ? 'success' : 'warn';
-                const isInactive = item.active === false;
-                const removedBanner = isInactive
-                    ? '<div style="background:rgba(209,52,56,0.1); border:1px solid var(--fabric-semantic-error); border-radius:8px; padding:8px 14px; margin-bottom:12px; display:flex; align-items:center; gap:8px; font-size:.85rem; color:var(--fabric-semantic-error); font-weight:600;">⚠️ This item has been removed from the Microsoft Fabric Roadmap</div>'
-                    : '';
-                this.content.innerHTML = `
-                    <div class="modal-header">
-                        <h2 class="modal-title">${escapeHtml(item.feature_name || 'Unnamed Feature')}</h2>
-                        ${removedBanner}
-                        <div class="modal-meta-row">
-                            <span class="modal-release-info">Status: ${escapeHtml(item.release_status || 'Unknown Status')} ${escapeHtml(item.release_type || 'Unknown Type')} on ${escapeHtml(relDate)}</span>
-                            <span class="modal-last-modified">Last Modified: ${escapeHtml(lm)}</span>
-                        </div>
-                    </div>
-                    <div class="modal-section">
-                        <div class="modal-description">${descriptionPrepareHtml(item.feature_description || 'No description provided.')}</div>
-                    </div>
-                    ${item.blog_title && item.blog_url ? `
-                    <div class="modal-section blog-related-section">
-                        <h4>📰 Related Blog Article</h4>
-                        <div class="blog-article-card">
-                            <a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" class="blog-article-link">
-                                <div class="blog-article-title">${escapeHtml(item.blog_title)}</div>
-                                <div class="blog-article-meta">
-                                    <span class="blog-article-icon">🔗</span>
-                                    <span class="blog-article-domain">blog.fabric.microsoft.com</span>
-                                </div>
-                            </a>
-                        </div>
-                    </div>
-                    ` : ''}
-                    <div class="modal-section" id="history-section">
-                        <h4>Change History</h4>
-                        <div class="history-loading" style="font-size:.8rem; opacity:.7;">Loading history...</div>
-                        <ol class="history-timeline" style="list-style:none; padding:0; margin: .5rem 0 0 0;"></ol>
-                    </div>
-                    <div class="modal-actions-row">
-                        <span class="modal-action-buttons">
-                            <button class="link-copy" data-copy-link>Copy Direct Link</button>
-                            <a class="button button-secondary" href="/api/releases?release_item_id=${encodeURIComponent(item.release_item_id)}" target="_blank" rel="noopener">Open API JSON</a>
-                        </span>
-                        <span class="modal-workload-name">Workload: ${this.escape(item.product_name || 'Unknown Workload')}</span>
-                    </div>
-                `;
-                this.bindCopy(item.release_item_id);
-            }
-            bindCopy(id){
-                const copyBtn = this.content.querySelector('[data-copy-link]');
-                if (copyBtn) {
-                    copyBtn.addEventListener('click', () => {
-                        const link = `${location.origin}/release/${id}`;
-                        navigator.clipboard.writeText(link).then(()=>{
-                            const old = copyBtn.textContent; copyBtn.textContent='Link Copied'; setTimeout(()=>copyBtn.textContent=old,1500);
-                        });
-                    });
-                }
-            }
-            async loadHistory(id){
-                try {
-                    const r = await fetch(`/api/releases/history/${encodeURIComponent(id)}`);
-                    if(!r.ok){ this.renderHistoryError('History unavailable'); return; }
-                    const hist = await r.json();
-                    this.renderHistory(hist);
-                } catch(err){ this.renderHistoryError('History error'); }
-            }
-            renderHistory(hist){
-                const section = this.content.querySelector('#history-section');
-                if(!section) return;
-                const loading = section.querySelector('.history-loading');
-                if (loading) loading.remove();
-                const list = section.querySelector('.history-timeline');
-                if(!hist || hist.length === 0){
-                    list.innerHTML = '<li style="font-size:.8rem; opacity:.7;">No history entries.</li>';
-                    return;
-                }
-                list.innerHTML = hist.map(h => {
-                    const lm = h.last_modified ? new Date(h.last_modified).toLocaleDateString() : 'Unknown';
-                    const changes = (h.changed_columns && h.changed_columns.length) ? h.changed_columns.map(c=>`<code style="background:var(--fabric-neutral-grey-20); padding:2px 4px; border-radius:3px;">${this.escape(c)}</code>`).join(' ') : '<span style="opacity:.6;">(no column list)</span>';
-                    return `<li style="margin: .5rem 0; line-height:1.4;">
-                        <div style="font-size:.7rem; letter-spacing:.05em; text-transform:uppercase; color:var(--fabric-neutral-grey-90);">${this.escape(lm)}</div>
-                        <div class="history-changes" style="margin-top:2px; font-size:.75rem;">${changes}</div>
-                    </li>`;
-                }).join('');
-            }
-            renderHistoryError(msg){
-                const section = this.content.querySelector('#history-section');
-                if(!section) return;
-                const loading = section.querySelector('.history-loading');
-                if (loading) loading.textContent = msg;
-            }
-            escape(t){ const d=document.createElement('div'); d.textContent=t||''; return d.innerHTML; }
-            checkHashOnLoad(){ if (location.hash.startsWith('#release/')) { const id = location.hash.split('#release/')[1]; if (id) window.location.replace(`/release/${id}`); } }
         }
 
-        // Extend RecentChanges to open modal on item click
         class RecentChanges {
             constructor() {
                 this.filterOptions = {};
@@ -696,7 +565,7 @@ Get real-time feeds and explore what's coming next.
         }
         // Initialize when DOM is loaded
         document.addEventListener('DOMContentLoaded', () => {
-            window.__releaseModal = new ReleaseModal();
+            checkHashRedirect();
             new RecentChanges();
         });
     </script>
