@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, date, time, timezone
 from typing import Optional, List
 
-from flask import Flask, request, Response, jsonify, render_template, redirect
+from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory
 from html import escape
 from email.utils import format_datetime
 import hashlib
@@ -871,6 +871,11 @@ def email_events_webhook():
 
     # Always return 200 to prevent email enumeration
     return jsonify({"status": "ok"}), 200
+
+@app.get("/favicon.ico")
+def favicon():
+    return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/x-icon")
+
 
 @app.get("/robots.txt")
 def robots_txt():
