@@ -36,6 +36,7 @@ from db.db_sqlserver import (
     record_bounce,
     healthcheck as db_healthcheck,
     VALID_SORT_OPTIONS,
+    get_changelog_with_changes,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 
@@ -825,6 +826,86 @@ def release_detail(release_item_id):
         return render_template('release.html', release=row, history=history)
 
 
+@app.get("/changelog")
+def changelog_page():
+    """Server-rendered daily changelog page."""
+    days = request.args.get("days", type=int) or 30
+    days = max(1, min(days, 90))
+    product_name = request.args.get("product_name") or None
+    release_type = request.args.get("release_type") or None
+    release_status = request.args.get("release_status") or None
+
+    engine = get_engine()
+    items = get_changelog_with_changes(
+        engine, days=days, include_inactive=True,
+        product_name=product_name, release_type=release_type,
+        release_status=release_status,
+    )
+
+    # Load filter dropdown options
+    filter_options = {
+        "product_names": get_distinct_values(engine, 'product_name'),
+        "release_types": get_distinct_values(engine, 'release_type'),
+        "release_statuses": get_distinct_values(engine, 'release_status'),
+    }
+
+    grouped: dict[str, list] = {}
+    for item in items:
+        lm = item["last_modified"]
+        date_key = lm.isoformat() if hasattr(lm, 'isoformat') else str(lm) if lm else "unknown"
+        grouped.setdefault(date_key, []).append(item)
+
+    sorted_days = sorted(grouped.items(), reverse=True)
+    return render_template('changelog.html', changelog_days=sorted_days,
+                           selected_days=days, filter_options=filter_options,
+                           active_filters={
+                               "product_name": product_name or "",
+                               "release_type": release_type or "",
+                               "release_status": release_status or "",
+                           })
+
+
+@app.get("/api/changelog")
+def api_changelog():
+    """Return releases grouped by last_modified date for changelog display.
+
+    Query Params:
+      days: look-back window (default 30, max 90)
+      include_inactive: include removed items (default true)
+      product_name, release_type, release_status: filter by field
+    """
+    days = request.args.get("days", type=int) or 30
+    days = max(1, min(days, 90))
+    include_inactive = request.args.get("include_inactive", "true").lower() in ("1", "true", "yes")
+    product_name = request.args.get("product_name") or None
+    release_type = request.args.get("release_type") or None
+    release_status = request.args.get("release_status") or None
+
+    items = get_changelog_with_changes(
+        get_engine(), days=days, include_inactive=include_inactive,
+        product_name=product_name, release_type=release_type,
+        release_status=release_status,
+    )
+
+    # Serialize dates for JSON output
+    for item in items:
+        rd = item.get("release_date")
+        lm = item.get("last_modified")
+        item["release_date"] = rd.isoformat() if hasattr(rd, 'isoformat') else rd
+        item["last_modified"] = lm.isoformat() if hasattr(lm, 'isoformat') else lm
+
+    grouped: dict[str, list] = {}
+    for item in items:
+        grouped.setdefault(item["last_modified"] or "unknown", []).append(item)
+
+    days_list = [{"date": d, "count": len(itms), "items": itms}
+                 for d, itms in sorted(grouped.items(), reverse=True)]
+
+    body = json.dumps({"days": days_list, "total_items": len(items)},
+                       separators=(",", ":"), sort_keys=True)
+    return _make_cached_response(body)
+
+
 @app.post("/webhooks/email-events")
 def email_events_webhook():
     """Handle Azure Event Grid email delivery events (bounces).
@@ -954,6 +1035,7 @@ def inject_nav():
     from datetime import datetime
     nav_items = [
         {"label": "Home", "url": "/"},
+        {"label": "Changelog", "url": "/changelog"},
         {"label": "API", "url": "/endpoints"},
         {"label": "Subscribe", "url": "/subscribe"},
         {"label": "About", "url": "/about"},

@@ -1,0 +1,116 @@
+{% extends 'base.html' %}
+{% block title %}Change Log — Fabric GPS{% endblock %}
+{% block meta_description %}Daily breakdown of Microsoft Fabric roadmap changes. See what was added, updated, or removed each day.{% endblock %}
+{% block og_title %}Change Log — Fabric GPS{% endblock %}
+{% block og_description %}Daily breakdown of Microsoft Fabric roadmap changes. See what was added, updated, or removed each day.{% endblock %}
+{% block twitter_title %}Change Log — Fabric GPS{% endblock %}
+{% block twitter_description %}Daily breakdown of Microsoft Fabric roadmap changes. See what was added, updated, or removed each day.{% endblock %}
+
+{% block herotitle %}Change Log{% endblock %}
+{% block herosubtitle %}Daily breakdown of Microsoft Fabric roadmap changes{% endblock %}
+
+{% block content %}
+<div class="container">
+    <section class="recent-changes-section">
+        <form method="get" action="/changelog" class="filters-container">
+            <div class="filter-group">
+                <label for="days-select">Modified Within:</label>
+                <select id="days-select" name="days" class="filter-select">
+                    <option value="7" {{ 'selected' if selected_days == 7 }}>Last 7 days</option>
+                    <option value="14" {{ 'selected' if selected_days == 14 }}>Last 14 days</option>
+                    <option value="30" {{ 'selected' if selected_days == 30 }}>Last 30 days</option>
+                    <option value="60" {{ 'selected' if selected_days == 60 }}>Last 60 days</option>
+                    <option value="90" {{ 'selected' if selected_days == 90 }}>Last 90 days</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="product-filter">Product:</label>
+                <select id="product-filter" name="product_name" class="filter-select">
+                    <option value="">All Products</option>
+                    {% for p in filter_options.product_names %}
+                    <option value="{{ p }}" {{ 'selected' if active_filters.product_name == p }}>{{ p }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="type-filter">Release Type:</label>
+                <select id="type-filter" name="release_type" class="filter-select">
+                    <option value="">All Types</option>
+                    {% for t in filter_options.release_types %}
+                    <option value="{{ t }}" {{ 'selected' if active_filters.release_type == t }}>{{ t }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="filter-group">
+                <label for="status-filter">Status:</label>
+                <select id="status-filter" name="release_status" class="filter-select">
+                    <option value="">All Statuses</option>
+                    {% for s in filter_options.release_statuses %}
+                    <option value="{{ s }}" {{ 'selected' if active_filters.release_status == s }}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <button type="submit" class="button button-primary">Apply</button>
+            <a href="/changelog" class="button button-secondary">Clear</a>
+        </form>
+
+        {% if not changelog_days %}
+        <div class="no-results">
+            <p>No changes found in the selected time period.</p>
+        </div>
+        {% endif %}
+
+        {% for date_str, items in changelog_days %}
+        <div class="changelog-day">
+            <div class="changelog-day-header">
+                <h2 class="changelog-date">
+                    {{ items[0].last_modified.strftime('%A, %B %d, %Y') if items[0].last_modified else date_str }}
+                </h2>
+                <span class="changelog-count">{{ items|length }} change{{ 's' if items|length != 1 }}</span>
+            </div>
+
+            {% for workload, workload_items in items | groupby('product_name') %}
+            <div class="changelog-workload">
+                <h3 class="changelog-workload-name">{{ workload or 'Unknown' }}</h3>
+                <div class="changelog-items">
+                    {% for item in workload_items %}
+                    <a href="/release/{{ item.release_item_id }}" class="changelog-item{{ ' changelog-item-inactive' if not item.active }}">
+                        <div class="changelog-item-main">
+                            <span class="changelog-feature-name">{{ item.feature_name }}</span>
+                            <span class="change-badges">
+                                <span class="change-badge {{ 'badge-success' if item.release_type == 'General availability' else 'badge-warning' }}">{{ item.release_type }}</span>
+                                <span class="change-badge {{ 'badge-success' if item.release_status == 'Shipped' else 'badge-warning' }}">{{ item.release_status }}</span>
+                                {% if not item.active %}
+                                <span class="change-badge badge-removed">Removed</span>
+                                {% endif %}
+                            </span>
+                        </div>
+                        {% if item.changed_columns %}
+                        <div class="changelog-changed-cols">
+                            {% for col in item.changed_columns %}
+                            <code class="changelog-col-tag">{{ col }}</code>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.filters-container .filter-select').forEach(el => {
+        el.addEventListener('change', () => {
+            el.closest('form').submit();
+        });
+    });
+});
+</script>
+{% endblock %}

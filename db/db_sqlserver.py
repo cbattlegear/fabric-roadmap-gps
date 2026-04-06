@@ -581,6 +581,206 @@ def get_distinct_values(engine, column_name: str, limit: Optional[int] = None) -
     return out
 
 
+@retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
+def get_changelog_with_changes(
+    engine,
+    days: int = 30,
+    include_inactive: bool = True,
+    product_name: Optional[str] = None,
+    release_type: Optional[str] = None,
+    release_status: Optional[str] = None,
+) -> List[Dict]:
+    """Return changelog items with changed-column annotations in a single temporal-table query.
+
+    Uses the same LAG-based diff logic as GetReleaseItemHistoryById but runs
+    across ALL items modified within the window, returning one row per item
+    with its most-recent change summary.
+    """
+    filters = []
+    params = [days]
+    if not include_inactive:
+        filters.append("AND active = 1")
+    if product_name:
+        filters.append("AND product_name = ?")
+        params.append(product_name)
+    if release_type:
+        filters.append("AND release_type = ?")
+        params.append(release_type)
+    if release_status:
+        filters.append("AND release_status = ?")
+        params.append(release_status)
+    filter_clause = " ".join(filters)
+
+    sql = f"""
+    WITH Hist AS (
+        SELECT
+            release_item_id, release_date, release_type, release_status,
+            feature_description, feature_name, product_name, last_modified, active,
+            release_semester, vso_item, row_hash,
+            ROW_NUMBER() OVER (PARTITION BY release_item_id ORDER BY ValidFrom) AS VersionNum
+        FROM dbo.release_items FOR SYSTEM_TIME ALL
+        WHERE release_item_id IN (
+            SELECT release_item_id FROM release_items
+            WHERE last_modified >= DATEADD(day, -?, CAST(GETUTCDATE() AS DATE))
+            {filter_clause}
+        )
+    ),
+    Latest AS (
+        -- Find the first temporal version where last_modified matches the current value.
+        -- That's the content-change version; later versions are post-processing
+        -- (vectorization, blog matching) that don't touch tracked content fields.
+        SELECT h.release_item_id, MIN(h.VersionNum) AS ContentVer
+        FROM Hist h
+        INNER JOIN release_items ri
+            ON h.release_item_id = ri.release_item_id
+           AND h.last_modified = ri.last_modified
+        GROUP BY h.release_item_id
+    ),
+    Diffs AS (
+        SELECT h.*,
+            LAG(release_date)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_date,
+            LAG(release_type)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_type,
+            LAG(release_status)      OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_status,
+            LAG(feature_description) OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_feature_description,
+            LAG(feature_name)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_feature_name,
+            LAG(product_name)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_product_name,
+            LAG(release_semester)    OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_semester,
+            LAG(active)              OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_active,
+            LAG(row_hash)            OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_row_hash
+        FROM Hist h
+    )
+    SELECT
+        d.release_item_id,
+        d.feature_name,
+        d.product_name,
+        d.release_type,
+        d.release_status,
+        d.release_date,
+        d.last_modified,
+        d.active,
+        ChangedColumns = CASE
+            WHEN d.VersionNum = 1 THEN 'Added to roadmap'
+            ELSE COALESCE(
+                (SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
+                FROM (
+                    SELECT 1 AS ColOrder,
+                           CASE WHEN (d.release_date <> d.p_release_date)
+                                 OR (d.release_date IS NULL AND d.p_release_date IS NOT NULL)
+                                 OR (d.release_date IS NOT NULL AND d.p_release_date IS NULL)
+                                THEN CONCAT('Release Date ',
+                                            COALESCE(CONVERT(varchar(30), d.p_release_date, 23), '(none)'),
+                                            ' -> ',
+                                            COALESCE(CONVERT(varchar(30), d.release_date, 23), '(none)'))
+                           END AS ColName
+                    UNION ALL
+                    SELECT 2,
+                           CASE WHEN (d.release_type <> d.p_release_type)
+                                 OR (d.release_type IS NULL AND d.p_release_type IS NOT NULL)
+                                 OR (d.release_type IS NOT NULL AND d.p_release_type IS NULL)
+                                THEN CONCAT('Release Type ',
+                                            COALESCE(d.p_release_type, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.release_type, '(none)'))
+                           END
+                    UNION ALL
+                    SELECT 3,
+                           CASE WHEN (d.release_status <> d.p_release_status)
+                                 OR (d.release_status IS NULL AND d.p_release_status IS NOT NULL)
+                                 OR (d.release_status IS NOT NULL AND d.p_release_status IS NULL)
+                                THEN CONCAT('Release Status ',
+                                            COALESCE(d.p_release_status, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.release_status, '(none)'))
+                           END
+                    UNION ALL
+                    SELECT 4,
+                           CASE WHEN (d.feature_description <> d.p_feature_description)
+                                 OR (d.feature_description IS NULL AND d.p_feature_description IS NOT NULL)
+                                 OR (d.feature_description IS NOT NULL AND d.p_feature_description IS NULL)
+                                THEN 'Description updated'
+                           END
+                    UNION ALL
+                    SELECT 5,
+                           CASE WHEN (d.active <> d.p_active)
+                                 OR (d.active IS NULL AND d.p_active IS NOT NULL)
+                                 OR (d.active IS NOT NULL AND d.p_active IS NULL)
+                                THEN CASE
+                                    WHEN d.active = 0 THEN 'Removed from Roadmap'
+                                    WHEN d.active = 1 THEN 'Restored to Roadmap'
+                                    ELSE 'Active status changed'
+                                END
+                           END
+                    UNION ALL
+                    SELECT 6,
+                           CASE WHEN (d.feature_name <> d.p_feature_name)
+                                 OR (d.feature_name IS NULL AND d.p_feature_name IS NOT NULL)
+                                 OR (d.feature_name IS NOT NULL AND d.p_feature_name IS NULL)
+                                THEN CONCAT('Name ',
+                                            COALESCE(d.p_feature_name, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.feature_name, '(none)'))
+                           END
+                    UNION ALL
+                    SELECT 7,
+                           CASE WHEN (d.product_name <> d.p_product_name)
+                                 OR (d.product_name IS NULL AND d.p_product_name IS NOT NULL)
+                                 OR (d.product_name IS NOT NULL AND d.p_product_name IS NULL)
+                                THEN CONCAT('Workload ',
+                                            COALESCE(d.p_product_name, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.product_name, '(none)'))
+                           END
+                    UNION ALL
+                    SELECT 8,
+                           CASE WHEN (d.release_semester <> d.p_release_semester)
+                                 OR (d.release_semester IS NULL AND d.p_release_semester IS NOT NULL)
+                                 OR (d.release_semester IS NOT NULL AND d.p_release_semester IS NULL)
+                                THEN CONCAT('Semester ',
+                                            COALESCE(d.p_release_semester, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.release_semester, '(none)'))
+                           END
+                ) v
+                WHERE v.ColName IS NOT NULL),
+                -- Fallback: hash changed but no tracked column diff detected
+                'Updated'
+            )
+        END
+    FROM Diffs d
+    INNER JOIN Latest l ON d.release_item_id = l.release_item_id AND d.VersionNum = l.ContentVer
+    ORDER BY d.last_modified DESC, d.product_name, d.feature_name
+    """
+
+    conn = engine.raw_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(sql, params)
+        columns = [col[0] for col in cursor.description]
+        results = []
+        for row in cursor.fetchall():
+            row_dict = dict(zip(columns, row))
+            changed_raw = row_dict.pop("ChangedColumns", "") or ""
+            changed_list = [c.strip() for c in changed_raw.split(',') if c and c.strip()]
+            results.append({
+                "release_item_id": row_dict["release_item_id"],
+                "feature_name": row_dict["feature_name"],
+                "product_name": row_dict["product_name"],
+                "release_type": row_dict["release_type"],
+                "release_status": row_dict["release_status"],
+                "release_date": row_dict.get("release_date"),
+                "last_modified": row_dict.get("last_modified"),
+                "active": row_dict.get("active"),
+                "changed_columns": changed_list,
+            })
+        return results
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
+
+
 def generate_secure_token() -> str:
     """Generate a secure random token for email verification/unsubscribe"""
     return hashlib.sha256(f"{uuid.uuid4()}{time.time()}{random.random()}".encode()).hexdigest()

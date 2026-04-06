@@ -172,6 +172,56 @@
     }
 ]</code></pre>
 
+                                <h3>Changelog <code>/api/changelog</code></h3>
+                                <p>Returns releases grouped by <code>last_modified</code> date with change annotations showing what was modified. Useful for building daily/weekly change reports.</p>
+                                <h4>Parameters</h4>
+                                <ul>
+                                    <li><code>days</code> - Look-back window in days (default: 30, max: 90)</li>
+                                    <li><code>product_name</code> - Filter by exact product name</li>
+                                    <li><code>release_type</code> - Filter by exact release type</li>
+                                    <li><code>release_status</code> - Filter by exact release status</li>
+                                    <li><code>include_inactive</code> - Include removed items (<code>true</code> or <code>1</code>, default: true)</li>
+                                </ul>
+                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
+    "total_items": 48,
+    "days": [
+        {
+            "date": "2026-04-04",
+            "count": 5,
+            "items": [
+                {
+                    "release_item_id": "uuid",
+                    "feature_name": "string",
+                    "product_name": "string",
+                    "release_type": "string",
+                    "release_status": "string",
+                    "release_date": "YYYY-MM-DD|null",
+                    "last_modified": "YYYY-MM-DD",
+                    "active": true,
+                    "changed_columns": [
+                        "Release Date 2026-04-21 -> 2027-05-05"
+                    ]
+                }
+            ]
+        }
+    ]
+}</code></pre>
+                                <h4>Examples</h4>
+                                <div class="example-grid">
+                                    <div class="example-item">
+                                        <h4>Last 7 days</h4>
+                                        <a href="/api/changelog?days=7">/api/changelog?days=7</a>
+                                    </div>
+                                    <div class="example-item">
+                                        <h4>Power BI changes</h4>
+                                        <a href="/api/changelog?days=30&product_name=Power%20BI">/api/changelog?days=30&product_name=Power BI</a>
+                                    </div>
+                                    <div class="example-item">
+                                        <h4>GA items only</h4>
+                                        <a href="/api/changelog?days=30&release_type=General%20availability">/api/changelog?days=30&release_type=General availability</a>
+                                    </div>
+                                </div>
+
                                 <h3>Filter Options <code>/api/filter-options</code></h3>
                                 <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
     "product_names": ["Power BI", "Data Factory", ...],
