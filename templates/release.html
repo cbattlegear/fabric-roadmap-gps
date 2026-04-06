@@ -84,7 +84,7 @@
 
             <div class="modal-actions-row" style="margin-top: var(--spacing-l);">
                 <span class="modal-action-buttons">
-                    <a href="javascript:history.back()" class="button button-primary">← Back to Roadmap</a>
+                    <a href="/" id="back-to-roadmap" class="button button-primary">← Back to Roadmap</a>
                     <button class="link-copy" id="copy-release-link">Copy Direct Link</button>
                     <a href="/api/releases?release_item_id={{ release.release_item_id }}" class="button button-secondary" target="_blank" rel="noopener">View API JSON</a>
                 </span>
@@ -119,6 +119,17 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', () => {
+    const backBtn = document.getElementById('back-to-roadmap');
+    if (backBtn && document.referrer) {
+        try {
+            const referrerHost = new URL(document.referrer).hostname;
+            const canonicalHost = new URL('{{ canonical_base }}').hostname;
+            if (referrerHost === canonicalHost) {
+                backBtn.href = 'javascript:history.back()';
+            }
+        } catch (e) { /* invalid URL, keep default "/" */ }
+    }
+
     const btn = document.getElementById('copy-release-link');
     if (btn) {
         btn.addEventListener('click', () => {

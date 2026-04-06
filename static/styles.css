@@ -557,6 +557,7 @@ body {
   position: relative;
   overflow: hidden;
   min-width: 0;
+  cursor: pointer;
 }
 
 .change-item:hover {
