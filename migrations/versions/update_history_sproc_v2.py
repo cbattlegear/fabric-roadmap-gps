@@ -87,7 +87,10 @@ def upgrade():
                                CASE WHEN (d.feature_description <> d.p_feature_description)
                                      OR (d.feature_description IS NULL AND d.p_feature_description IS NOT NULL)
                                      OR (d.feature_description IS NOT NULL AND d.p_feature_description IS NULL)
-                                    THEN 'Description updated'
+                                    THEN CONCAT('Feature Description ',
+                                                LEFT(COALESCE(d.p_feature_description, '(null)'), 4000),
+                                                ' -> ',
+                                                LEFT(COALESCE(d.feature_description, '(null)'), 4000))
                                END
                         UNION ALL
                         -- 5: Active / Removed status
@@ -159,7 +162,10 @@ def upgrade():
                                CASE WHEN (d.feature_description <> d.p_feature_description)
                                      OR (d.feature_description IS NULL AND d.p_feature_description IS NOT NULL)
                                      OR (d.feature_description IS NOT NULL AND d.p_feature_description IS NULL)
-                                    THEN 'Description updated'
+                                    THEN CONCAT('Feature Description ',
+                                                LEFT(COALESCE(d.p_feature_description, '(null)'), 4000),
+                                                ' -> ',
+                                                LEFT(COALESCE(d.feature_description, '(null)'), 4000))
                                END
                         UNION ALL
                         SELECT 5,
