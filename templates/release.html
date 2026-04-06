@@ -24,8 +24,8 @@
             <div class="release-detail-meta">
                 <div class="change-badges">
                     <span class="change-badge badge-product">{{ release.product_name }}</span>
-                    <span class="change-badge badge-success">{{ release.release_type }}</span>
-                    <span class="change-badge badge-warning">{{ release.release_status }}</span>
+                    <span class="change-badge {{ 'badge-success' if release.release_type == 'General availability' else 'badge-warning' }}">{{ release.release_type }}</span>
+                    <span class="change-badge {{ 'badge-success' if release.release_status == 'Shipped' else 'badge-warning' }}">{{ release.release_status }}</span>
                     {% if not release.active %}
                     <span class="change-badge badge-removed">Removed</span>
                     {% endif %}

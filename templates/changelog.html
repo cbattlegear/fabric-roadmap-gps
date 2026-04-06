@@ -78,8 +78,8 @@
                         <div class="changelog-item-main">
                             <span class="changelog-feature-name">{{ item.feature_name }}</span>
                             <span class="change-badges">
-                                <span class="change-badge badge-success">{{ item.release_type }}</span>
-                                <span class="change-badge badge-warning">{{ item.release_status }}</span>
+                                <span class="change-badge {{ 'badge-success' if item.release_type == 'General availability' else 'badge-warning' }}">{{ item.release_type }}</span>
+                                <span class="change-badge {{ 'badge-success' if item.release_status == 'Shipped' else 'badge-warning' }}">{{ item.release_status }}</span>
                                 {% if not item.active %}
                                 <span class="change-badge badge-removed">Removed</span>
                                 {% endif %}
