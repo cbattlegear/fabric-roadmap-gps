@@ -46,8 +46,8 @@ def upgrade():
         ChangedColumns =
             CASE
                 WHEN d.VersionNum = 1 THEN 'Roadmap Item Added'
-                ELSE COALESCE(
-                    (SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
+                ELSE (
+                    SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
                     FROM (
                         -- 1: Release Date
                         SELECT 1 AS ColOrder,
@@ -116,17 +116,14 @@ def upgrade():
                                     THEN 'Name updated'
                                END
                     ) v
-                    WHERE v.ColName IS NOT NULL),
-                    -- Fallback when hash changed but no tracked column diff detected
-                    'Updated'
-                )
+                    WHERE v.ColName IS NOT NULL)
             END,
         d.last_modified
     FROM Diffs d
     WHERE CASE
                 WHEN d.VersionNum = 1 THEN 'Roadmap Item Added'
-                ELSE COALESCE(
-                    (SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
+                ELSE (
+                    SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
                     FROM (
                         SELECT 1 AS ColOrder,
                                CASE WHEN (d.release_date <> d.p_release_date)
@@ -189,9 +186,7 @@ def upgrade():
                                     THEN 'Name updated'
                                END
                     ) v
-                    WHERE v.ColName IS NOT NULL),
-                    'Updated'
-                )
+                    WHERE v.ColName IS NOT NULL)
             END IS NOT NULL
     ORDER BY d.VersionNum DESC;
     END;
