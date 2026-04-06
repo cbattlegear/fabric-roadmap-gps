@@ -46,14 +46,23 @@
                 <div class="changelog-items">
                     {% for item in workload_items %}
                     <a href="/release/{{ item.release_item_id }}" class="changelog-item{{ ' changelog-item-inactive' if not item.active }}">
-                        <span class="changelog-feature-name">{{ item.feature_name }}</span>
-                        <span class="change-badges">
-                            <span class="change-badge badge-success">{{ item.release_type }}</span>
-                            <span class="change-badge badge-warning">{{ item.release_status }}</span>
-                            {% if not item.active %}
-                            <span class="change-badge badge-removed">Removed</span>
-                            {% endif %}
-                        </span>
+                        <div class="changelog-item-main">
+                            <span class="changelog-feature-name">{{ item.feature_name }}</span>
+                            <span class="change-badges">
+                                <span class="change-badge badge-success">{{ item.release_type }}</span>
+                                <span class="change-badge badge-warning">{{ item.release_status }}</span>
+                                {% if not item.active %}
+                                <span class="change-badge badge-removed">Removed</span>
+                                {% endif %}
+                            </span>
+                        </div>
+                        {% if item_changes.get(item.release_item_id) %}
+                        <div class="changelog-changed-cols">
+                            {% for col in item_changes[item.release_item_id] %}
+                            <code class="changelog-col-tag">{{ col }}</code>
+                            {% endfor %}
+                        </div>
+                        {% endif %}
                     </a>
                     {% endfor %}
                 </div>

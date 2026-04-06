@@ -832,7 +832,16 @@ def changelog_page():
     days = request.args.get("days", type=int) or 30
     days = max(1, min(days, 90))
 
-    items = get_changelog_items(get_engine(), days=days, include_inactive=True)
+    engine = get_engine()
+    items = get_changelog_items(engine, days=days, include_inactive=True)
+
+    # Fetch history for each item to determine what changed
+    item_changes: dict[str, list[str]] = {}
+    for r in items:
+        history = fetch_history_rows(engine, r.release_item_id)
+        date_key = r.last_modified.isoformat() if r.last_modified else None
+        matched = _match_history_entry(history, date_key)
+        item_changes[r.release_item_id] = matched
 
     grouped: dict[str, list] = {}
     for r in items:
@@ -840,7 +849,27 @@ def changelog_page():
         grouped.setdefault(date_key, []).append(r)
 
     sorted_days = sorted(grouped.items(), reverse=True)
-    return render_template('changelog.html', changelog_days=sorted_days, selected_days=days)
+    return render_template('changelog.html', changelog_days=sorted_days,
+                           selected_days=days, item_changes=item_changes)
+
+
+def _match_history_entry(history: list, date_key: str | None) -> list[str]:
+    """Find the changed_columns from the history entry matching the given date.
+
+    Returns a friendly list like ["Added to roadmap"] for new items,
+    or the raw changed_columns list for updates.
+    """
+    if not history or len(history) <= 1:
+        return ["Added to roadmap"]
+    # History is sorted newest-first; find the entry whose date matches
+    for entry in history:
+        if entry.get("last_modified") and entry["last_modified"][:10] == (date_key or "")[:10]:
+            cols = entry.get("changed_columns", [])
+            if cols:
+                return cols
+    # Fallback: use the newest entry's columns
+    cols = history[0].get("changed_columns", [])
+    return cols if cols else ["Updated"]
 
 
 @app.get("/api/changelog")
@@ -855,7 +884,15 @@ def api_changelog():
     days = max(1, min(days, 90))
     include_inactive = request.args.get("include_inactive", "true").lower() in ("1", "true", "yes")
 
-    items = get_changelog_items(get_engine(), days=days, include_inactive=include_inactive)
+    engine = get_engine()
+    items = get_changelog_items(engine, days=days, include_inactive=include_inactive)
+
+    # Fetch history for each item
+    item_changes: dict[str, list[str]] = {}
+    for r in items:
+        history = fetch_history_rows(engine, r.release_item_id)
+        date_key = r.last_modified.isoformat() if r.last_modified else None
+        item_changes[r.release_item_id] = _match_history_entry(history, date_key)
 
     grouped: dict[str, list] = {}
     for r in items:
@@ -869,6 +906,7 @@ def api_changelog():
             "release_date": r.release_date.isoformat() if r.release_date else None,
             "last_modified": date_key,
             "active": r.active,
+            "changed_columns": item_changes.get(r.release_item_id, []),
         })
 
     days_list = [{"date": d, "count": len(itms), "items": itms}
