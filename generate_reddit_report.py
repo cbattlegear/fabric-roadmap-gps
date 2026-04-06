@@ -140,7 +140,7 @@ def _render_section(title: str, items, base_url: str) -> str:
 
     lines = [f"## {title}", ""]
     for workload, group in _group_by_workload(items).items():
-        lines.append(f"### {workload}")
+        lines.append(f"**{workload}**")
         lines.append("")
         for item in sorted(group, key=lambda x: x.get("feature_name") or ""):
             lines.append(_format_item(item, base_url))
