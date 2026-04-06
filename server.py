@@ -3,10 +3,10 @@ import os
 import urllib.parse
 import threading
 import logging
-from datetime import datetime, date, time, timezone, timedelta
+from datetime import datetime, date, time, timezone
 from typing import Optional, List
 
-from flask import Flask, request, Response, jsonify, render_template, redirect
+from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory
 from html import escape
 from email.utils import format_datetime
 import hashlib
@@ -17,7 +17,6 @@ import logging
 # `azure.monitor.opentelemetry` package.
 from azure.monitor.opentelemetry import configure_azure_monitor
 from opentelemetry import trace
-from opentelemetry.sdk.resources import Resource
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 
 
@@ -387,7 +386,7 @@ def _make_cached_response(body: str, mimetype: str = "application/json; charset=
         return Response(status=304)
     resp = Response(body, mimetype=mimetype)
     resp.headers['ETag'] = etag
-    resp.headers['Cache-Control'] = f'public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_STALE_TTL}'
+    resp.headers['Cache-Control'] = f'public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_STALE_TTL}, must-revalidate'
     resp.headers['Last-Modified'] = format_datetime(datetime.now(timezone.utc))
     return resp
 
@@ -872,6 +871,11 @@ def email_events_webhook():
 
     # Always return 200 to prevent email enumeration
     return jsonify({"status": "ok"}), 200
+
+@app.get("/favicon.ico")
+def favicon():
+    return send_from_directory(app.static_folder, "favicon.ico", mimetype="image/x-icon")
+
 
 @app.get("/robots.txt")
 def robots_txt():
