@@ -606,8 +606,15 @@ def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = 
         )
     ),
     Latest AS (
-        SELECT release_item_id, MAX(VersionNum) AS MaxVer
-        FROM Hist GROUP BY release_item_id
+        -- Find the first temporal version where last_modified matches the current value.
+        -- That's the content-change version; later versions are post-processing
+        -- (vectorization, blog matching) that don't touch tracked content fields.
+        SELECT h.release_item_id, MIN(h.VersionNum) AS ContentVer
+        FROM Hist h
+        INNER JOIN release_items ri
+            ON h.release_item_id = ri.release_item_id
+           AND h.last_modified = ri.last_modified
+        GROUP BY h.release_item_id
     ),
     Diffs AS (
         SELECT h.*,
@@ -717,7 +724,7 @@ def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = 
             )
         END
     FROM Diffs d
-    INNER JOIN Latest l ON d.release_item_id = l.release_item_id AND d.VersionNum = l.MaxVer
+    INNER JOIN Latest l ON d.release_item_id = l.release_item_id AND d.VersionNum = l.ContentVer
     ORDER BY d.last_modified DESC, d.product_name, d.feature_name
     """
 
