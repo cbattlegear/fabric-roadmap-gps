@@ -582,28 +582,139 @@ def get_distinct_values(engine, column_name: str, limit: Optional[int] = None) -
 
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
-def get_changelog_items(engine, days: int = 30, include_inactive: bool = True) -> List[ReleaseItemModel]:
-    """Return all items modified within the last *days* days, ordered for changelog display.
+def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = True) -> List[Dict]:
+    """Return changelog items with changed-column annotations in a single temporal-table query.
 
-    Results are sorted by last_modified DESC, then product_name, then feature_name
-    so callers can group by date and iterate workloads in order.
+    Uses the same LAG-based diff logic as GetReleaseItemHistoryById but runs
+    across ALL items modified within the window, returning one row per item
+    with its most-recent change summary.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    cutoff = date.today() - timedelta(days=days)
+    active_clause = "" if include_inactive else "AND active = 1"
 
-    stmt = select(ReleaseItemModel).where(
-        ReleaseItemModel.last_modified >= cutoff
+    sql = f"""
+    WITH Hist AS (
+        SELECT
+            release_item_id, release_date, release_type, release_status,
+            feature_description, feature_name, product_name, last_modified, active,
+            ROW_NUMBER() OVER (PARTITION BY release_item_id ORDER BY ValidFrom) AS VersionNum
+        FROM dbo.release_items FOR SYSTEM_TIME ALL
+        WHERE release_item_id IN (
+            SELECT release_item_id FROM release_items
+            WHERE last_modified >= DATEADD(day, -?, CAST(GETUTCDATE() AS DATE))
+            {active_clause}
+        )
+    ),
+    Latest AS (
+        SELECT release_item_id, MAX(VersionNum) AS MaxVer
+        FROM Hist GROUP BY release_item_id
+    ),
+    Diffs AS (
+        SELECT h.*,
+            LAG(release_date)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_date,
+            LAG(release_type)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_type,
+            LAG(release_status)      OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_status,
+            LAG(feature_description) OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_feature_description,
+            LAG(active)              OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_active
+        FROM Hist h
     )
-    if not include_inactive:
-        stmt = stmt.where(ReleaseItemModel.active == True)  # noqa: E712
-    stmt = stmt.order_by(
-        ReleaseItemModel.last_modified.desc(),
-        ReleaseItemModel.product_name,
-        ReleaseItemModel.feature_name,
-    )
+    SELECT
+        d.release_item_id,
+        d.feature_name,
+        d.product_name,
+        d.release_type,
+        d.release_status,
+        d.release_date,
+        d.last_modified,
+        d.active,
+        ChangedColumns = CASE
+            WHEN d.VersionNum = 1 THEN 'Added to roadmap'
+            ELSE (
+                SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
+                FROM (
+                    SELECT 1 AS ColOrder,
+                           CASE WHEN (d.release_date <> d.p_release_date)
+                                 OR (d.release_date IS NULL AND d.p_release_date IS NOT NULL)
+                                 OR (d.release_date IS NOT NULL AND d.p_release_date IS NULL)
+                                THEN CONCAT('Release Date ',
+                                            COALESCE(CONVERT(varchar(30), d.p_release_date, 23), '(none)'),
+                                            ' -> ',
+                                            COALESCE(CONVERT(varchar(30), d.release_date, 23), '(none)'))
+                           END AS ColName
+                    UNION ALL
+                    SELECT 2,
+                           CASE WHEN (d.release_type <> d.p_release_type)
+                                 OR (d.release_type IS NULL AND d.p_release_type IS NOT NULL)
+                                 OR (d.release_type IS NOT NULL AND d.p_release_type IS NULL)
+                                THEN CONCAT('Release Type ',
+                                            COALESCE(d.p_release_type, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.release_type, '(none)'))
+                           END
+                    UNION ALL
+                    SELECT 3,
+                           CASE WHEN (d.release_status <> d.p_release_status)
+                                 OR (d.release_status IS NULL AND d.p_release_status IS NOT NULL)
+                                 OR (d.release_status IS NOT NULL AND d.p_release_status IS NULL)
+                                THEN CONCAT('Release Status ',
+                                            COALESCE(d.p_release_status, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.release_status, '(none)'))
+                           END
+                    UNION ALL
+                    SELECT 4,
+                           CASE WHEN (d.feature_description <> d.p_feature_description)
+                                 OR (d.feature_description IS NULL AND d.p_feature_description IS NOT NULL)
+                                 OR (d.feature_description IS NOT NULL AND d.p_feature_description IS NULL)
+                                THEN 'Description updated'
+                           END
+                    UNION ALL
+                    SELECT 5,
+                           CASE WHEN (d.active <> d.p_active)
+                                 OR (d.active IS NULL AND d.p_active IS NOT NULL)
+                                 OR (d.active IS NOT NULL AND d.p_active IS NULL)
+                                THEN CASE
+                                    WHEN d.active = 0 THEN 'Removed from Roadmap'
+                                    WHEN d.active = 1 THEN 'Restored to Roadmap'
+                                    ELSE 'Active status changed'
+                                END
+                           END
+                ) v
+                WHERE v.ColName IS NOT NULL
+            )
+        END
+    FROM Diffs d
+    INNER JOIN Latest l ON d.release_item_id = l.release_item_id AND d.VersionNum = l.MaxVer
+    ORDER BY d.last_modified DESC, d.product_name, d.feature_name
+    """
 
-    with SessionLocal() as session:
-        return session.scalars(stmt).all()
+    conn = engine.raw_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(sql, (days,))
+        columns = [col[0] for col in cursor.description]
+        results = []
+        for row in cursor.fetchall():
+            row_dict = dict(zip(columns, row))
+            changed_raw = row_dict.pop("ChangedColumns", "") or ""
+            changed_list = [c.strip() for c in changed_raw.split(',') if c and c.strip()]
+            results.append({
+                "release_item_id": row_dict["release_item_id"],
+                "feature_name": row_dict["feature_name"],
+                "product_name": row_dict["product_name"],
+                "release_type": row_dict["release_type"],
+                "release_status": row_dict["release_status"],
+                "release_date": row_dict.get("release_date"),
+                "last_modified": row_dict.get("last_modified"),
+                "active": row_dict.get("active"),
+                "changed_columns": changed_list,
+            })
+        return results
+    finally:
+        try:
+            cursor.close()
+        except Exception:
+            pass
+        conn.close()
 
 
 def generate_secure_token() -> str:

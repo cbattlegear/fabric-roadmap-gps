@@ -56,9 +56,9 @@
                                 {% endif %}
                             </span>
                         </div>
-                        {% if item_changes.get(item.release_item_id) %}
+                        {% if item.changed_columns %}
                         <div class="changelog-changed-cols">
-                            {% for col in item_changes[item.release_item_id] %}
+                            {% for col in item.changed_columns %}
                             <code class="changelog-col-tag">{{ col }}</code>
                             {% endfor %}
                         </div>
