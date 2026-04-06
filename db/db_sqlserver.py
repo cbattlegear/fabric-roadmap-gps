@@ -596,6 +596,7 @@ def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = 
         SELECT
             release_item_id, release_date, release_type, release_status,
             feature_description, feature_name, product_name, last_modified, active,
+            release_semester, vso_item, row_hash,
             ROW_NUMBER() OVER (PARTITION BY release_item_id ORDER BY ValidFrom) AS VersionNum
         FROM dbo.release_items FOR SYSTEM_TIME ALL
         WHERE release_item_id IN (
@@ -614,7 +615,11 @@ def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = 
             LAG(release_type)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_type,
             LAG(release_status)      OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_status,
             LAG(feature_description) OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_feature_description,
-            LAG(active)              OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_active
+            LAG(feature_name)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_feature_name,
+            LAG(product_name)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_product_name,
+            LAG(release_semester)    OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_semester,
+            LAG(active)              OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_active,
+            LAG(row_hash)            OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_row_hash
         FROM Hist h
     )
     SELECT
@@ -628,8 +633,8 @@ def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = 
         d.active,
         ChangedColumns = CASE
             WHEN d.VersionNum = 1 THEN 'Added to roadmap'
-            ELSE (
-                SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
+            ELSE COALESCE(
+                (SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
                 FROM (
                     SELECT 1 AS ColOrder,
                            CASE WHEN (d.release_date <> d.p_release_date)
@@ -678,8 +683,37 @@ def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = 
                                     ELSE 'Active status changed'
                                 END
                            END
+                    UNION ALL
+                    SELECT 6,
+                           CASE WHEN (d.feature_name <> d.p_feature_name)
+                                 OR (d.feature_name IS NULL AND d.p_feature_name IS NOT NULL)
+                                 OR (d.feature_name IS NOT NULL AND d.p_feature_name IS NULL)
+                                THEN 'Name updated'
+                           END
+                    UNION ALL
+                    SELECT 7,
+                           CASE WHEN (d.product_name <> d.p_product_name)
+                                 OR (d.product_name IS NULL AND d.p_product_name IS NOT NULL)
+                                 OR (d.product_name IS NOT NULL AND d.p_product_name IS NULL)
+                                THEN CONCAT('Workload ',
+                                            COALESCE(d.p_product_name, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.product_name, '(none)'))
+                           END
+                    UNION ALL
+                    SELECT 8,
+                           CASE WHEN (d.release_semester <> d.p_release_semester)
+                                 OR (d.release_semester IS NULL AND d.p_release_semester IS NOT NULL)
+                                 OR (d.release_semester IS NOT NULL AND d.p_release_semester IS NULL)
+                                THEN CONCAT('Semester ',
+                                            COALESCE(d.p_release_semester, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.release_semester, '(none)'))
+                           END
                 ) v
-                WHERE v.ColName IS NOT NULL
+                WHERE v.ColName IS NOT NULL),
+                -- Fallback: hash changed but no tracked column diff detected
+                'Updated'
             )
         END
     FROM Diffs d
