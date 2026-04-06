@@ -169,11 +169,11 @@ def generate_report(base_url: str, days: int = 7) -> str:
     ]
 
     sections = [
-        ("🆕 New Additions", new),
-        ("🔬 Preview Updates", preview),
-        ("✅ General Availability Updates", ga),
-        ("⏳ Delayed Items", delayed),
-        ("❌ Removed Items", removed),
+        ("New Additions", new),
+        ("Preview Updates", preview),
+        ("General Availability Updates", ga),
+        ("Delayed Items", delayed),
+        ("Removed Items", removed),
     ]
 
     for title, bucket in sections:
