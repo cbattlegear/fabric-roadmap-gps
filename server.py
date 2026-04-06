@@ -831,8 +831,23 @@ def changelog_page():
     """Server-rendered daily changelog page."""
     days = request.args.get("days", type=int) or 30
     days = max(1, min(days, 90))
+    product_name = request.args.get("product_name") or None
+    release_type = request.args.get("release_type") or None
+    release_status = request.args.get("release_status") or None
 
-    items = get_changelog_with_changes(get_engine(), days=days, include_inactive=True)
+    engine = get_engine()
+    items = get_changelog_with_changes(
+        engine, days=days, include_inactive=True,
+        product_name=product_name, release_type=release_type,
+        release_status=release_status,
+    )
+
+    # Load filter dropdown options
+    filter_options = {
+        "product_names": get_distinct_values(engine, 'product_name'),
+        "release_types": get_distinct_values(engine, 'release_type'),
+        "release_statuses": get_distinct_values(engine, 'release_status'),
+    }
 
     grouped: dict[str, list] = {}
     for item in items:
@@ -841,7 +856,13 @@ def changelog_page():
         grouped.setdefault(date_key, []).append(item)
 
     sorted_days = sorted(grouped.items(), reverse=True)
-    return render_template('changelog.html', changelog_days=sorted_days, selected_days=days)
+    return render_template('changelog.html', changelog_days=sorted_days,
+                           selected_days=days, filter_options=filter_options,
+                           active_filters={
+                               "product_name": product_name or "",
+                               "release_type": release_type or "",
+                               "release_status": release_status or "",
+                           })
 
 
 @app.get("/api/changelog")
@@ -851,12 +872,20 @@ def api_changelog():
     Query Params:
       days: look-back window (default 30, max 90)
       include_inactive: include removed items (default true)
+      product_name, release_type, release_status: filter by field
     """
     days = request.args.get("days", type=int) or 30
     days = max(1, min(days, 90))
     include_inactive = request.args.get("include_inactive", "true").lower() in ("1", "true", "yes")
+    product_name = request.args.get("product_name") or None
+    release_type = request.args.get("release_type") or None
+    release_status = request.args.get("release_status") or None
 
-    items = get_changelog_with_changes(get_engine(), days=days, include_inactive=include_inactive)
+    items = get_changelog_with_changes(
+        get_engine(), days=days, include_inactive=include_inactive,
+        product_name=product_name, release_type=release_type,
+        release_status=release_status,
+    )
 
     # Serialize dates for JSON output
     for item in items:

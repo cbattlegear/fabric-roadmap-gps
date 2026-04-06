@@ -582,14 +582,34 @@ def get_distinct_values(engine, column_name: str, limit: Optional[int] = None) -
 
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
-def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = True) -> List[Dict]:
+def get_changelog_with_changes(
+    engine,
+    days: int = 30,
+    include_inactive: bool = True,
+    product_name: Optional[str] = None,
+    release_type: Optional[str] = None,
+    release_status: Optional[str] = None,
+) -> List[Dict]:
     """Return changelog items with changed-column annotations in a single temporal-table query.
 
     Uses the same LAG-based diff logic as GetReleaseItemHistoryById but runs
     across ALL items modified within the window, returning one row per item
     with its most-recent change summary.
     """
-    active_clause = "" if include_inactive else "AND active = 1"
+    filters = []
+    params = [days]
+    if not include_inactive:
+        filters.append("AND active = 1")
+    if product_name:
+        filters.append("AND product_name = ?")
+        params.append(product_name)
+    if release_type:
+        filters.append("AND release_type = ?")
+        params.append(release_type)
+    if release_status:
+        filters.append("AND release_status = ?")
+        params.append(release_status)
+    filter_clause = " ".join(filters)
 
     sql = f"""
     WITH Hist AS (
@@ -602,7 +622,7 @@ def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = 
         WHERE release_item_id IN (
             SELECT release_item_id FROM release_items
             WHERE last_modified >= DATEADD(day, -?, CAST(GETUTCDATE() AS DATE))
-            {active_clause}
+            {filter_clause}
         )
     ),
     Latest AS (
@@ -731,7 +751,7 @@ def get_changelog_with_changes(engine, days: int = 30, include_inactive: bool = 
     conn = engine.raw_connection()
     try:
         cursor = conn.cursor()
-        cursor.execute(sql, (days,))
+        cursor.execute(sql, params)
         columns = [col[0] for col in cursor.description]
         results = []
         for row in cursor.fetchall():

@@ -738,30 +738,6 @@ a:focus-visible {
 /* End Shared Component Styles */
 
 /* Changelog Page */
-.changelog-controls {
-  margin-bottom: var(--spacing-l);
-}
-
-.changelog-form {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-s);
-}
-
-.changelog-form label {
-  font-weight: 600;
-  color: var(--fabric-neutral-grey-130);
-}
-
-.changelog-form select {
-  padding: var(--spacing-xs) var(--spacing-s);
-  border: 1px solid var(--fabric-neutral-grey-30);
-  border-radius: 4px;
-  font-size: var(--font-size-body);
-  background: white;
-  cursor: pointer;
-}
-
 .changelog-day {
   margin-bottom: var(--spacing-xl);
 }
