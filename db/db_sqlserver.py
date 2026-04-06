@@ -715,7 +715,10 @@ def get_changelog_with_changes(
                            CASE WHEN (d.feature_name <> d.p_feature_name)
                                  OR (d.feature_name IS NULL AND d.p_feature_name IS NOT NULL)
                                  OR (d.feature_name IS NOT NULL AND d.p_feature_name IS NULL)
-                                THEN 'Name updated'
+                                THEN CONCAT('Name ',
+                                            COALESCE(d.p_feature_name, '(none)'),
+                                            ' -> ',
+                                            COALESCE(d.feature_name, '(none)'))
                            END
                     UNION ALL
                     SELECT 7,

@@ -113,7 +113,10 @@ def upgrade():
                                CASE WHEN (d.feature_name <> d.p_feature_name)
                                      OR (d.feature_name IS NULL AND d.p_feature_name IS NOT NULL)
                                      OR (d.feature_name IS NOT NULL AND d.p_feature_name IS NULL)
-                                    THEN 'Name updated'
+                                    THEN CONCAT('Name ',
+                                                COALESCE(d.p_feature_name, '(null)'),
+                                                ' -> ',
+                                                COALESCE(d.feature_name, '(null)'))
                                END
                     ) v
                     WHERE v.ColName IS NOT NULL)
@@ -183,7 +186,10 @@ def upgrade():
                                CASE WHEN (d.feature_name <> d.p_feature_name)
                                      OR (d.feature_name IS NULL AND d.p_feature_name IS NOT NULL)
                                      OR (d.feature_name IS NOT NULL AND d.p_feature_name IS NULL)
-                                    THEN 'Name updated'
+                                    THEN CONCAT('Name ',
+                                                COALESCE(d.p_feature_name, '(null)'),
+                                                ' -> ',
+                                                COALESCE(d.feature_name, '(null)'))
                                END
                     ) v
                     WHERE v.ColName IS NOT NULL)
