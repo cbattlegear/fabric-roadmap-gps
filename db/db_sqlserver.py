@@ -581,6 +581,31 @@ def get_distinct_values(engine, column_name: str, limit: Optional[int] = None) -
     return out
 
 
+@retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
+def get_changelog_items(engine, days: int = 30, include_inactive: bool = True) -> List[ReleaseItemModel]:
+    """Return all items modified within the last *days* days, ordered for changelog display.
+
+    Results are sorted by last_modified DESC, then product_name, then feature_name
+    so callers can group by date and iterate workloads in order.
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    cutoff = date.today() - timedelta(days=days)
+
+    stmt = select(ReleaseItemModel).where(
+        ReleaseItemModel.last_modified >= cutoff
+    )
+    if not include_inactive:
+        stmt = stmt.where(ReleaseItemModel.active == True)  # noqa: E712
+    stmt = stmt.order_by(
+        ReleaseItemModel.last_modified.desc(),
+        ReleaseItemModel.product_name,
+        ReleaseItemModel.feature_name,
+    )
+
+    with SessionLocal() as session:
+        return session.scalars(stmt).all()
+
+
 def generate_secure_token() -> str:
     """Generate a secure random token for email verification/unsubscribe"""
     return hashlib.sha256(f"{uuid.uuid4()}{time.time()}{random.random()}".encode()).hexdigest()
