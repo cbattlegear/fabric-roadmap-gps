@@ -86,7 +86,23 @@
                         {% if item.changed_columns %}
                         <div class="changelog-changed-cols">
                             {% for col in item.changed_columns %}
-                            <code class="changelog-col-tag">{{ col }}</code>
+                            <code class="changelog-col-tag">
+                                {%- if col.startswith('Release Date ') -%}
+                                    <strong>Release Date</strong> {{ col[13:] }}
+                                {%- elif col.startswith('Release Type ') -%}
+                                    <strong>Release Type</strong> {{ col[13:] }}
+                                {%- elif col.startswith('Release Status ') -%}
+                                    <strong>Release Status</strong> {{ col[15:] }}
+                                {%- elif col.startswith('Name ') -%}
+                                    <strong>Name</strong> {{ col[5:] }}
+                                {%- elif col.startswith('Semester ') -%}
+                                    <strong>Semester</strong> {{ col[9:] }}
+                                {%- elif col.startswith('Workload ') -%}
+                                    <strong>Workload</strong> {{ col[9:] }}
+                                {%- else -%}
+                                    <strong>{{ col }}</strong>
+                                {%- endif -%}
+                            </code>
                             {% endfor %}
                         </div>
                         {% endif %}
