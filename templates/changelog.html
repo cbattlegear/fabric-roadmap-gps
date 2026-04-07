@@ -77,13 +77,11 @@
                     <a href="/release/{{ item.release_item_id }}" class="changelog-item{{ ' changelog-item-inactive' if not item.active }}">
                         <div class="changelog-item-main">
                             <span class="changelog-feature-name">{{ item.feature_name }}</span>
+                            {% if not item.active %}
                             <span class="change-badges">
-                                <span class="change-badge {{ 'badge-success' if item.release_type == 'General availability' else 'badge-warning' }}">{{ item.release_type }}</span>
-                                <span class="change-badge {{ 'badge-success' if item.release_status == 'Shipped' else 'badge-warning' }}">{{ item.release_status }}</span>
-                                {% if not item.active %}
                                 <span class="change-badge badge-removed">Removed</span>
-                                {% endif %}
                             </span>
+                            {% endif %}
                         </div>
                         {% if item.changed_columns %}
                         <div class="changelog-changed-cols">
