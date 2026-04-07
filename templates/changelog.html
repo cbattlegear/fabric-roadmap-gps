@@ -66,35 +66,58 @@
                 <h2 class="changelog-date">
                     {{ items[0].last_modified.strftime('%A, %B %d, %Y') if items[0].last_modified else date_str }}
                 </h2>
-                <span class="changelog-count">{{ items|length }} change{{ 's' if items|length != 1 }}</span>
+                <span class="changelog-count">· {{ items|length }} change{{ 's' if items|length != 1 }}</span>
             </div>
 
             {% for workload, workload_items in items | groupby('product_name') %}
             <div class="changelog-workload">
                 <h3 class="changelog-workload-name">{{ workload or 'Unknown' }}</h3>
-                <div class="changelog-items">
-                    {% for item in workload_items %}
-                    <a href="/release/{{ item.release_item_id }}" class="changelog-item{{ ' changelog-item-inactive' if not item.active }}">
-                        <div class="changelog-item-main">
-                            <span class="changelog-feature-name">{{ item.feature_name }}</span>
-                            <span class="change-badges">
-                                <span class="change-badge {{ 'badge-success' if item.release_type == 'General availability' else 'badge-warning' }}">{{ item.release_type }}</span>
-                                <span class="change-badge {{ 'badge-success' if item.release_status == 'Shipped' else 'badge-warning' }}">{{ item.release_status }}</span>
-                                {% if not item.active %}
-                                <span class="change-badge badge-removed">Removed</span>
-                                {% endif %}
-                            </span>
-                        </div>
-                        {% if item.changed_columns %}
-                        <div class="changelog-changed-cols">
-                            {% for col in item.changed_columns %}
-                            <code class="changelog-col-tag">{{ col }}</code>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
+                {% for item in workload_items %}
+                    {% if item.changed_columns %}
+                        {% for col in item.changed_columns %}
+                        <a href="/release/{{ item.release_item_id }}" class="changelog-row{{ ' changelog-item-inactive' if not item.active }}">
+                            <div class="changelog-cell-name">{{ item.feature_name }}</div>
+                            {%- if col.startswith('Release Date ') -%}
+                            <div class="changelog-cell-change">Date Changed</div>
+                            <div class="changelog-cell-detail">{{ col[13:] | replace(' -> ', ' → ') }}</div>
+                            {%- elif col.startswith('Release Type ') -%}
+                            <div class="changelog-cell-change">Type Changed</div>
+                            <div class="changelog-cell-detail">{{ col[13:] | replace(' -> ', ' → ') }}</div>
+                            {%- elif col.startswith('Release Status ') -%}
+                            <div class="changelog-cell-change">Status Changed</div>
+                            <div class="changelog-cell-detail">{{ col[15:] | replace(' -> ', ' → ') }}</div>
+                            {%- elif col.startswith('Name ') -%}
+                            <div class="changelog-cell-change">Name Changed</div>
+                            <div class="changelog-cell-detail">{{ col[5:] | replace(' -> ', ' → ') }}</div>
+                            {%- elif col.startswith('Semester ') -%}
+                            <div class="changelog-cell-change">Semester Changed</div>
+                            <div class="changelog-cell-detail">{{ col[9:] | replace(' -> ', ' → ') }}</div>
+                            {%- elif col.startswith('Workload ') -%}
+                            <div class="changelog-cell-change">Workload Changed</div>
+                            <div class="changelog-cell-detail">{{ col[9:] | replace(' -> ', ' → ') }}</div>
+                            {%- elif col == 'Removed from Roadmap' -%}
+                            <div class="changelog-cell-change changelog-cell-removed">Removed</div>
+                            <div class="changelog-cell-detail">Removed from Roadmap</div>
+                            {%- elif col == 'Restored to Roadmap' -%}
+                            <div class="changelog-cell-change">Restored</div>
+                            <div class="changelog-cell-detail">Restored to Roadmap</div>
+                            {%- elif col == 'Added to roadmap' -%}
+                            <div class="changelog-cell-change">Added</div>
+                            <div class="changelog-cell-detail">Added to roadmap</div>
+                            {%- else -%}
+                            <div class="changelog-cell-change">{{ col }}</div>
+                            <div class="changelog-cell-detail"></div>
+                            {%- endif -%}
+                        </a>
+                        {% endfor %}
+                    {% else %}
+                    <a href="/release/{{ item.release_item_id }}" class="changelog-row{{ ' changelog-item-inactive' if not item.active }}">
+                        <div class="changelog-cell-name">{{ item.feature_name }}</div>
+                        <div class="changelog-cell-change">Updated</div>
+                        <div class="changelog-cell-detail"></div>
                     </a>
-                    {% endfor %}
-                </div>
+                    {% endif %}
+                {% endfor %}
             </div>
             {% endfor %}
         </div>
