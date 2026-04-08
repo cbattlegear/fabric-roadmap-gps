@@ -107,6 +107,14 @@ def prevent_caching_sensitive_pages(response):
     return response
 
 
+@app.after_request
+def set_static_cache_headers(response):
+    """Ensure static files have proper cache headers."""
+    if request.path.startswith('/static/'):
+        response.headers['Cache-Control'] = 'public, max-age=86400, immutable'
+    return response
+
+
 @app.before_request
 def redirect_to_canonical_host():
     """301 redirect specific hosts (e.g. apex domain) to the canonical host."""
