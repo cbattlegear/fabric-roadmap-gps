@@ -847,41 +847,8 @@ def release_detail(release_item_id):
 
 @app.get("/changelog")
 def changelog_page():
-    """Server-rendered daily changelog page."""
-    days = request.args.get("days", type=int) or 30
-    days = max(1, min(days, 90))
-    product_name = request.args.get("product_name") or None
-    release_type = request.args.get("release_type") or None
-    release_status = request.args.get("release_status") or None
-
-    engine = get_engine()
-    items = get_changelog_with_changes(
-        engine, days=days, include_inactive=True,
-        product_name=product_name, release_type=release_type,
-        release_status=release_status,
-    )
-
-    # Load filter dropdown options
-    filter_options = {
-        "product_names": get_distinct_values(engine, 'product_name'),
-        "release_types": get_distinct_values(engine, 'release_type'),
-        "release_statuses": get_distinct_values(engine, 'release_status'),
-    }
-
-    grouped: dict[str, list] = {}
-    for item in items:
-        lm = item["last_modified"]
-        date_key = lm.isoformat() if hasattr(lm, 'isoformat') else str(lm) if lm else "unknown"
-        grouped.setdefault(date_key, []).append(item)
-
-    sorted_days = sorted(grouped.items(), reverse=True)
-    return render_template('changelog.html', changelog_days=sorted_days,
-                           selected_days=days, filter_options=filter_options,
-                           active_filters={
-                               "product_name": product_name or "",
-                               "release_type": release_type or "",
-                               "release_status": release_status or "",
-                           })
+    """Changelog page — data loaded client-side via /api/changelog."""
+    return render_template('changelog.html')
 
 
 @app.get("/api/changelog")
