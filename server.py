@@ -676,6 +676,25 @@ def api_filter_options():
     return _make_cached_response(json_str)
 
 
+@app.get("/api/version")
+def api_version():
+    """Return the current data version (most recently modified release_item_id).
+
+    Always served with no-cache headers so the client gets a fresh value
+    that can be appended to other API calls as a cache-buster.
+    """
+    engine = get_engine()
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        row = session.query(ReleaseItemModel.release_item_id).order_by(
+            ReleaseItemModel.last_modified.desc()
+        ).first()
+        version = row.release_item_id if row else ""
+    resp = jsonify({"version": version})
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
 @app.route("/api/subscribe", methods=["POST"])
 def api_subscribe():
     """Subscribe to weekly email updates"""
@@ -828,41 +847,8 @@ def release_detail(release_item_id):
 
 @app.get("/changelog")
 def changelog_page():
-    """Server-rendered daily changelog page."""
-    days = request.args.get("days", type=int) or 30
-    days = max(1, min(days, 90))
-    product_name = request.args.get("product_name") or None
-    release_type = request.args.get("release_type") or None
-    release_status = request.args.get("release_status") or None
-
-    engine = get_engine()
-    items = get_changelog_with_changes(
-        engine, days=days, include_inactive=True,
-        product_name=product_name, release_type=release_type,
-        release_status=release_status,
-    )
-
-    # Load filter dropdown options
-    filter_options = {
-        "product_names": get_distinct_values(engine, 'product_name'),
-        "release_types": get_distinct_values(engine, 'release_type'),
-        "release_statuses": get_distinct_values(engine, 'release_status'),
-    }
-
-    grouped: dict[str, list] = {}
-    for item in items:
-        lm = item["last_modified"]
-        date_key = lm.isoformat() if hasattr(lm, 'isoformat') else str(lm) if lm else "unknown"
-        grouped.setdefault(date_key, []).append(item)
-
-    sorted_days = sorted(grouped.items(), reverse=True)
-    return render_template('changelog.html', changelog_days=sorted_days,
-                           selected_days=days, filter_options=filter_options,
-                           active_filters={
-                               "product_name": product_name or "",
-                               "release_type": release_type or "",
-                               "release_status": release_status or "",
-                           })
+    """Changelog page — data loaded client-side via /api/changelog."""
+    return render_template('changelog.html')
 
 
 @app.get("/api/changelog")
