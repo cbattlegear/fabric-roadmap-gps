@@ -676,6 +676,25 @@ def api_filter_options():
     return _make_cached_response(json_str)
 
 
+@app.get("/api/version")
+def api_version():
+    """Return the current data version (most recently modified release_item_id).
+
+    Always served with no-cache headers so the client gets a fresh value
+    that can be appended to other API calls as a cache-buster.
+    """
+    engine = get_engine()
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        row = session.query(ReleaseItemModel.release_item_id).order_by(
+            ReleaseItemModel.last_modified.desc()
+        ).first()
+        version = row.release_item_id if row else ""
+    resp = jsonify({"version": version})
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
 @app.route("/api/subscribe", methods=["POST"])
 def api_subscribe():
     """Subscribe to weekly email updates"""

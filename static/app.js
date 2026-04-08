@@ -44,15 +44,27 @@ class RecentChanges {
         this.allPagesLoaded = false;
         this.observer = null;
         this.hasLoadedOnce = false;
+        this.dataVersion = '';
         this.init();
     }
 
     async init() {
+        await this.fetchVersion();
         await this.loadFilterOptions();
         this.restoreFiltersFromUrl();
         await this.loadRecentChanges({ reset: true });
         this.bindEvents();
         this.setupInfiniteScroll();
+    }
+
+    async fetchVersion() {
+        try {
+            const response = await fetch('/api/version');
+            const data = await response.json();
+            this.dataVersion = data.version || '';
+        } catch (e) {
+            this.dataVersion = '';
+        }
     }
 
     async loadFilterOptions() {
@@ -131,6 +143,7 @@ class RecentChanges {
             params.append('page', String(this.page));
             params.append('page_size', String(this.pageSize));
             params.append('include_inactive', 'true');
+            if (this.dataVersion) params.append('v', this.dataVersion);
 
             const response = await fetch(`/api/releases?${params.toString()}`);
 
