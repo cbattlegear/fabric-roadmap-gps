@@ -62,11 +62,11 @@
     <header class="header">
         <div class="container">
             <div class="header-inner">
-                <h1 style="margin: 0;">
+                <div style="margin: 0;">
                     <a id="logo" href="/">
                         <img src="/static/fabric_gps_logo.svg" alt="Fabric GPS — Microsoft Fabric Roadmap Tracker" style="height: 38px; width: auto;">
                     </a>
-                </h1>
+                </div>
                 <nav class="header-nav">
                 {% for item in nav_items %}
                     <a href="{{ item.url }}" class="nav-link{% if request.path == item.url %} active{% endif %}" {% if request.path == item.url %}aria-current="page"{% endif %}>{{ item.label }}</a>

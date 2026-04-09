@@ -9,6 +9,7 @@ from unidecode import unidecode
 
 from lib.release_item import ReleaseItem
 from db.db_sqlserver import make_engine, init_db, save_releases, deactivate_missing_releases
+from lib.indexnow import submit_urls
 # Import the `configure_azure_monitor()` function from the
 # `azure.monitor.opentelemetry` package.
 from azure.monitor.opentelemetry import configure_azure_monitor
@@ -55,6 +56,7 @@ if __name__ == '__main__':
     families = extract_product_families(r.text)
     product_releases = {}
     all_fetched_ids: set = set()
+    all_changed_ids: list = []
     change_count = 0
     for product in families:
         print(f"Product Family: {product['name']} (ID: {product['id']})")
@@ -118,10 +120,18 @@ if __name__ == '__main__':
         stats = save_releases(engine, items)
         print("DB save stats:", stats)
         change_count += stats['updated'] + stats['inserted']
+        all_changed_ids.extend(stats.get('changed_ids', []))
 
     # Mark releases no longer on the roadmap as inactive
     deactivation_stats = deactivate_missing_releases(engine, all_fetched_ids)
     print("Deactivation stats:", deactivation_stats)
     change_count += deactivation_stats['deactivated']
+    all_changed_ids.extend(deactivation_stats.get('deactivated_ids', []))
+
+    # Notify search engines via IndexNow
+    if all_changed_ids:
+        unique_ids = list(dict.fromkeys(all_changed_ids))  # dedupe, preserve order
+        otelLogger.info(f'Submitting {len(unique_ids)} changed URLs to IndexNow')
+        submit_urls(unique_ids)
 
     otelLogger.info(f'Fabric-GPS Database Refresh completed with {change_count} changes')
