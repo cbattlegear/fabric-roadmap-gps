@@ -970,12 +970,24 @@ Sitemap: {base}/sitemap.xml
     return Response(body, mimetype="text/plain")
 
 
+INDEXNOW_API_KEY = os.getenv("INDEXNOW_API_KEY", "")
+
+
+@app.get("/<key>.txt")
+def indexnow_key_file(key):
+    """Serve the IndexNow API key verification file."""
+    if not INDEXNOW_API_KEY or key != INDEXNOW_API_KEY:
+        return Response("Not found", status=404)
+    return Response(INDEXNOW_API_KEY, mimetype="text/plain")
+
+
 @app.get("/sitemap.xml")
 def sitemap_xml():
     """Serve a dynamic XML sitemap for search engines."""
     base = EMAIL_BASE_URL
     pages = [
         {"loc": "/",          "priority": "1.0", "changefreq": "hourly"},
+        {"loc": "/changelog", "priority": "0.9", "changefreq": "hourly"},
         {"loc": "/about",     "priority": "0.7", "changefreq": "monthly"},
         {"loc": "/endpoints", "priority": "0.6", "changefreq": "monthly"},
         {"loc": "/subscribe", "priority": "0.6", "changefreq": "monthly"},

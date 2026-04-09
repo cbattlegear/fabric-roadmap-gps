@@ -325,11 +325,12 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
     """
     Upsert a list of releases into SQL Server.
     Only updates last_modified when content changes (detected via SHA256 row_hash).
-    Returns counts: {'inserted': n, 'updated': m, 'unchanged': k}
+    Returns counts: {'inserted': n, 'updated': m, 'unchanged': k, 'changed_ids': [...]}
     This function is retried on transient SQL/Azure connection errors.
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
     inserted = updated = unchanged = 0
+    changed_ids = []
 
     with SessionLocal() as session:
         with session.begin():
@@ -353,11 +354,13 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
                     )
                     session.add(model)
                     inserted += 1
+                    changed_ids.append(str(pk))
                 else:
                     # Re-activate if previously removed from roadmap
                     if not existing.active:
                         existing.active = True
                         existing.last_modified = now
+                        changed_ids.append(str(pk))
 
                     if (existing.row_hash or "") == new_hash:
                         unchanged += 1
@@ -373,8 +376,9 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
                         existing.blog_title = None
                         existing.blog_url = None
                         updated += 1
+                        changed_ids.append(str(pk))
 
-    return {"inserted": inserted, "updated": updated, "unchanged": unchanged}
+    return {"inserted": inserted, "updated": updated, "unchanged": unchanged, "changed_ids": changed_ids}
 
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
@@ -387,10 +391,11 @@ def deactivate_missing_releases(engine, current_ids: set) -> Dict[str, int]:
     On subsequent runs the ``last_modified`` date is updated so that the
     removal surfaces through normal feeds / notifications.
 
-    Returns counts: ``{'deactivated': n, 'already_inactive': m}``.
+    Returns counts: ``{'deactivated': n, 'already_inactive': m, 'deactivated_ids': [...]}``.
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
     deactivated = already_inactive = 0
+    deactivated_ids = []
 
     with SessionLocal() as session:
         with session.begin():
@@ -415,6 +420,7 @@ def deactivate_missing_releases(engine, current_ids: set) -> Dict[str, int]:
                     if not is_first_run:
                         row.last_modified = now
                     deactivated += 1
+                    deactivated_ids.append(str(row.release_item_id))
 
             # Count rows that were already inactive (informational)
             already_inactive = session.scalar(
@@ -429,7 +435,7 @@ def deactivate_missing_releases(engine, current_ids: set) -> Dict[str, int]:
 
     logger.info("Deactivation stats: deactivated=%d, already_inactive=%d, first_run=%s",
                 deactivated, already_inactive, is_first_run)
-    return {"deactivated": deactivated, "already_inactive": already_inactive}
+    return {"deactivated": deactivated, "already_inactive": already_inactive, "deactivated_ids": deactivated_ids}
 
 
 VALID_SORT_OPTIONS = ("last_modified", "release_date")

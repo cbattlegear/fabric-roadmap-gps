@@ -1,10 +1,10 @@
 {% extends 'base.html' %}
-{% block title %}{{ release.feature_name }} — Microsoft Fabric Roadmap | Fabric GPS{% endblock %}
-{% block meta_description %}{{ release.feature_description[:155] | replace('\n', ' ') if release.feature_description else 'View details for ' + release.feature_name + ' on the Microsoft Fabric roadmap.' }}{% endblock %}
-{% block og_title %}{{ release.feature_name }} — Microsoft Fabric Roadmap | Fabric GPS{% endblock %}
-{% block og_description %}{{ release.feature_description[:200] | replace('\n', ' ') if release.feature_description else 'View details for ' + release.feature_name + ' on the Microsoft Fabric roadmap.' }}{% endblock %}
-{% block twitter_title %}{{ release.feature_name }} — Microsoft Fabric Roadmap | Fabric GPS{% endblock %}
-{% block twitter_description %}{{ release.feature_description[:200] | replace('\n', ' ') if release.feature_description else 'View details for ' + release.feature_name + ' on the Microsoft Fabric roadmap.' }}{% endblock %}
+{% block title %}{{ release.feature_name + ' — Microsoft Fabric Roadmap | Fabric GPS' if release else 'Release Not Found — Fabric GPS' }}{% endblock %}
+{% block meta_description %}{{ release.feature_description[:155] | replace('\n', ' ') if release and release.feature_description else ('View details for ' + release.feature_name + ' on the Microsoft Fabric roadmap.' if release else 'The requested Microsoft Fabric roadmap release item could not be found. Browse the full roadmap on Fabric GPS.') }}{% endblock %}
+{% block og_title %}{{ release.feature_name + ' — Microsoft Fabric Roadmap | Fabric GPS' if release else 'Release Not Found — Fabric GPS' }}{% endblock %}
+{% block og_description %}{{ release.feature_description[:200] | replace('\n', ' ') if release and release.feature_description else ('View details for ' + release.feature_name + ' on the Microsoft Fabric roadmap.' if release else 'The requested Microsoft Fabric roadmap release item could not be found.') }}{% endblock %}
+{% block twitter_title %}{{ release.feature_name + ' — Microsoft Fabric Roadmap | Fabric GPS' if release else 'Release Not Found — Fabric GPS' }}{% endblock %}
+{% block twitter_description %}{{ release.feature_description[:200] | replace('\n', ' ') if release and release.feature_description else ('View details for ' + release.feature_name + ' on the Microsoft Fabric roadmap.' if release else 'The requested Microsoft Fabric roadmap release item could not be found.') }}{% endblock %}
 
 {% block herotitle %}{{ release.feature_name }}{% endblock %}
 {% block herosubtitle %}{{ release.product_name }} · {{ release.release_type }} · {{ release.release_status }}{% endblock %}
