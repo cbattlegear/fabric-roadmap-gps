@@ -2,6 +2,29 @@
 
 Small Flask server that exposes an RSS 2.0 feed and basic REST API for the Fabric Roadmap
 
+## Email Subscriptions
+
+Subscribers can receive digest emails with customizable options:
+
+- **Cadence**: Daily or Weekly (Mondays)
+- **Content filters**: Filter by product, release type, and/or release status
+- **Feature watches**: Watch individual release items for instant alerts (checked hourly regardless of digest cadence)
+
+### Preferences
+
+Existing subscribers can manage their preferences at `/preferences?token=<unsubscribe_token>`. This link is included in the footer of every email.
+
+### Scheduling
+
+The email job (`APP_MODE=email`) should be scheduled to run **hourly**. It handles both cadences internally:
+- Digest emails are sent when each subscriber's cadence interval has elapsed
+- Feature watch alerts are checked every run
+
+```bash
+# Example cron (every hour at minute 0)
+0 * * * * docker run --rm -e APP_MODE=email -e SQLSERVER_CONN="..." fabric-gps
+```
+
 ## Caching
 
 Caching is handled by Azure Front Door at the CDN edge. The server sets HTTP cache headers on all API and RSS responses:
