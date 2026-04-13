@@ -805,11 +805,13 @@ def generate_secure_token() -> str:
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
-def create_email_subscription(engine, email: str, filters: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
+def create_email_subscription(engine, email: str, filters: Optional[Dict[str, str]] = None, cadence: str = 'weekly') -> Tuple[str, str]:
     """Create an email subscription with verification token.
     
     Returns tuple of (subscription_id, verification_token)
     """
+    if cadence not in ('daily', 'weekly'):
+        cadence = 'weekly'
     SessionLocal = sessionmaker(bind=engine, future=True)
     
     with SessionLocal() as session:
@@ -831,6 +833,7 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
             existing.unsubscribe_token = unsubscribe_token
             existing.created_at = datetime.utcnow()
             existing.is_active = True
+            existing.email_cadence = cadence
             if filters:
                 existing.product_filter = filters.get('products', '')
                 existing.release_type_filter = filters.get('types', '')
@@ -842,6 +845,7 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
                 email=email,
                 verification_token=verification_token,
                 unsubscribe_token=unsubscribe_token,
+                email_cadence=cadence,
                 product_filter=filters.get('products', '') if filters else '',
                 release_type_filter=filters.get('types', '') if filters else '',
                 release_status_filter=filters.get('statuses', '') if filters else ''

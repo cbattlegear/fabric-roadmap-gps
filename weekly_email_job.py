@@ -24,7 +24,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from db.db_sqlserver import (
     make_engine, get_unsent_active_subscriptions, EmailSubscriptionModel,
-    EmailVerificationModel, EmailContentCacheModel
+    EmailVerificationModel, EmailContentCacheModel,
+    get_digest_eligible_subscriptions, get_subscriptions_with_changed_watches,
+    update_watch_hashes,
 )
 
 try:
@@ -139,46 +141,71 @@ class WeeklyEmailSender:
 
         return all_changes, ai_summary
 
-    def send_weekly_emails(self):
-        """Send weekly emails to all active subscribers"""
+    def send_emails(self):
+        """Send digest and watch alert emails to eligible subscribers."""
         try:
             engine = make_engine()
-            subscriptions = get_unsent_active_subscriptions(engine, 7)
-            
-            logger.info(f"Found {len(subscriptions)} active subscriptions")
 
-            if not subscriptions:
-                logger.info("No subscriptions to process, exiting")
-                return
+            # --- Digest queue: daily/weekly subscribers whose interval elapsed ---
+            subscriptions = get_digest_eligible_subscriptions(engine)
+            logger.info(f"Digest queue: {len(subscriptions)} eligible subscriptions")
 
             # Load or generate email content (cached for 24h so all
             # hourly batches use the same data)
             all_changes, ai_summary = self._load_or_generate_content()
-            
+
             sent_count = 0
             error_count = 0
             # Azure Communication Services quota: 30 emails/minute
             MIN_SEND_INTERVAL = 2.0  # seconds between sends (60/30)
             last_send_time = 0.0
-            
+
             for subscription in subscriptions:
                 try:
-                    # Throttle to stay within send quota
                     elapsed = time.monotonic() - last_send_time
                     if elapsed < MIN_SEND_INTERVAL:
                         time.sleep(MIN_SEND_INTERVAL - elapsed)
 
-                    if self.send_weekly_email(subscription, ai_summary=ai_summary):
+                    if self.send_digest_email(subscription, ai_summary=ai_summary):
                         sent_count += 1
                         last_send_time = time.monotonic()
                         self.update_last_email_sent(subscription.id)
                     else:
                         error_count += 1
                 except Exception as e:
-                    logger.error(f"Error sending email to {subscription.email}: {e}")
+                    logger.error(f"Error sending digest to {subscription.email}: {e}")
                     error_count += 1
-            
-            logger.info(f"Weekly email job completed. Sent: {sent_count}, Errors: {error_count}")
+
+            logger.info(f"Digest queue completed. Sent: {sent_count}, Errors: {error_count}")
+
+            # --- Watch alert queue: all subscribers with changed watches ---
+            watch_sent = 0
+            watch_errors = 0
+            try:
+                watch_results = get_subscriptions_with_changed_watches(engine)
+                logger.info(f"Watch alert queue: {len(watch_results)} subscribers with changed watches")
+
+                for sub, changed_watches in watch_results:
+                    try:
+                        elapsed = time.monotonic() - last_send_time
+                        if elapsed < MIN_SEND_INTERVAL:
+                            time.sleep(MIN_SEND_INTERVAL - elapsed)
+
+                        if self.send_watch_alert_email(sub, changed_watches):
+                            watch_sent += 1
+                            last_send_time = time.monotonic()
+                            hash_updates = [(w['watch_id'], w['current_hash']) for w in changed_watches]
+                            update_watch_hashes(engine, hash_updates)
+                        else:
+                            watch_errors += 1
+                    except Exception as e:
+                        logger.error(f"Error sending watch alert to {sub.email}: {e}")
+                        watch_errors += 1
+
+                logger.info(f"Watch alert queue completed. Sent: {watch_sent}, Errors: {watch_errors}")
+            except Exception as e:
+                logger.error(f"Error processing watch alerts: {e}")
+
             # Run cleanup after sending
             try:
                 cleanup_counts = self.cleanup_expired(engine)
@@ -189,13 +216,16 @@ class WeeklyEmailSender:
                 )
             except Exception as cleanup_exc:
                 logger.error(f"Cleanup step failed: {cleanup_exc}")
-            
+
         except Exception as e:
-            logger.error(f"Fatal error in weekly email job: {e}")
+            logger.error(f"Fatal error in email job: {e}")
             raise
 
-    def send_weekly_email(self, subscription: EmailSubscriptionModel, ai_summary: Optional[str] = None) -> bool:
-        """Send weekly email to a single subscriber using JSON API"""
+    # Keep old name as alias for backward compatibility
+    send_weekly_emails = send_emails
+
+    def send_digest_email(self, subscription: EmailSubscriptionModel, ai_summary: Optional[str] = None) -> bool:
+        """Send a digest email to a single subscriber."""
         try:
             # Get changes using JSON API with subscriber's filters
             changes = self.get_changes_from_api(subscription)
@@ -205,7 +235,8 @@ class WeeklyEmailSender:
                 return True
             
             # Generate email content
-            subject = f"Fabric GPS Weekly Update - {len(changes)} Changes"
+            cadence_label = "Daily" if subscription.email_cadence == "daily" else "Weekly"
+            subject = f"Fabric GPS {cadence_label} Update - {len(changes)} Changes"
             html_content = self.generate_email_html(changes, subscription, ai_summary=ai_summary)
             text_content = self.generate_email_text(changes, subscription, ai_summary=ai_summary)
             
@@ -433,6 +464,7 @@ class WeeklyEmailSender:
     def generate_email_html(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel, ai_summary: Optional[str] = None) -> str:
         """Generate HTML email content styled to match index page design."""
         unsubscribe_url = self._add_utm(f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}")
+        preferences_url = self._add_utm(f"{self.base_url}/preferences?token={subscription.unsubscribe_token}")
 
         # Style tokens (aligned with site)
         BODY_BG = "#f3f2f1"
@@ -520,14 +552,16 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
 </head>
 <body style=\"margin:0;padding:0;background:{BODY_BG};\">
 <span style=\"display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;\">{self.escape_html(preheader)}</span>
-<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:{BODY_BG};padding:24px 0;\">\n  <tr>\n    <td align=\"center\" style=\"padding:0 12px;\">\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"max-width:640px;\">\n        <tr>\n          <td style=\"background:{HERO_GRADIENT};color:#ffffff;border-radius:14px; padding:34px 34px 38px 34px; text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);\">\n            <img src=\"{self.base_url}/static/fabric_gps_logo.png\" alt=\"Fabric GPS\" style=\"height:48px;width:auto;margin-bottom:12px;\" />\n            <h1 style=\"margin:0 0 10px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;\"> Weekly Update</h1>\n            <p style=\"margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);\">Microsoft Fabric roadmap items modified during the past 7 days.</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:28px;\"></td></tr>\n        {summary_html}\n        <tr><td style=\"padding:0;\">{changes_section}</td></tr>\n        <tr>\n          <td>\n            <div style=\"background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px; padding:22px;margin:6px 0 26px 0;box-shadow:{CARD_SHADOW};text-align:center;\">\n              <p style=\"margin:0 0 14px 0;font-size:14px;color:{TEXT_SECONDARY};\">Tune your filters or explore more history on the site.</p>\n              {self._build_button(self._add_utm(self.base_url), "Open Fabric GPS")}\n            </div>\n          </td>\n        </tr>\n        <tr>\n          <td style=\"background:#f8f9fa;border:1px solid {CARD_BORDER};border-radius:10px; padding:18px 20px;text-align:center;font-size:12px;color:{TEXT_SECONDARY}; line-height:1.5;\">\n            <p style=\"margin:0 0 6px 0;\">Sent to {self.escape_html(subscription.email)} — you’re subscribed to weekly updates.</p>\n            <p style=\"margin:0 0 6px 0;\">\n              <a href=\"{self.escape_html(unsubscribe_url)}\" style=\"color:#19433c;text-decoration:none;font-weight:500;\">Unsubscribe</a>&nbsp;|&nbsp; Data sourced from Microsoft Fabric Roadmap\n            </p>\n            <p style=\"margin:8px 0 0 0;color:#8a8886;\">{footer_links}</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:30px;\"></td></tr>\n      </table>\n    </td>\n  </tr>\n</table>\n</body>\n</html>\n"""
+<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"background:{BODY_BG};padding:24px 0;\">\n  <tr>\n    <td align=\"center\" style=\"padding:0 12px;\">\n      <table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" border=\"0\" style=\"max-width:640px;\">\n        <tr>\n          <td style=\"background:{HERO_GRADIENT};color:#ffffff;border-radius:14px; padding:34px 34px 38px 34px; text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);\">\n            <img src=\"{self.base_url}/static/fabric_gps_logo.png\" alt=\"Fabric GPS\" style=\"height:48px;width:auto;margin-bottom:12px;\" />\n            <h1 style=\"margin:0 0 10px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;\"> Weekly Update</h1>\n            <p style=\"margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);\">Microsoft Fabric roadmap items modified during the past 7 days.</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:28px;\"></td></tr>\n        {summary_html}\n        <tr><td style=\"padding:0;\">{changes_section}</td></tr>\n        <tr>\n          <td>\n            <div style=\"background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px; padding:22px;margin:6px 0 26px 0;box-shadow:{CARD_SHADOW};text-align:center;\">\n              <p style=\"margin:0 0 14px 0;font-size:14px;color:{TEXT_SECONDARY};\">Tune your filters or explore more history on the site.</p>\n              {self._build_button(self._add_utm(self.base_url), "Open Fabric GPS")}\n            </div>\n          </td>\n        </tr>\n        <tr>\n          <td style=\"background:#f8f9fa;border:1px solid {CARD_BORDER};border-radius:10px; padding:18px 20px;text-align:center;font-size:12px;color:{TEXT_SECONDARY}; line-height:1.5;\">\n            <p style=\"margin:0 0 6px 0;\">Sent to {self.escape_html(subscription.email)} — you’re subscribed to weekly updates.</p>\n            <p style=\"margin:0 0 6px 0;\">\n              <a href=\"{self.escape_html(unsubscribe_url)}\" style=\"color:#19433c;text-decoration:none;font-weight:500;\">Unsubscribe</a>&nbsp;|&nbsp;<a href=\"{self.escape_html(preferences_url)}\" style=\"color:#19433c;text-decoration:none;font-weight:500;\">Manage Preferences</a>&nbsp;|&nbsp; Data sourced from Microsoft Fabric Roadmap\n            </p>\n            <p style=\"margin:8px 0 0 0;color:#8a8886;\">{footer_links}</p>\n          </td>\n        </tr>\n        <tr><td style=\"height:30px;\"></td></tr>\n      </table>\n    </td>\n  </tr>\n</table>\n</body>\n</html>\n"""
 
     def generate_email_text(self, changes: List[Dict[str, Any]], subscription: EmailSubscriptionModel, ai_summary: Optional[str] = None) -> str:
         """Generate plain text email content from JSON API data"""
         unsubscribe_url = self._add_utm(f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}")
+        preferences_url = self._add_utm(f"{self.base_url}/preferences?token={subscription.unsubscribe_token}")
+        cadence_label = "DAILY" if subscription.email_cadence == "daily" else "WEEKLY"
 
         text_parts = [
-            "FABRIC GPS - WEEKLY UPDATE",
+            f"FABRIC GPS - {cadence_label} UPDATE",
             "=" * 50,
             "",
         ]
@@ -576,10 +610,99 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
             f"Visit {self._add_utm(self.base_url)} to explore the full roadmap.",
             "",
             f"Unsubscribe: {unsubscribe_url}",
+            f"Manage Preferences: {preferences_url}",
             "Data sourced from Microsoft Fabric Roadmap"
         ])
         
         return "\n".join(text_parts)
+
+    def send_watch_alert_email(self, subscription: EmailSubscriptionModel, changed_watches: List[Dict[str, Any]]) -> bool:
+        """Send a watch alert email for changed watched features."""
+        if not changed_watches:
+            return True
+
+        unsubscribe_url = self._add_utm(f"{self.base_url}/unsubscribe?token={subscription.unsubscribe_token}")
+        preferences_url = self._add_utm(f"{self.base_url}/preferences?token={subscription.unsubscribe_token}")
+
+        if len(changed_watches) == 1:
+            subject = f"Fabric GPS Alert: {changed_watches[0]['feature_name']} Updated"
+        else:
+            subject = f"Fabric GPS Alert: {len(changed_watches)} Watched Features Updated"
+
+        # Build HTML
+        BODY_BG = "#f3f2f1"
+        CARD_BG = "#ffffff"
+        CARD_BORDER = "#e1e5e9"
+        CARD_SHADOW = "0 1px 2px rgba(0,0,0,0.04),0 4px 10px rgba(0,0,0,0.06)"
+        TEXT_SECONDARY = "#605e5c"
+        HERO_GRADIENT = "linear-gradient(135deg,#19433c 0%,#286c61 100%)"
+        ALERT_BG = "#fff4ce"
+        ALERT_BORDER = "#f0c800"
+
+        items_html = ""
+        for w in changed_watches:
+            release_url = self._add_utm(f"{self.base_url}/release/{w['release_item_id']}", campaign='watch-alert')
+            removed_badge = ' <span style="background:#d13438;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;">REMOVED</span>' if w.get('active') is False else ''
+            items_html += f"""<div style="background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px;padding:18px 20px;margin-bottom:12px;box-shadow:{CARD_SHADOW};">
+  <div style="font-weight:600;font-size:15px;color:#323130;margin-bottom:6px;">
+    <a href="{self.escape_html(release_url)}" style="color:#19433c;text-decoration:none;">{self.escape_html(w.get('feature_name', 'Unknown'))}</a>{removed_badge}
+  </div>
+  <div style="font-size:13px;color:{TEXT_SECONDARY};">{self.escape_html(w.get('product_name', ''))} · {self.escape_html(w.get('release_type', ''))} · {self.escape_html(w.get('release_status', ''))}</div>
+  <div style="font-size:12px;color:{TEXT_SECONDARY};margin-top:4px;">Last modified: {w.get('last_modified', 'Unknown')}</div>
+</div>"""
+
+        html_content = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fabric GPS Watch Alert</title>
+<style>body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif; }}</style>
+</head><body style="margin:0;padding:0;background:{BODY_BG};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{BODY_BG};padding:24px 0;">
+  <tr><td align="center" style="padding:0 12px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;">
+      <tr><td style="background:{HERO_GRADIENT};color:#ffffff;border-radius:14px;padding:30px 34px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
+        <h1 style="margin:0 0 8px 0;font-size:24px;font-weight:600;">🔔 Feature Watch Alert</h1>
+        <p style="margin:0;font-size:14px;color:rgba(255,255,255,0.9);">Features you're watching have been updated.</p>
+      </td></tr>
+      <tr><td style="height:24px;"></td></tr>
+      <tr><td style="padding:0;">{items_html}</td></tr>
+      <tr><td style="height:12px;"></td></tr>
+      <tr><td style="background:#f8f9fa;border:1px solid {CARD_BORDER};border-radius:10px;padding:18px 20px;text-align:center;font-size:12px;color:{TEXT_SECONDARY};line-height:1.5;">
+        <p style="margin:0 0 6px 0;">Sent to {self.escape_html(subscription.email)}</p>
+        <p style="margin:0 0 6px 0;">
+          <a href="{self.escape_html(preferences_url)}" style="color:#19433c;text-decoration:none;font-weight:500;">Manage Watches</a>&nbsp;|&nbsp;
+          <a href="{self.escape_html(unsubscribe_url)}" style="color:#19433c;text-decoration:none;font-weight:500;">Unsubscribe</a>
+        </p>
+      </td></tr>
+      <tr><td style="height:30px;"></td></tr>
+    </table>
+  </td></tr>
+</table></body></html>"""
+
+        # Plain text
+        text_parts = ["FABRIC GPS - FEATURE WATCH ALERT", "=" * 50, ""]
+        for w in changed_watches:
+            removed = " [REMOVED]" if w.get('active') is False else ""
+            text_parts.extend([
+                f"• {w.get('feature_name', 'Unknown')}{removed}",
+                f"  Product: {w.get('product_name', '')}",
+                f"  Status: {w.get('release_status', '')}",
+                f"  Link: {self.base_url}/release/{w['release_item_id']}",
+                "",
+            ])
+        text_parts.extend([
+            "-" * 50,
+            f"Manage Watches: {preferences_url}",
+            f"Unsubscribe: {unsubscribe_url}",
+        ])
+        text_content = "\n".join(text_parts)
+
+        return self.send_azure_email(
+            to_email=subscription.email,
+            subject=subject,
+            html_content=html_content,
+            text_content=text_content,
+            unsubscribe_token=subscription.unsubscribe_token
+        )
 
     def send_azure_email(self, to_email: str, subject: str, html_content: str, text_content: str, unsubscribe_token: str) -> bool:
         """Send an email using Azure Communication Services"""
@@ -661,14 +784,14 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
 
 
 def main():
-    """Main function to run the weekly email job"""
+    """Main function to run the email job (digest + watch alerts)."""
     try:
-        logger.info("Starting weekly email job")
+        logger.info("Starting email job")
         sender = WeeklyEmailSender()
-        sender.send_weekly_emails()
-        logger.info("Weekly email job completed successfully")
+        sender.send_emails()
+        logger.info("Email job completed successfully")
     except Exception as e:
-        logger.error(f"Weekly email job failed: {e}")
+        logger.error(f"Email job failed: {e}")
         sys.exit(1)
 
 

@@ -1,10 +1,10 @@
 {% extends 'base.html' %}
 {% block title %}Email Notifications — Fabric GPS | Weekly Microsoft Fabric Updates{% endblock %}
-{% block meta_description %}Subscribe to weekly Microsoft Fabric roadmap email summaries. Get concise Monday digests of new features, status changes, and release dates delivered to your inbox.{% endblock %}
-{% block og_title %}Email Notifications — Fabric GPS | Weekly Microsoft Fabric Updates{% endblock %}
-{% block og_description %}Subscribe to weekly Microsoft Fabric roadmap email summaries. Get concise Monday digests of new features, status changes, and release dates.{% endblock %}
-{% block twitter_title %}Email Notifications — Fabric GPS | Weekly Microsoft Fabric Updates{% endblock %}
-{% block twitter_description %}Subscribe to weekly Microsoft Fabric roadmap email summaries. Get concise Monday digests of new features, status changes, and release dates.{% endblock %}
+{% block meta_description %}Subscribe to Microsoft Fabric roadmap email summaries. Choose daily or weekly digests, filter by product, and watch specific features for instant alerts.{% endblock %}
+{% block og_title %}Email Notifications — Fabric GPS | Microsoft Fabric Updates{% endblock %}
+{% block og_description %}Subscribe to Microsoft Fabric roadmap email summaries. Choose daily or weekly digests, filter by product, and watch specific features.{% endblock %}
+{% block twitter_title %}Email Notifications — Fabric GPS | Microsoft Fabric Updates{% endblock %}
+{% block twitter_description %}Subscribe to Microsoft Fabric roadmap email summaries. Choose daily or weekly digests, filter by product, and watch specific features.{% endblock %}
 {% block extra_head %}
 <style>
 .subscription-section{max-width:600px;margin:0 auto;padding:var(--spacing-xl) 0;}
@@ -14,32 +14,66 @@
 .subscription-benefits li{margin-bottom:var(--spacing-s);color:var(--color-text-secondary);} 
 .email-input{flex:1;min-width:200px;} 
 .subscription-form{display:flex;gap:var(--spacing-m);margin:var(--spacing-l) 0;} 
+.cadence-row{display:flex;gap:var(--spacing-l);margin:var(--spacing-m) 0;}
+.cadence-label{display:flex;align-items:center;gap:var(--spacing-s);cursor:pointer;}
+.cadence-label input{accent-color:var(--color-primary);}
+.filter-section{margin-top:var(--spacing-l);}
+.filter-section summary{cursor:pointer;font-weight:600;color:var(--color-primary);margin-bottom:var(--spacing-m);}
+.filter-field{margin-bottom:var(--spacing-m);}
+.filter-field label{display:block;font-weight:500;margin-bottom:var(--spacing-s);font-size:.9rem;}
+.filter-field select{width:100%;padding:6px 10px;border:1px solid var(--fabric-neutral-grey-40);border-radius:6px;font-size:.85rem;min-height:70px;}
 @media (max-width:768px){.subscription-form{flex-direction:column;}.email-input{min-width:auto;}}
 </style>
 {% endblock %}
 {% block herotitle%}Email Notifications{% endblock %}
 {% block herosubtitle%}
-Stay informed about the latest Microsoft Fabric roadmap updates. Get weekly email summaries delivered straight to your inbox.
+Stay informed about the latest Microsoft Fabric roadmap updates. Choose daily or weekly digests delivered to your inbox.
 {% endblock %}
 {% block content %}
 <div class="container">
     <div class="subscription-section">
         <div class="card">
-            <h3>Weekly Email Updates</h3>
-            <p>Subscribe to receive weekly summaries of new roadmap items and updates.</p>
+            <h3>Subscribe to Updates</h3>
+            <p>Get roadmap change summaries delivered to your inbox.</p>
             <div class="subscription-item">
                 <div class="subscription-form">
                     <input type="email" id="email-input" placeholder="Enter your email address" class="email-input" />
                     <button id="subscribe-btn" class="btn btn-primary">Subscribe</button>
                 </div>
+
+                <div class="cadence-row">
+                    <label class="cadence-label">
+                        <input type="radio" name="cadence" value="weekly" checked> Weekly (Mondays)
+                    </label>
+                    <label class="cadence-label">
+                        <input type="radio" name="cadence" value="daily"> Daily
+                    </label>
+                </div>
+
+                <details class="filter-section">
+                    <summary>Filter by product, type, or status (optional)</summary>
+                    <div class="filter-field">
+                        <label for="sub-product-select">Products</label>
+                        <select id="sub-product-select" multiple></select>
+                    </div>
+                    <div class="filter-field">
+                        <label for="sub-type-select">Release Types</label>
+                        <select id="sub-type-select" multiple></select>
+                    </div>
+                    <div class="filter-field">
+                        <label for="sub-status-select">Statuses</label>
+                        <select id="sub-status-select" multiple></select>
+                    </div>
+                </details>
+
                 <div id="subscription-message" class="subscription-message"></div>
             </div>
             <div class="subscription-benefits">
                 <h4>What you'll receive:</h4>
                 <ul>
-                    <li>Weekly summaries of new and updated roadmap items</li>
-                    <li>Zero junk mail</li>
-                    <li>Easy unsubscribe option in every email</li>
+                    <li>Summaries of new and updated roadmap items (daily or weekly)</li>
+                    <li>Instant alerts for features you watch</li>
+                    <li>Zero junk mail — easy unsubscribe in every email</li>
                 </ul>
             </div>
         </div>
@@ -48,13 +82,66 @@ Stay informed about the latest Microsoft Fabric roadmap updates. Get weekly emai
 {% endblock %}
 {% block scripts %}
 <script>
-class EmailSubscription{constructor(){this.emailInput=document.getElementById('email-input');this.subscribeBtn=document.getElementById('subscribe-btn');this.messageDiv=document.getElementById('subscription-message');this.bindEvents();}
-bindEvents(){this.subscribeBtn.addEventListener('click',()=>this.subscribe());this.emailInput.addEventListener('keypress',e=>{if(e.key==='Enter'){this.subscribe();}});} 
-async subscribe(){const email=this.emailInput.value.trim();if(!this.validateEmail(email)){this.showMessage('Please enter a valid email address.','error');return;}this.setLoading(true);try{const response=await fetch('/api/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});const result=await response.json();if(response.ok){this.showMessage(result.message,'success');this.emailInput.value='';}else{this.showMessage(result.error||'An error occurred. Please try again.','error');}}catch(err){this.showMessage('Network error. Please try again.','error');}finally{this.setLoading(false);}}
-validateEmail(e){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);} 
-showMessage(m,t){this.messageDiv.textContent=m;this.messageDiv.className=`subscription-message ${t}`;this.messageDiv.style.display='block';}
-setLoading(l){this.subscribeBtn.disabled=l;this.subscribeBtn.textContent=l?'Subscribing...':'Subscribe';this.emailInput.disabled=l;}}
+async function loadFilterOptions() {
+    try {
+        const resp = await fetch('/api/filter-options');
+        const data = await resp.json();
+        populateSelect('sub-product-select', data.product_names || []);
+        populateSelect('sub-type-select', data.release_types || []);
+        populateSelect('sub-status-select', data.release_statuses || []);
+    } catch(e) { console.error('Failed to load filter options', e); }
+}
+function populateSelect(id, options) {
+    const sel = document.getElementById(id);
+    options.forEach(opt => {
+        const o = document.createElement('option');
+        o.value = opt; o.textContent = opt;
+        sel.appendChild(o);
+    });
+}
+function getSelected(id) {
+    return Array.from(document.getElementById(id).selectedOptions).map(o => o.value);
+}
 
-document.addEventListener('DOMContentLoaded',()=>{new EmailSubscription();});
+class EmailSubscription{
+    constructor(){
+        this.emailInput=document.getElementById('email-input');
+        this.subscribeBtn=document.getElementById('subscribe-btn');
+        this.messageDiv=document.getElementById('subscription-message');
+        this.bindEvents();
+    }
+    bindEvents(){
+        this.subscribeBtn.addEventListener('click',()=>this.subscribe());
+        this.emailInput.addEventListener('keypress',e=>{if(e.key==='Enter'){this.subscribe();}});
+    }
+    async subscribe(){
+        const email=this.emailInput.value.trim();
+        if(!this.validateEmail(email)){this.showMessage('Please enter a valid email address.','error');return;}
+        this.setLoading(true);
+        const cadence=document.querySelector('input[name="cadence"]:checked').value;
+        const products=getSelected('sub-product-select');
+        const types=getSelected('sub-type-select');
+        const statuses=getSelected('sub-status-select');
+        const body={email, cadence};
+        if(products.length) body.products=products;
+        if(types.length) body.types=types;
+        if(statuses.length) body.statuses=statuses;
+        try{
+            const response=await fetch('/api/subscribe',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+            const result=await response.json();
+            if(response.ok){this.showMessage(result.message,'success');this.emailInput.value='';}
+            else{this.showMessage(result.error||'An error occurred. Please try again.','error');}
+        }catch(err){this.showMessage('Network error. Please try again.','error');}
+        finally{this.setLoading(false);}
+    }
+    validateEmail(e){return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);}
+    showMessage(m,t){this.messageDiv.textContent=m;this.messageDiv.className=`subscription-message ${t}`;this.messageDiv.style.display='block';}
+    setLoading(l){this.subscribeBtn.disabled=l;this.subscribeBtn.textContent=l?'Subscribing...':'Subscribe';this.emailInput.disabled=l;}
+}
+
+document.addEventListener('DOMContentLoaded',()=>{
+    new EmailSubscription();
+    loadFilterOptions();
+});
 </script>
 {% endblock %}

@@ -1,0 +1,200 @@
+{% extends 'base.html' %}
+{% block title %}Manage Preferences — Fabric GPS{% endblock %}
+{% block extra_head %}
+<meta name="robots" content="noindex, nofollow">
+<style>
+    .preferences-container { max-width: 700px; margin: 2rem auto; padding: var(--spacing-xl); background: white; border-radius: 12px; box-shadow: var(--elevation-2); }
+    .pref-section { margin-bottom: var(--spacing-xl); }
+    .pref-section h2 { font-size: 1.1rem; margin-bottom: var(--spacing-m); color: var(--fabric-neutral-grey-130); }
+    .pref-field { margin-bottom: var(--spacing-l); }
+    .pref-field label { display: block; font-weight: 600; margin-bottom: var(--spacing-s); color: var(--fabric-neutral-grey-110); }
+    .pref-field select, .pref-field input[type="text"] { width: 100%; padding: 8px 12px; border: 1px solid var(--fabric-neutral-grey-40); border-radius: 6px; font-size: .9rem; }
+    .cadence-options { display: flex; gap: var(--spacing-l); }
+    .cadence-option { display: flex; align-items: center; gap: var(--spacing-s); cursor: pointer; }
+    .cadence-option input[type="radio"] { accent-color: var(--color-primary); }
+    .watches-list { list-style: none; padding: 0; margin: 0; }
+    .watch-item { display: flex; justify-content: space-between; align-items: center; padding: var(--spacing-m); border: 1px solid var(--fabric-neutral-grey-30); border-radius: 8px; margin-bottom: var(--spacing-s); }
+    .watch-item-info { flex: 1; }
+    .watch-item-name { font-weight: 600; color: var(--fabric-neutral-grey-130); }
+    .watch-item-product { font-size: .85rem; color: var(--fabric-neutral-grey-90); }
+    .btn-remove { background: none; border: 1px solid var(--fabric-semantic-error); color: var(--fabric-semantic-error); padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: .85rem; }
+    .btn-remove:hover { background: var(--fabric-semantic-error); color: white; }
+    .multi-select { min-height: 80px; }
+    .save-bar { display: flex; justify-content: flex-end; gap: var(--spacing-m); margin-top: var(--spacing-xl); padding-top: var(--spacing-l); border-top: 1px solid var(--fabric-neutral-grey-30); }
+    .success-icon, .error-icon { font-size: 4rem; margin-bottom: var(--spacing-l); text-align: center; }
+    .success-message { color: var(--fabric-semantic-success); text-align: center; }
+    .error-message { color: var(--fabric-semantic-error); text-align: center; }
+    #save-message { margin-top: var(--spacing-m); text-align: right; font-size: .85rem; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="preferences-container">
+    {% if error %}
+        <div class="error-icon">❌</div>
+        <h1 class="error-message">{{ error }}</h1>
+        <p style="text-align:center;">Please use the link from your email to access preferences.</p>
+        <div style="text-align:center; margin-top: var(--spacing-l);">
+            <a href="/" class="button button-primary">Back to Home</a>
+        </div>
+    {% elif subscription %}
+        <h1 style="margin-top:0; font-size:1.4rem;">Email Preferences</h1>
+        <p style="color:var(--fabric-neutral-grey-90); margin-bottom: var(--spacing-xl);">Managing preferences for <strong>{{ subscription.email }}</strong></p>
+
+        <div class="pref-section">
+            <h2>📬 Email Frequency</h2>
+            <div class="cadence-options">
+                <label class="cadence-option">
+                    <input type="radio" name="cadence" value="daily" {{ 'checked' if subscription.email_cadence == 'daily' }}>
+                    Daily
+                </label>
+                <label class="cadence-option">
+                    <input type="radio" name="cadence" value="weekly" {{ 'checked' if subscription.email_cadence == 'weekly' }}>
+                    Weekly (Mondays)
+                </label>
+            </div>
+        </div>
+
+        <div class="pref-section">
+            <h2>🔍 Content Filters</h2>
+            <p style="font-size:.85rem; color:var(--fabric-neutral-grey-90); margin-bottom: var(--spacing-m);">Leave empty to receive updates for all products, types, and statuses.</p>
+
+            <div class="pref-field">
+                <label for="product-select">Products</label>
+                <select id="product-select" class="multi-select" multiple></select>
+            </div>
+
+            <div class="pref-field">
+                <label for="type-select">Release Types</label>
+                <select id="type-select" class="multi-select" multiple></select>
+            </div>
+
+            <div class="pref-field">
+                <label for="status-select">Release Statuses</label>
+                <select id="status-select" class="multi-select" multiple></select>
+            </div>
+        </div>
+
+        <div class="pref-section">
+            <h2>👁️ Feature Watches</h2>
+            <p style="font-size:.85rem; color:var(--fabric-neutral-grey-90); margin-bottom: var(--spacing-m);">Get alerted within an hour when these features change, regardless of your digest frequency.</p>
+            {% if watches %}
+            <ul class="watches-list" id="watches-list">
+                {% for w in watches %}
+                <li class="watch-item" data-release-id="{{ w.release_item_id }}">
+                    <div class="watch-item-info">
+                        <div class="watch-item-name"><a href="/release/{{ w.release_item_id }}">{{ w.feature_name }}</a></div>
+                        <div class="watch-item-product">{{ w.product_name }}</div>
+                    </div>
+                    <button class="btn-remove" onclick="removeWatch('{{ w.release_item_id }}')">Remove</button>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p style="color:var(--fabric-neutral-grey-90); font-style:italic;" id="no-watches-msg">No feature watches. Visit a release page to add one.</p>
+            {% endif %}
+        </div>
+
+        <div class="save-bar">
+            <a href="/" class="button button-secondary">Cancel</a>
+            <button class="button button-primary" id="save-btn" onclick="savePreferences()">Save Preferences</button>
+        </div>
+        <div id="save-message"></div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TOKEN = '{{ token }}';
+const CURRENT = {
+    products: '{{ subscription.product_filter or "" }}'.split(',').filter(Boolean),
+    types: '{{ subscription.release_type_filter or "" }}'.split(',').filter(Boolean),
+    statuses: '{{ subscription.release_status_filter or "" }}'.split(',').filter(Boolean),
+};
+
+async function loadFilterOptions() {
+    try {
+        const resp = await fetch('/api/filter-options');
+        const data = await resp.json();
+        populateSelect('product-select', data.product_names || [], CURRENT.products);
+        populateSelect('type-select', data.release_types || [], CURRENT.types);
+        populateSelect('status-select', data.release_statuses || [], CURRENT.statuses);
+    } catch(e) { console.error('Failed to load filter options', e); }
+}
+
+function populateSelect(id, options, selected) {
+    const sel = document.getElementById(id);
+    sel.innerHTML = '';
+    options.forEach(opt => {
+        const o = document.createElement('option');
+        o.value = opt; o.textContent = opt;
+        if (selected.includes(opt)) o.selected = true;
+        sel.appendChild(o);
+    });
+}
+
+function getSelected(id) {
+    return Array.from(document.getElementById(id).selectedOptions).map(o => o.value);
+}
+
+async function savePreferences() {
+    const btn = document.getElementById('save-btn');
+    const msg = document.getElementById('save-message');
+    btn.disabled = true; btn.textContent = 'Saving...';
+
+    const body = {
+        token: TOKEN,
+        cadence: document.querySelector('input[name="cadence"]:checked').value,
+        products: getSelected('product-select'),
+        types: getSelected('type-select'),
+        statuses: getSelected('status-select'),
+    };
+
+    try {
+        const resp = await fetch('/api/preferences', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const result = await resp.json();
+        if (resp.ok) {
+            msg.textContent = '✅ Preferences saved!';
+            msg.style.color = 'var(--fabric-semantic-success)';
+        } else {
+            msg.textContent = '❌ ' + (result.error || 'Failed to save');
+            msg.style.color = 'var(--fabric-semantic-error)';
+        }
+    } catch(e) {
+        msg.textContent = '❌ Network error';
+        msg.style.color = 'var(--fabric-semantic-error)';
+    }
+    btn.disabled = false; btn.textContent = 'Save Preferences';
+}
+
+async function removeWatch(releaseId) {
+    try {
+        const resp = await fetch('/api/watch', {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ token: TOKEN, release_item_id: releaseId }),
+        });
+        if (resp.ok) {
+            const item = document.querySelector(`[data-release-id="${releaseId}"]`);
+            if (item) item.remove();
+            if (!document.querySelector('.watch-item')) {
+                const list = document.getElementById('watches-list');
+                if (list) list.remove();
+                const section = document.querySelector('.pref-section:last-of-type');
+                const msg = document.createElement('p');
+                msg.style.cssText = 'color:var(--fabric-neutral-grey-90); font-style:italic;';
+                msg.textContent = 'No feature watches. Visit a release page to add one.';
+                section.appendChild(msg);
+            }
+        }
+    } catch(e) { console.error('Failed to remove watch', e); }
+}
+
+document.addEventListener('DOMContentLoaded', loadFilterOptions);
+</script>
+{% endblock %}

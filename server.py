@@ -37,6 +37,8 @@ from db.db_sqlserver import (
     healthcheck as db_healthcheck,
     VALID_SORT_OPTIONS,
     get_changelog_with_changes,
+    get_subscription_by_unsubscribe_token, update_subscription_preferences,
+    add_feature_watch, remove_feature_watch, get_feature_watches_for_subscription,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 
@@ -96,7 +98,7 @@ REDIRECT_HOSTS = {h.strip() for h in os.getenv('REDIRECT_HOSTS', '').split(',') 
 # Use canonical host for email URLs if configured, otherwise fall back to BASE_URL
 EMAIL_BASE_URL = f"https://{CANONICAL_HOST}" if CANONICAL_HOST else BASE_URL
 
-_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/api/subscribe", "/api/verify-email")
+_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch")
 
 
 @app.after_request
@@ -825,10 +827,14 @@ def api_subscribe():
         filters['types'] = ','.join(data['types']) if isinstance(data['types'], list) else data['types']
     if 'statuses' in data and data['statuses']:
         filters['statuses'] = ','.join(data['statuses']) if isinstance(data['statuses'], list) else data['statuses']
+
+    cadence = data.get('cadence', 'weekly')
+    if cadence not in ('daily', 'weekly'):
+        cadence = 'weekly'
     
     try:
         engine = get_engine()
-        subscription_id, verification_token = create_email_subscription(engine, email, filters)
+        subscription_id, verification_token = create_email_subscription(engine, email, filters, cadence=cadence)
         
         if not verification_token:
             return jsonify({"message": "Email is already subscribed and verified"}), 200
@@ -931,6 +937,118 @@ def unsubscribe_page():
 
     # GET -> show pending confirmation UI
     return render_template('unsubscribe.html', pending=True, token=token)
+
+
+@app.route("/preferences", methods=["GET"])
+def preferences_page():
+    """HTML page for managing subscription preferences."""
+    token = request.args.get('token')
+    if not token:
+        return render_template('preferences.html', error="Missing preferences token"), 400
+
+    engine = get_engine()
+    sub = get_subscription_by_unsubscribe_token(engine, token)
+    if not sub:
+        return render_template('preferences.html', error="Invalid or expired token"), 404
+
+    watches = get_feature_watches_for_subscription(engine, sub.id)
+    return render_template('preferences.html', subscription=sub, watches=watches, token=token)
+
+
+@app.route("/api/preferences", methods=["GET", "POST"])
+def api_preferences():
+    """Get or update subscription preferences."""
+    token = request.values.get('token')
+    if not token:
+        return jsonify({"error": "Token is required"}), 400
+
+    engine = get_engine()
+
+    if request.method == 'GET':
+        sub = get_subscription_by_unsubscribe_token(engine, token)
+        if not sub:
+            return jsonify({"error": "Invalid token"}), 404
+        watches = get_feature_watches_for_subscription(engine, sub.id)
+        return jsonify({
+            "email": sub.email,
+            "cadence": sub.email_cadence,
+            "product_filter": sub.product_filter or '',
+            "release_type_filter": sub.release_type_filter or '',
+            "release_status_filter": sub.release_status_filter or '',
+            "watches": watches,
+        })
+
+    # POST — update preferences
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
+
+    preferences = {}
+    if 'cadence' in data:
+        cadence = data['cadence']
+        if cadence not in ('daily', 'weekly'):
+            return jsonify({"error": "cadence must be 'daily' or 'weekly'"}), 400
+        preferences['email_cadence'] = cadence
+    if 'products' in data:
+        preferences['product_filter'] = ','.join(data['products']) if isinstance(data['products'], list) else data['products']
+    if 'types' in data:
+        preferences['release_type_filter'] = ','.join(data['types']) if isinstance(data['types'], list) else data['types']
+    if 'statuses' in data:
+        preferences['release_status_filter'] = ','.join(data['statuses']) if isinstance(data['statuses'], list) else data['statuses']
+
+    if not preferences:
+        return jsonify({"error": "No valid preferences provided"}), 400
+
+    success = update_subscription_preferences(engine, token, preferences)
+    if success:
+        return jsonify({"message": "Preferences updated"})
+    return jsonify({"error": "Invalid token"}), 404
+
+
+@app.route("/api/watch", methods=["POST"])
+def api_add_watch():
+    """Add a feature watch for a subscriber."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
+
+    token = data.get('token')
+    release_item_id = data.get('release_item_id')
+    if not token or not release_item_id:
+        return jsonify({"error": "token and release_item_id are required"}), 400
+
+    engine = get_engine()
+    sub = get_subscription_by_unsubscribe_token(engine, token)
+    if not sub:
+        return jsonify({"error": "Invalid token"}), 404
+
+    created = add_feature_watch(engine, sub.id, release_item_id)
+    if created:
+        return jsonify({"message": "Watch added"}), 201
+    return jsonify({"message": "Already watching this feature"})
+
+
+@app.route("/api/watch", methods=["DELETE"])
+def api_remove_watch():
+    """Remove a feature watch for a subscriber."""
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "JSON body required"}), 400
+
+    token = data.get('token')
+    release_item_id = data.get('release_item_id')
+    if not token or not release_item_id:
+        return jsonify({"error": "token and release_item_id are required"}), 400
+
+    engine = get_engine()
+    sub = get_subscription_by_unsubscribe_token(engine, token)
+    if not sub:
+        return jsonify({"error": "Invalid token"}), 404
+
+    removed = remove_feature_watch(engine, sub.id, release_item_id)
+    if removed:
+        return jsonify({"message": "Watch removed"})
+    return jsonify({"error": "Watch not found"}), 404
 
 
 @app.get("/api/releases/history/<release_item_id>")
@@ -1071,8 +1189,11 @@ def robots_txt():
 Allow: /
 Disallow: /verify-email
 Disallow: /unsubscribe
+Disallow: /preferences
 Disallow: /api/subscribe
 Disallow: /api/verify-email
+Disallow: /api/preferences
+Disallow: /api/watch
 Disallow: /healthcheck
 Disallow: /webhooks/
 
