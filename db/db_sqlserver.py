@@ -892,8 +892,11 @@ def verify_email_subscription(engine, token: str) -> bool:
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
-def unsubscribe_email(engine, token: str) -> bool:
-    """Unsubscribe an email using the unsubscribe token"""
+def unsubscribe_email(engine, token: str) -> Optional[str]:
+    """Unsubscribe an email using the unsubscribe token.
+
+    Returns the email address that was removed, or None if the token was invalid.
+    """
     SessionLocal = sessionmaker(bind=engine, future=True)
     
     with SessionLocal() as session:
@@ -903,12 +906,13 @@ def unsubscribe_email(engine, token: str) -> bool:
         )
         
         if not subscription:
-            return False
+            return None
         
+        email = subscription.email
         stmt = delete(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
         session.execute(stmt)
         session.commit()
-        return True
+        return email
 
 
 BOUNCE_DEACTIVATION_THRESHOLD = 3

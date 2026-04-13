@@ -306,6 +306,109 @@ def send_verification_email(email: str, verification_token: str) -> bool:
         return False
 
 
+def send_goodbye_email(email: str) -> bool:
+    """Send a goodbye/confirmation email after a user unsubscribes."""
+    email_client = get_email_client()
+    if not email_client:
+        otelLogger.warning("Email client not available for goodbye email")
+        return False
+
+    subscribe_url = f"{EMAIL_BASE_URL}/subscribe"
+
+    html_content = f"""<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width,initial-scale=1'>
+    <title>Unsubscribed - Fabric GPS</title>
+    <style>
+        body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif; }}
+    </style>
+</head>
+<body style='margin:0;padding:0;background:#f3f2f1;'>
+    <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='background:#f3f2f1;padding:28px 0;'>
+        <tr>
+            <td align='center' style='padding:0 14px;'>
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='max-width:620px;'>
+                    <tr>
+                        <td style="background:linear-gradient(135deg,#19433c 0%,#286c61 100%);color:#ffffff;border-radius:14px;padding:40px 36px 42px 36px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
+                            <h1 style='margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;'>🗺️ Fabric GPS</h1>
+                            <p style='margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);'>You have been unsubscribed from weekly updates.</p>
+                        </td>
+                    </tr>
+                    <tr><td style='height:30px;'></td></tr>
+                    <tr>
+                        <td style='background:#ffffff;border:1px solid #e1e5e9;border-radius:12px;padding:34px 32px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 10px rgba(0,0,0,0.06);'>
+                            <h2 style='margin:0 0 18px 0;font-size:22px;line-height:1.25;color:#323130;font-weight:600;text-align:center;'>You're Unsubscribed</h2>
+                            <p style='margin:0 0 24px 0;font-size:15px;line-height:1.55;color:#605e5c;text-align:center;'>This confirms that you have been fully removed from the Fabric GPS weekly email list. You will not receive any further emails from us.</p>
+                            <p style='margin:0 0 24px 0;font-size:15px;line-height:1.55;color:#605e5c;text-align:center;'>If you change your mind, you can re-subscribe at any time:</p>
+                            <div style='text-align:center;margin:10px 0 34px 0;'>
+                                <a href='{subscribe_url}' style="background:#19433c;background-image:linear-gradient(90deg,#19433c,#286c61);color:#ffffff;text-decoration:none;padding:14px 26px;font-size:15px;font-weight:600;border-radius:8px;display:inline-block;box-shadow:0 2px 4px rgba(0,0,0,0.18);">Re-subscribe</a>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr><td style='height:26px;'></td></tr>
+                    <tr>
+                        <td style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:20px 22px;text-align:center;font-size:12px;line-height:1.55;color:#605e5c;'>
+                            <p style='margin:0 0 6px 0;'>This is a one-time confirmation. You will not receive further emails.</p>
+                            <p style='margin:10px 0 0 0;color:#8a8886;'>&copy; Fabric GPS</p>
+                        </td>
+                    </tr>
+                    <tr><td style='height:34px;'></td></tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>"""
+
+    text_content = f"""FABRIC GPS - UNSUBSCRIBE CONFIRMATION
+
+You have been fully unsubscribed from Fabric GPS weekly updates.
+You will not receive any further emails from us.
+
+If you change your mind, you can re-subscribe at any time:
+{subscribe_url}
+
+This is a one-time confirmation. You will not receive further emails.
+
+--
+Fabric GPS
+"""
+
+    message = {
+        "senderAddress": FROM_EMAIL,
+        "recipients": {
+            "to": [{"address": email}]
+        },
+        "content": {
+            "subject": "You've been unsubscribed from Fabric GPS",
+            "plainText": text_content,
+            "html": html_content
+        }
+    }
+
+    try:
+        poller = email_client.begin_send(message)
+
+        def _monitor_send(poller_obj, target_email):
+            try:
+                result = poller_obj.result()
+                status = result.get('status') if isinstance(result, dict) else getattr(result, 'get', lambda *_: None)('status')
+                if status == 'Succeeded':
+                    otelLogger.info(f"Goodbye email sent to {target_email}")
+                else:
+                    otelLogger.warning(f"Goodbye email status for {target_email}: {status}")
+            except Exception as monitor_exc:
+                otelLogger.error(f"Error monitoring goodbye email send to {target_email}: {monitor_exc}")
+
+        threading.Thread(target=_monitor_send, args=(poller, email), daemon=True).start()
+        return True
+    except Exception as e:
+        otelLogger.error(f"Failed to send goodbye email to {email}: {e}")
+        return False
+
+
 def get_engine():
     global ENGINE
     if ENGINE is None:
@@ -801,25 +904,33 @@ def verify_email_page():
     return render_template('verify_email.html', pending=True, token=token)
 
 
-@app.route("/unsubscribe", methods=["GET"])
+@app.route("/unsubscribe", methods=["GET", "POST"])
 def unsubscribe_page():
-    """HTML page for unsubscribing"""
-    token = request.args.get('token')
+    """HTML page for unsubscribing with explicit confirm step.
+    GET: display confirmation page (does NOT unsubscribe).
+    POST: perform unsubscription using token, send goodbye email, then show result.
+    """
+    token = request.values.get('token')
     if not token:
         return render_template('unsubscribe.html', error="Missing unsubscribe token"), 400
-    
-    try:
-        engine = get_engine()
-        success = unsubscribe_email(engine, token)
-        
-        if success:
-            return render_template('unsubscribe.html', success=True)
-        else:
-            return render_template('unsubscribe.html', error="Invalid unsubscribe token")
-            
-    except Exception as e:
-        otelLogger.error(f"Error unsubscribing: {e}")
-        return render_template('unsubscribe.html', error="Failed to unsubscribe"), 500
+
+    if request.method == 'POST':
+        try:
+            engine = get_engine()
+            email = unsubscribe_email(engine, token)
+
+            if email:
+                send_goodbye_email(email)
+                return render_template('unsubscribe.html', success=True)
+            else:
+                return render_template('unsubscribe.html', error="Invalid unsubscribe token")
+
+        except Exception as e:
+            otelLogger.error(f"Error unsubscribing: {e}")
+            return render_template('unsubscribe.html', error="Failed to unsubscribe"), 500
+
+    # GET -> show pending confirmation UI
+    return render_template('unsubscribe.html', pending=True, token=token)
 
 
 @app.get("/api/releases/history/<release_item_id>")
