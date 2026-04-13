@@ -83,6 +83,18 @@ class EmailSubscriptionModel(Base):
     bounce_count = Column(Integer, nullable=False, server_default='0', default=0)
     last_bounced_at = Column(DateTime, nullable=True)
 
+    # Email cadence: 'daily' or 'weekly'
+    email_cadence = Column(String(10), nullable=False, server_default='weekly', default='weekly')
+
+
+class FeatureWatchModel(Base):
+    __tablename__ = "feature_watches"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    subscription_id = Column(String(36), nullable=False, index=True)
+    release_item_id = Column(String(36), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_notified_hash = Column(String(64), nullable=True)
+
 
 class EmailVerificationModel(Base):
     __tablename__ = "email_verifications"
@@ -971,13 +983,14 @@ def get_active_subscriptions(engine) -> List[EmailSubscriptionModel]:
         return list(subscriptions)
     
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
-def get_unsent_active_subscriptions(engine, time_frame: int) -> List[EmailSubscriptionModel]:
-    """Get all active and verified email subscriptions"""
+def get_unsent_active_subscriptions(engine, time_frame: int, cadence: Optional[str] = None) -> List[EmailSubscriptionModel]:
+    """Get active, verified subscriptions whose last_email_sent is older than time_frame days.
+
+    If *cadence* is provided, only subscriptions matching that cadence are returned.
+    """
     SessionLocal = sessionmaker(bind=engine, future=True)
-    #filter based on last_email_sent is 7 or more days ago
-    # limit to 100 to prevent overwhelming the email service
     with SessionLocal() as session:
-        subscriptions = session.scalars(
+        query = (
             select(EmailSubscriptionModel)
             .where(EmailSubscriptionModel.is_active == True)
             .where(EmailSubscriptionModel.is_verified == True)
@@ -987,12 +1000,210 @@ def get_unsent_active_subscriptions(engine, time_frame: int) -> List[EmailSubscr
                     EmailSubscriptionModel.last_email_sent <= datetime.now(timezone.utc) - timedelta(days=time_frame)
                 )
             )
-            .limit(100)
-        ).all()
-        
-        # Detach from session to avoid lazy loading issues
+        )
+        if cadence:
+            query = query.where(EmailSubscriptionModel.email_cadence == cadence)
+        query = query.limit(100)
+        subscriptions = session.scalars(query).all()
+
         session.expunge_all()
         return list(subscriptions)
+
+
+CADENCE_INTERVALS = {
+    'daily': 1,
+    'weekly': 7,
+}
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_digest_eligible_subscriptions(engine) -> List[EmailSubscriptionModel]:
+    """Get all subscriptions eligible for a digest email based on their cadence."""
+    results = []
+    for cadence, days in CADENCE_INTERVALS.items():
+        batch = get_unsent_active_subscriptions(engine, time_frame=days, cadence=cadence)
+        results.extend(batch)
+    return results
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def add_feature_watch(engine, subscription_id: str, release_item_id: str) -> bool:
+    """Add a feature watch. Returns True if created, False if already exists."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        with session.begin():
+            existing = session.scalar(
+                select(FeatureWatchModel).where(
+                    FeatureWatchModel.subscription_id == subscription_id,
+                    FeatureWatchModel.release_item_id == release_item_id,
+                )
+            )
+            if existing:
+                return False
+            session.add(FeatureWatchModel(
+                subscription_id=subscription_id,
+                release_item_id=release_item_id,
+            ))
+    return True
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def remove_feature_watch(engine, subscription_id: str, release_item_id: str) -> bool:
+    """Remove a feature watch. Returns True if deleted, False if not found."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        with session.begin():
+            result = session.execute(
+                delete(FeatureWatchModel).where(
+                    FeatureWatchModel.subscription_id == subscription_id,
+                    FeatureWatchModel.release_item_id == release_item_id,
+                )
+            )
+    return (result.rowcount or 0) > 0
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_watched_changes(engine, subscription_id: str) -> List[Dict[str, Any]]:
+    """Return watched releases whose row_hash differs from last_notified_hash."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(FeatureWatchModel, ReleaseItemModel)
+            .join(ReleaseItemModel, FeatureWatchModel.release_item_id == ReleaseItemModel.release_item_id)
+            .where(FeatureWatchModel.subscription_id == subscription_id)
+            .where(
+                or_(
+                    FeatureWatchModel.last_notified_hash == None,
+                    FeatureWatchModel.last_notified_hash != ReleaseItemModel.row_hash,
+                )
+            )
+        ).all()
+        results = []
+        for watch, release in rows:
+            results.append({
+                'watch_id': watch.id,
+                'release_item_id': release.release_item_id,
+                'feature_name': release.feature_name,
+                'product_name': release.product_name,
+                'release_type': release.release_type,
+                'release_status': release.release_status,
+                'feature_description': release.feature_description,
+                'last_modified': release.last_modified.isoformat() if release.last_modified else None,
+                'active': release.active,
+                'current_hash': release.row_hash,
+            })
+        return results
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def update_watch_hashes(engine, hash_updates: List[Tuple[str, str]]):
+    """Update last_notified_hash for a list of (watch_id, new_hash) tuples."""
+    if not hash_updates:
+        return
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        with session.begin():
+            for watch_id, new_hash in hash_updates:
+                watch = session.get(FeatureWatchModel, watch_id)
+                if watch:
+                    watch.last_notified_hash = new_hash
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_subscription_by_unsubscribe_token(engine, token: str) -> Optional[EmailSubscriptionModel]:
+    """Look up a subscription by its unsubscribe_token."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        sub = session.scalar(
+            select(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
+        )
+        if sub:
+            session.expunge(sub)
+        return sub
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def update_subscription_preferences(engine, token: str, preferences: Dict[str, Any]) -> bool:
+    """Update subscription preferences identified by unsubscribe_token.
+
+    Accepted keys in *preferences*: email_cadence, product_filter, release_type_filter, release_status_filter.
+    Returns True if subscription found and updated.
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    allowed_keys = {'email_cadence', 'product_filter', 'release_type_filter', 'release_status_filter'}
+    with SessionLocal() as session:
+        with session.begin():
+            sub = session.scalar(
+                select(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
+            )
+            if not sub:
+                return False
+            for key, value in preferences.items():
+                if key in allowed_keys:
+                    setattr(sub, key, value)
+    return True
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_feature_watches_for_subscription(engine, subscription_id: str) -> List[Dict[str, Any]]:
+    """Return all feature watches for a subscription with release details."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(FeatureWatchModel, ReleaseItemModel.feature_name, ReleaseItemModel.product_name)
+            .join(ReleaseItemModel, FeatureWatchModel.release_item_id == ReleaseItemModel.release_item_id)
+            .where(FeatureWatchModel.subscription_id == subscription_id)
+            .order_by(FeatureWatchModel.created_at.desc())
+        ).all()
+        return [
+            {
+                'watch_id': w.id,
+                'release_item_id': w.release_item_id,
+                'feature_name': name,
+                'product_name': product,
+                'created_at': w.created_at.isoformat() if w.created_at else None,
+            }
+            for w, name, product in rows
+        ]
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_subscriptions_with_changed_watches(engine) -> List[Tuple[EmailSubscriptionModel, List[Dict[str, Any]]]]:
+    """Return all active, verified subscribers that have watched features with hash mismatches.
+
+    Used by the hourly email job to send watch alert emails.
+    Returns list of (subscription, [changed_watch_dicts]).
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        # Find subscriptions that have at least one watch with a hash mismatch
+        sub_ids = session.scalars(
+            select(FeatureWatchModel.subscription_id).distinct()
+            .join(ReleaseItemModel, FeatureWatchModel.release_item_id == ReleaseItemModel.release_item_id)
+            .join(EmailSubscriptionModel, FeatureWatchModel.subscription_id == EmailSubscriptionModel.id)
+            .where(EmailSubscriptionModel.is_active == True)
+            .where(EmailSubscriptionModel.is_verified == True)
+            .where(
+                or_(
+                    FeatureWatchModel.last_notified_hash == None,
+                    FeatureWatchModel.last_notified_hash != ReleaseItemModel.row_hash,
+                )
+            )
+        ).all()
+        sub_ids = list(sub_ids)
+        session.expunge_all()
+
+    results = []
+    for sub_id in sub_ids:
+        SessionLocal2 = sessionmaker(bind=engine, future=True)
+        with SessionLocal2() as session:
+            sub = session.get(EmailSubscriptionModel, sub_id)
+            if sub:
+                session.expunge(sub)
+        changes = get_watched_changes(engine, sub_id)
+        if changes:
+            results.append((sub, changes))
+    return results
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
 def fetch_history_rows(engine, release_item_id: str):
