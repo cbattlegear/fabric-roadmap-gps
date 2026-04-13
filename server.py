@@ -39,6 +39,7 @@ from db.db_sqlserver import (
     get_changelog_with_changes,
     get_subscription_by_unsubscribe_token, update_subscription_preferences,
     add_feature_watch, remove_feature_watch, get_feature_watches_for_subscription,
+    create_watch_verification,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 
@@ -1102,21 +1103,14 @@ def watch_feature_page(release_item_id):
                                    error="Please enter a valid email address.")
 
         try:
-            subscription_id, verification_token = create_email_subscription(
-                engine, email, pending_watch_release_id=release_item_id
+            _sub_id, verification_token = create_watch_verification(
+                engine, email, release_item_id
             )
 
-            if not verification_token:
-                # Already verified — watch was added immediately
-                return render_template('watch.html', release_item_id=release_item_id,
-                                       feature_name=feature_name, product_name=product_name,
-                                       success=True, already_verified=True)
-
-            # New or unverified — send verification email
             send_verification_email(email, verification_token)
             return render_template('watch.html', release_item_id=release_item_id,
                                    feature_name=feature_name, product_name=product_name,
-                                   success=True, already_verified=False)
+                                   success=True)
         except Exception as e:
             otelLogger.error(f"Error creating watch subscription: {e}")
             return render_template('watch.html', release_item_id=release_item_id,

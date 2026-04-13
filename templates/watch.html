@@ -23,17 +23,10 @@
         <p>The requested release item could not be found.</p>
         <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Roadmap</a>
 
-    {% elif success and already_verified %}
-        <div class="success-icon">✅</div>
-        <h1 class="success-message">Watch Added!</h1>
-        <p>You'll be alerted within an hour whenever <strong>{{ feature_name }}</strong> changes.</p>
-        <p style="font-size:.85rem; color:var(--fabric-neutral-grey-90); margin-top: var(--spacing-m);">Manage your watches anytime from the link in your emails.</p>
-        <a href="/release/{{ release_item_id }}" class="button button-primary" style="margin-top: var(--spacing-l);">← Back to Release</a>
-
-    {% elif success and not already_verified %}
+    {% elif success %}
         <div class="success-icon">📧</div>
         <h1 style="margin-top:0;">Check Your Email</h1>
-        <p>We've sent a verification email to confirm your subscription.</p>
+        <p>We've sent a verification email to confirm your watch request.</p>
         <p>Once verified, you'll receive alerts whenever <strong>{{ feature_name }}</strong> changes.</p>
         <p style="font-size:.85rem; color:var(--fabric-neutral-grey-90); margin-top: var(--spacing-m);">Make sure to check your Spam or Junk folder.</p>
         <a href="/release/{{ release_item_id }}" class="button button-secondary" style="margin-top: var(--spacing-l);">← Back to Release</a>
