@@ -98,7 +98,7 @@ REDIRECT_HOSTS = {h.strip() for h in os.getenv('REDIRECT_HOSTS', '').split(',') 
 # Use canonical host for email URLs if configured, otherwise fall back to BASE_URL
 EMAIL_BASE_URL = f"https://{CANONICAL_HOST}" if CANONICAL_HOST else BASE_URL
 
-_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch")
+_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/watch/", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch")
 
 
 @app.after_request
@@ -1080,6 +1080,51 @@ def release_detail(release_item_id):
             return render_template('release.html', release=None, history=None), 404
         history = fetch_history_rows(engine, release_item_id)
         return render_template('release.html', release=row, history=history)
+
+
+@app.route("/watch/<release_item_id>", methods=["GET", "POST"])
+def watch_feature_page(release_item_id):
+    """Page to subscribe to watch alerts for a specific release item."""
+    engine = get_engine()
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        release = session.get(ReleaseItemModel, release_item_id)
+        if not release:
+            return render_template('watch.html', release=None, error="Release not found"), 404
+        feature_name = release.feature_name
+        product_name = release.product_name
+
+    if request.method == 'POST':
+        email = (request.form.get('email') or '').strip().lower()
+        if not email or '@' not in email:
+            return render_template('watch.html', release_item_id=release_item_id,
+                                   feature_name=feature_name, product_name=product_name,
+                                   error="Please enter a valid email address.")
+
+        try:
+            subscription_id, verification_token = create_email_subscription(
+                engine, email, pending_watch_release_id=release_item_id
+            )
+
+            if not verification_token:
+                # Already verified — watch was added immediately
+                return render_template('watch.html', release_item_id=release_item_id,
+                                       feature_name=feature_name, product_name=product_name,
+                                       success=True, already_verified=True)
+
+            # New or unverified — send verification email
+            send_verification_email(email, verification_token)
+            return render_template('watch.html', release_item_id=release_item_id,
+                                   feature_name=feature_name, product_name=product_name,
+                                   success=True, already_verified=False)
+        except Exception as e:
+            otelLogger.error(f"Error creating watch subscription: {e}")
+            return render_template('watch.html', release_item_id=release_item_id,
+                                   feature_name=feature_name, product_name=product_name,
+                                   error="Something went wrong. Please try again.")
+
+    return render_template('watch.html', release_item_id=release_item_id,
+                           feature_name=feature_name, product_name=product_name)
 
 
 @app.get("/changelog")

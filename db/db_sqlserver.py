@@ -106,6 +106,8 @@ class EmailVerificationModel(Base):
     expires_at = Column(DateTime, nullable=False)
     is_used = Column(Boolean, default=False, nullable=False)
     used_at = Column(DateTime, nullable=True)
+    # Optional: auto-add a feature watch after verification completes
+    pending_watch_release_id = Column(String(36), nullable=True)
 
 
 class EmailContentCacheModel(Base):
@@ -805,10 +807,15 @@ def generate_secure_token() -> str:
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
-def create_email_subscription(engine, email: str, filters: Optional[Dict[str, str]] = None, cadence: str = 'weekly') -> Tuple[str, str]:
+def create_email_subscription(engine, email: str, filters: Optional[Dict[str, str]] = None, cadence: str = 'weekly', pending_watch_release_id: Optional[str] = None) -> Tuple[str, str]:
     """Create an email subscription with verification token.
     
-    Returns tuple of (subscription_id, verification_token)
+    If *pending_watch_release_id* is provided, it is stored on the
+    verification record and the watch will be added automatically
+    when the email is verified.
+
+    Returns tuple of (subscription_id, verification_token).
+    An empty verification_token means the user is already verified.
     """
     if cadence not in ('daily', 'weekly'):
         cadence = 'weekly'
@@ -821,7 +828,9 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
         )
         
         if existing and existing.is_verified:
-            # Already subscribed and verified
+            # Already subscribed and verified — add watch immediately if requested
+            if pending_watch_release_id:
+                add_feature_watch(engine, existing.id, pending_watch_release_id)
             return existing.id, ""
         
         verification_token = generate_secure_token()
@@ -859,7 +868,8 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
             email=email,
             token=verification_token,
             action_type='subscribe',
-            expires_at=datetime.utcnow() + timedelta(hours=24)
+            expires_at=datetime.utcnow() + timedelta(hours=24),
+            pending_watch_release_id=pending_watch_release_id,
         )
         session.add(verification)
         session.commit()
@@ -869,7 +879,11 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def verify_email_subscription(engine, token: str) -> bool:
-    """Verify an email subscription using the verification token"""
+    """Verify an email subscription using the verification token.
+
+    If the verification record has a pending_watch_release_id, the watch
+    is automatically added after successful verification.
+    """
     SessionLocal = sessionmaker(bind=engine, future=True)
     
     with SessionLocal() as session:
@@ -903,8 +917,15 @@ def verify_email_subscription(engine, token: str) -> bool:
         verification.is_used = True
         verification.used_at = datetime.utcnow()
         
+        pending_release_id = verification.pending_watch_release_id
+        
         session.commit()
-        return True
+
+    # Add pending watch outside the verification transaction
+    if pending_release_id:
+        add_feature_watch(engine, subscription.id, pending_release_id)
+
+    return True
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
