@@ -3,7 +3,6 @@ import json
 import uuid
 import hashlib
 from datetime import datetime, date, timedelta
-from datetime import timezone
 from typing import Iterable, Any, Tuple, Dict
 import urllib.parse
 import time
@@ -1068,7 +1067,7 @@ def get_unsent_active_subscriptions(engine, time_frame: int, cadence: Optional[s
             .where(
                 or_(
                     EmailSubscriptionModel.last_email_sent == None,
-                    EmailSubscriptionModel.last_email_sent <= datetime.now(timezone.utc) - timedelta(days=time_frame)
+                    EmailSubscriptionModel.last_email_sent <= datetime.utcnow() - timedelta(days=time_frame)
                 )
             )
         )
@@ -1093,10 +1092,9 @@ def get_digest_eligible_subscriptions(engine) -> List[EmailSubscriptionModel]:
 
     Weekly subscribers are only eligible on Mondays (UTC).
     """
-    from datetime import datetime, timezone
     results = []
     for cadence, days in CADENCE_INTERVALS.items():
-        if cadence == 'weekly' and datetime.now(timezone.utc).weekday() != 0:
+        if cadence == 'weekly' and datetime.utcnow().weekday() != 0:
             continue
         batch = get_unsent_active_subscriptions(engine, time_frame=days, cadence=cadence)
         results.extend(batch)
