@@ -96,11 +96,11 @@
 
 {% block scripts %}
 <script>
-const TOKEN = '{{ token }}';
+const TOKEN = {{ token | tojson }};
 const CURRENT = {
-    products: '{{ subscription.product_filter or "" }}'.split(',').filter(Boolean),
-    types: '{{ subscription.release_type_filter or "" }}'.split(',').filter(Boolean),
-    statuses: '{{ subscription.release_status_filter or "" }}'.split(',').filter(Boolean),
+    products: {{ (subscription.product_filter or "") | tojson }}.split(',').filter(Boolean),
+    types: {{ (subscription.release_type_filter or "") | tojson }}.split(',').filter(Boolean),
+    statuses: {{ (subscription.release_status_filter or "") | tojson }}.split(',').filter(Boolean),
 };
 
 async function loadFilterOptions() {
