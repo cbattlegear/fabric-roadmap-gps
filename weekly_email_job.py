@@ -141,8 +141,22 @@ class WeeklyEmailSender:
         items = list(self._fetch_raw_changes())
 
         if subscription.email_cadence == 'daily':
-            cutoff = (datetime.utcnow() - timedelta(hours=24)).isoformat()
-            items = [c for c in items if (c.get('last_modified') or '') >= cutoff]
+            # `/api/releases` exposes `last_modified` as a date-only string (`YYYY-MM-DD`),
+            # so daily filtering must use a date-based cutoff rather than a timestamp.
+            cutoff_date = (datetime.utcnow() - timedelta(days=1)).date()
+            filtered_items = []
+            for c in items:
+                last_modified = c.get('last_modified')
+                if not last_modified:
+                    continue
+                try:
+                    last_modified_date = datetime.strptime(last_modified, '%Y-%m-%d').date()
+                except ValueError:
+                    logger.warning("Skipping item with invalid last_modified value: %s", last_modified)
+                    continue
+                if last_modified_date >= cutoff_date:
+                    filtered_items.append(c)
+            items = filtered_items
 
         if subscription.product_filter:
             products = {p.strip().lower() for p in subscription.product_filter.split(',') if p.strip()}
