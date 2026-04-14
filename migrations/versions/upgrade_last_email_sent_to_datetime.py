@@ -1,7 +1,7 @@
 """upgrade last_email_sent from DATE to DATETIME2
 
 Revision ID: upgrade_last_email_sent
-Revises: add_cadence_and_watches
+Revises: add_pending_watch_col
 Create Date: 2026-04-14 19:00:00.000000
 
 """
