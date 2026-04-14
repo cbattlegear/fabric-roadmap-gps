@@ -71,7 +71,7 @@ class EmailSubscriptionModel(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     verified_at = Column(DateTime, nullable=True)
-    last_email_sent = Column(Date, nullable=True)
+    last_email_sent = Column(DateTime, nullable=True)
     unsubscribe_token = Column(String(64), nullable=False, index=True)
     
     # Optional filters for personalized emails
@@ -112,9 +112,11 @@ class EmailVerificationModel(Base):
 
 class EmailContentCacheModel(Base):
     __tablename__ = "email_content_cache"
-    id = Column(Integer, primary_key=True, default=1)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cache_date = Column(String(10), nullable=False, index=True)
+    cache_key = Column(String(255), nullable=False)
     generated_at = Column(DateTime, nullable=False)
-    content_json = Column(Text, nullable=False)  # JSON blob: {changes: [...], ai_summary: "..."}
+    content_json = Column(Text, nullable=False)
 
 
 def _is_transient_sql_azure_error(exc: Exception) -> bool:
@@ -961,12 +963,13 @@ def verify_email_subscription(engine, token: str) -> bool:
         verification.used_at = datetime.utcnow()
         
         pending_release_id = verification.pending_watch_release_id
+        subscription_id = subscription.id
         
         session.commit()
 
     # Add pending watch outside the verification transaction
     if pending_release_id:
-        add_feature_watch(engine, subscription.id, pending_release_id)
+        add_feature_watch(engine, subscription_id, pending_release_id)
 
     return True
 
@@ -1086,9 +1089,15 @@ CADENCE_INTERVALS = {
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def get_digest_eligible_subscriptions(engine) -> List[EmailSubscriptionModel]:
-    """Get all subscriptions eligible for a digest email based on their cadence."""
+    """Get all subscriptions eligible for a digest email based on their cadence.
+
+    Weekly subscribers are only eligible on Mondays (UTC).
+    """
+    from datetime import datetime, timezone
     results = []
     for cadence, days in CADENCE_INTERVALS.items():
+        if cadence == 'weekly' and datetime.now(timezone.utc).weekday() != 0:
+            continue
         batch = get_unsent_active_subscriptions(engine, time_frame=days, cadence=cadence)
         results.extend(batch)
     return results
@@ -1184,6 +1193,22 @@ def get_subscription_by_unsubscribe_token(engine, token: str) -> Optional[EmailS
     with SessionLocal() as session:
         sub = session.scalar(
             select(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
+        )
+        if sub:
+            session.expunge(sub)
+        return sub
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_verified_subscription_by_email(engine, email: str) -> Optional[EmailSubscriptionModel]:
+    """Look up a verified, active subscription by email address."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        sub = session.scalar(
+            select(EmailSubscriptionModel)
+            .where(EmailSubscriptionModel.email == email.strip().lower())
+            .where(EmailSubscriptionModel.is_verified == True)
+            .where(EmailSubscriptionModel.is_active == True)
         )
         if sub:
             session.expunge(sub)

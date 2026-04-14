@@ -38,6 +38,7 @@ from db.db_sqlserver import (
     VALID_SORT_OPTIONS,
     get_changelog_with_changes,
     get_subscription_by_unsubscribe_token, update_subscription_preferences,
+    get_verified_subscription_by_email,
     add_feature_watch, remove_feature_watch, get_feature_watches_for_subscription,
     create_watch_verification,
 )
@@ -99,7 +100,7 @@ REDIRECT_HOSTS = {h.strip() for h in os.getenv('REDIRECT_HOSTS', '').split(',') 
 # Use canonical host for email URLs if configured, otherwise fall back to BASE_URL
 EMAIL_BASE_URL = f"https://{CANONICAL_HOST}" if CANONICAL_HOST else BASE_URL
 
-_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/watch/", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch")
+_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/watch/", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch", "/api/send-preferences-link", "/dev/")
 
 
 @app.after_request
@@ -169,7 +170,8 @@ def get_email_client():
     return EMAIL_CLIENT
 
 
-def send_verification_email(email: str, verification_token: str) -> bool:
+def send_verification_email(email: str, verification_token: str,
+                            cadence: str = 'weekly', watch_feature_name: Optional[str] = None) -> bool:
     """Send verification email using Azure Communication Services"""
     email_client = get_email_client()
     if not email_client:
@@ -179,7 +181,31 @@ def send_verification_email(email: str, verification_token: str) -> bool:
     try:
         verification_url = f"{EMAIL_BASE_URL}/verify-email?token={verification_token}"
 
-        # HTML email content (restyled to match weekly email design language)
+        # Build context-aware copy
+        is_watch = bool(watch_feature_name)
+        if is_watch:
+            preheader = f"Verify your email to start watching {watch_feature_name}."
+            hero_text = "Verify your email to start watching a feature on the Microsoft Fabric roadmap."
+            subject = f"Verify your email to watch {watch_feature_name} — Fabric GPS"
+            heading = "Start Watching a Feature"
+            body_text = (
+                f"You requested to watch <strong>{watch_feature_name}</strong> on the Fabric roadmap. "
+                f"Click the button below to confirm your email and start receiving alerts when this feature changes."
+            )
+            after_text = "After verifying, you&rsquo;ll be notified whenever this feature is updated on the roadmap."
+        else:
+            cadence_desc = "daily updates" if cadence == "daily" else "weekly updates every Monday"
+            preheader = f"Confirm your email to start {cadence_desc}."
+            hero_text = f"Verify your email to begin receiving {cadence_desc} about Microsoft Fabric roadmap changes."
+            subject = f"Verify your email for Fabric GPS {cadence_desc}"
+            heading = "Confirm Your Subscription"
+            body_text = (
+                f"Thanks for signing up! One quick step: click the button below to confirm this address "
+                f"and activate {cadence_desc}."
+            )
+            after_text = f"After verifying, you&rsquo;ll receive {cadence_desc} with the latest Microsoft Fabric roadmap changes. No spam &mdash; unsubscribe anytime."
+
+        # HTML email content
         html_content = f"""<!DOCTYPE html>
 <html lang='en'>
 <head>
@@ -191,31 +217,31 @@ def send_verification_email(email: str, verification_token: str) -> bool:
     </style>
 </head>
 <body style='margin:0;padding:0;background:#f3f2f1;'>
-    <span style="display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;">Confirm your email to start weekly Fabric roadmap updates.</span>
+    <span style="display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;">{preheader}</span>
     <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='background:#f3f2f1;padding:28px 0;'>
         <tr>
             <td align='center' style='padding:0 14px;'>
                 <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='max-width:620px;'>
                     <tr>
                         <td style="background:linear-gradient(135deg,#19433c 0%,#286c61 100%);color:#ffffff;border-radius:14px;padding:40px 36px 42px 36px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
-                            <h1 style='margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;'>🗺️ Fabric GPS</h1>
-                            <p style='margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);'>Verify your email to begin receiving weekly Microsoft Fabric roadmap change summaries.</p>
+                            <h1 style='margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;'>Fabric GPS</h1>
+                            <p style='margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);'>{hero_text}</p>
                         </td>
                     </tr>
                     <tr><td style='height:30px;'></td></tr>
                     <tr>
                         <td style='background:#ffffff;border:1px solid #e1e5e9;border-radius:12px;padding:34px 32px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 10px rgba(0,0,0,0.06);'>
-                            <h2 style='margin:0 0 18px 0;font-size:22px;line-height:1.25;color:#323130;font-weight:600;text-align:center;'>Confirm Your Email Address</h2>
-                            <p style='margin:0 0 24px 0;font-size:15px;line-height:1.55;color:#605e5c;text-align:center;'>Thanks for signing up! One quick step: click the button below to confirm this address. Then every Monday you will get a concise, styled summary of roadmap item changes from the past week.</p>
+                            <h2 style='margin:0 0 18px 0;font-size:22px;line-height:1.25;color:#323130;font-weight:600;text-align:center;'>{heading}</h2>
+                            <p style='margin:0 0 24px 0;font-size:15px;line-height:1.55;color:#605e5c;text-align:center;'>{body_text}</p>
                             <div style='text-align:center;margin:10px 0 34px 0;'>
                                 <a href='{verification_url}' style="background:#19433c;background-image:linear-gradient(90deg,#19433c,#286c61);color:#ffffff;text-decoration:none;padding:14px 26px;font-size:15px;font-weight:600;border-radius:8px;display:inline-block;box-shadow:0 2px 4px rgba(0,0,0,0.18);">Verify Email</a>
                             </div>
-                            <p style='margin:0 0 18px 0;font-size:13px;line-height:1.5;color:#605e5c;text-align:center;'>If the button doesn't work, copy & paste this link:</p>
+                            <p style='margin:0 0 18px 0;font-size:13px;line-height:1.5;color:#605e5c;text-align:center;'>If the button doesn't work, copy &amp; paste this link:</p>
                             <p style='word-break:break-all;margin:0 0 26px 0;font-size:12px;line-height:1.4;text-align:center;'>
                                 <a href='{verification_url}' style='color:#19433c;text-decoration:none;'>{verification_url}</a>
                             </p>
                             <div style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:16px 18px;'>
-                                <p style='margin:0;font-size:13px;line-height:1.5;color:#605e5c;'>After verifying, you'll get one email per week (Mondays). No spam &mdash; unsubscribe anytime from those emails.</p>
+                                <p style='margin:0;font-size:13px;line-height:1.5;color:#605e5c;'>{after_text}</p>
                             </div>
                         </td>
                     </tr>
@@ -224,7 +250,7 @@ def send_verification_email(email: str, verification_token: str) -> bool:
                         <td style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:20px 22px;text-align:center;font-size:12px;line-height:1.55;color:#605e5c;'>
                             <p style='margin:0 0 6px 0;'>This verification link expires in 24 hours.</p>
                             <p style='margin:0 0 6px 0;'>If you didn't request this, ignore the message and you won't be subscribed.</p>
-                            <p style='margin:10px 0 0 0;color:#8a8886;'>© Fabric GPS</p>
+                            <p style='margin:10px 0 0 0;color:#8a8886;'>&copy; Fabric GPS</p>
                         </td>
                     </tr>
                     <tr><td style='height:34px;'></td></tr>
@@ -236,22 +262,39 @@ def send_verification_email(email: str, verification_token: str) -> bool:
 </html>"""
 
         # Plain text content
-        text_content = f"""
-            FABRIC GPS - EMAIL VERIFICATION
-            
-            Thank you for subscribing to Fabric GPS weekly updates!
-            
-            Please verify your email address by clicking the link below:
-            {verification_url}
-            
-            Once verified, you'll receive weekly emails with the latest Microsoft Fabric roadmap changes.
-            
-            This verification link will expire in 24 hours.
-            If you didn't subscribe to Fabric GPS, you can safely ignore this email.
-            
-            --
-            Fabric GPS Team
-        """
+        if is_watch:
+            text_content = f"""FABRIC GPS - VERIFY YOUR EMAIL
+
+You requested to watch {watch_feature_name} on the Fabric roadmap.
+
+Please verify your email address by clicking the link below:
+{verification_url}
+
+Once verified, you'll be notified whenever this feature is updated.
+
+This verification link will expire in 24 hours.
+If you didn't request this, you can safely ignore this email.
+
+--
+Fabric GPS
+"""
+        else:
+            cadence_text = "daily updates" if cadence == "daily" else "weekly updates"
+            text_content = f"""FABRIC GPS - VERIFY YOUR EMAIL
+
+Thank you for subscribing to Fabric GPS {cadence_text}!
+
+Please verify your email address by clicking the link below:
+{verification_url}
+
+Once verified, you'll receive {cadence_text} with the latest Microsoft Fabric roadmap changes.
+
+This verification link will expire in 24 hours.
+If you didn't subscribe to Fabric GPS, you can safely ignore this email.
+
+--
+Fabric GPS
+"""
         
         message = {
             "senderAddress": FROM_EMAIL,
@@ -309,6 +352,119 @@ def send_verification_email(email: str, verification_token: str) -> bool:
         return False
 
 
+def send_preferences_link_email(email: str, preferences_url: str) -> bool:
+    """Send an email with a link to manage subscription preferences."""
+    email_client = get_email_client()
+    if not email_client:
+        otelLogger.error("Email client not available for preferences link email")
+        return False
+
+    try:
+        html_content = f"""<!DOCTYPE html>
+<html lang='en'>
+<head>
+    <meta charset='UTF-8'>
+    <meta name='viewport' content='width=device-width,initial-scale=1'>
+    <title>Manage Your Subscription - Fabric GPS</title>
+    <style>
+        body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif; }}
+    </style>
+</head>
+<body style='margin:0;padding:0;background:#f3f2f1;'>
+    <span style="display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;">Your Fabric GPS preferences link is inside.</span>
+    <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='background:#f3f2f1;padding:28px 0;'>
+        <tr>
+            <td align='center' style='padding:0 14px;'>
+                <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='max-width:620px;'>
+                    <tr>
+                        <td style="background:linear-gradient(135deg,#19433c 0%,#286c61 100%);color:#ffffff;border-radius:14px;padding:40px 36px 42px 36px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
+                            <h1 style='margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;'>Fabric GPS</h1>
+                            <p style='margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);'>Manage your subscription preferences</p>
+                        </td>
+                    </tr>
+                    <tr><td style='height:30px;'></td></tr>
+                    <tr>
+                        <td style='background:#ffffff;border:1px solid #e1e5e9;border-radius:12px;padding:34px 32px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 10px rgba(0,0,0,0.06);'>
+                            <h2 style='margin:0 0 18px 0;font-size:22px;line-height:1.25;color:#323130;font-weight:600;text-align:center;'>Your Preferences Link</h2>
+                            <p style='margin:0 0 24px 0;font-size:15px;line-height:1.55;color:#605e5c;text-align:center;'>Click the button below to manage your Fabric GPS subscription &mdash; update your email cadence, filters, and feature watches.</p>
+                            <div style='text-align:center;margin:10px 0 34px 0;'>
+                                <a href='{preferences_url}' style="background:#19433c;background-image:linear-gradient(90deg,#19433c,#286c61);color:#ffffff;text-decoration:none;padding:14px 26px;font-size:15px;font-weight:600;border-radius:8px;display:inline-block;box-shadow:0 2px 4px rgba(0,0,0,0.18);">Manage Preferences</a>
+                            </div>
+                            <p style='margin:0 0 18px 0;font-size:13px;line-height:1.5;color:#605e5c;text-align:center;'>If the button doesn't work, copy &amp; paste this link:</p>
+                            <p style='word-break:break-all;margin:0 0 26px 0;font-size:12px;line-height:1.4;text-align:center;'>
+                                <a href='{preferences_url}' style='color:#19433c;text-decoration:none;'>{preferences_url}</a>
+                            </p>
+                            <div style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:16px 18px;'>
+                                <p style='margin:0;font-size:13px;line-height:1.5;color:#605e5c;'>Keep this link private &mdash; anyone with it can change your subscription settings.</p>
+                            </div>
+                        </td>
+                    </tr>
+                    <tr><td style='height:26px;'></td></tr>
+                    <tr>
+                        <td style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:20px 22px;text-align:center;font-size:12px;line-height:1.55;color:#605e5c;'>
+                            <p style='margin:0 0 6px 0;'>If you didn't request this, you can safely ignore this email.</p>
+                            <p style='margin:10px 0 0 0;color:#8a8886;'>&copy; Fabric GPS</p>
+                        </td>
+                    </tr>
+                    <tr><td style='height:34px;'></td></tr>
+                </table>
+            </td>
+        </tr>
+    </table>
+</body>
+</html>"""
+
+        text_content = f"""FABRIC GPS - MANAGE YOUR SUBSCRIPTION
+
+Click the link below to manage your Fabric GPS subscription preferences:
+{preferences_url}
+
+You can update your email cadence, product filters, and feature watches.
+
+Keep this link private - anyone with it can change your subscription settings.
+If you didn't request this, you can safely ignore this email.
+
+--
+Fabric GPS
+"""
+
+        message = {
+            "senderAddress": FROM_EMAIL,
+            "recipients": {
+                "to": [{"address": email}]
+            },
+            "content": {
+                "subject": "Manage your Fabric GPS subscription",
+                "plainText": text_content,
+                "html": html_content
+            }
+        }
+
+        try:
+            poller = email_client.begin_send(message)
+        except Exception as e:
+            otelLogger.error(f"Failed to send preferences link email to {email}: {e}")
+            return False
+
+        def _monitor_send(poller_obj, target_email):
+            try:
+                result = poller_obj.result()
+                status = result.get('status') if isinstance(result, dict) else None
+                if status == 'Succeeded':
+                    otelLogger.info(f"Preferences link email sent to {target_email}")
+                else:
+                    otelLogger.warning(f"Preferences link email status for {target_email}: {status}")
+            except Exception as monitor_exc:
+                otelLogger.error(f"Error monitoring preferences link email to {target_email}: {monitor_exc}")
+
+        threading.Thread(target=_monitor_send, args=(poller, email), daemon=True).start()
+        return True
+
+    except Exception as e:
+        otelLogger.error(f"Error sending preferences link email to {email}: {e}")
+        return False
+
+
 def send_goodbye_email(email: str) -> bool:
     """Send a goodbye/confirmation email after a user unsubscribes."""
     email_client = get_email_client()
@@ -335,7 +491,7 @@ def send_goodbye_email(email: str) -> bool:
                 <table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='max-width:620px;'>
                     <tr>
                         <td style="background:linear-gradient(135deg,#19433c 0%,#286c61 100%);color:#ffffff;border-radius:14px;padding:40px 36px 42px 36px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
-                            <h1 style='margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;'>🗺️ Fabric GPS</h1>
+                            <h1 style='margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;'>Fabric GPS</h1>
                             <p style='margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);'>You have been unsubscribed from weekly updates.</p>
                         </td>
                     </tr>
@@ -841,7 +997,7 @@ def api_subscribe():
             return jsonify({"message": "Email is already subscribed and verified"}), 200
         
         # Send verification email (async by default)
-        email_queued = send_verification_email(email, verification_token)
+        email_queued = send_verification_email(email, verification_token, cadence=cadence)
         if email_queued:
             if ASYNC_EMAIL_VERIFICATION:
                 return jsonify({
@@ -863,6 +1019,36 @@ def api_subscribe():
     except Exception as e:
         otelLogger.error(f"Error creating subscription: {e}")
         return jsonify({"error": "Failed to create subscription"}), 500
+
+
+@app.route("/api/send-preferences-link", methods=["POST"])
+def api_send_preferences_link():
+    """Send an email with a link to manage subscription preferences.
+
+    Always returns 200 to prevent email enumeration.
+    """
+    data = request.get_json()
+    if not data or 'email' not in data:
+        return jsonify({"error": "Email is required"}), 400
+
+    email = data['email'].strip().lower()
+    if not email or '@' not in email:
+        return jsonify({"error": "Valid email is required"}), 400
+
+    # Always return the same message regardless of whether the email exists
+    generic_message = "If this email has an active subscription, a preferences link has been sent. Check your inbox (and spam folder)."
+
+    try:
+        engine = get_engine()
+        sub = get_verified_subscription_by_email(engine, email)
+        if sub:
+            preferences_url = f"{EMAIL_BASE_URL}/preferences?token={sub.unsubscribe_token}"
+            send_preferences_link_email(email, preferences_url)
+    except Exception as e:
+        otelLogger.error(f"Error processing preferences link request: {e}")
+
+    return jsonify({"message": generic_message}), 200
+
 
 @app.route("/api/verify-email", methods=["GET"])
 def api_verify_email():
@@ -907,8 +1093,32 @@ def verify_email_page():
             otelLogger.error(f"Error verifying email: {e}")
             return render_template('verify_email.html', error="Failed to verify email", pending=False), 500
 
-    # GET -> show pending confirmation UI
-    return render_template('verify_email.html', pending=True, token=token)
+    # GET -> look up cadence and watch context for display
+    cadence = 'weekly'
+    watch_feature_name = None
+    try:
+        engine = get_engine()
+        from sqlalchemy.orm import sessionmaker
+        from sqlalchemy import select as sa_select
+        SessionLocal = sessionmaker(bind=engine, future=True)
+        with SessionLocal() as session:
+            verification = session.scalar(
+                sa_select(EmailVerificationModel).where(EmailVerificationModel.token == token)
+            )
+            if verification:
+                sub = session.scalar(
+                    sa_select(EmailSubscriptionModel).where(EmailSubscriptionModel.email == verification.email)
+                )
+                if sub:
+                    cadence = sub.email_cadence or 'weekly'
+                if verification.pending_watch_release_id:
+                    release = session.get(ReleaseItemModel, verification.pending_watch_release_id)
+                    if release:
+                        watch_feature_name = release.feature_name
+    except Exception:
+        pass
+    return render_template('verify_email.html', pending=True, token=token,
+                           cadence=cadence, watch_feature_name=watch_feature_name)
 
 
 @app.route("/unsubscribe", methods=["GET", "POST"])
@@ -960,6 +1170,10 @@ def preferences_page():
 def api_preferences():
     """Get or update subscription preferences."""
     token = request.values.get('token')
+    if not token and request.is_json:
+        json_data = request.get_json(silent=True)
+        if json_data:
+            token = json_data.get('token')
     if not token:
         return jsonify({"error": "Token is required"}), 400
 
@@ -1107,7 +1321,7 @@ def watch_feature_page(release_item_id):
                 engine, email, release_item_id
             )
 
-            send_verification_email(email, verification_token)
+            send_verification_email(email, verification_token, watch_feature_name=feature_name)
             return render_template('watch.html', release_item_id=release_item_id,
                                    feature_name=feature_name, product_name=product_name,
                                    success=True)
@@ -1318,3 +1532,261 @@ def inject_nav():
         {"label": "About", "url": "/about"},
     ]
     return {"nav_items": nav_items, "current_year": datetime.utcnow().year, "canonical_base": EMAIL_BASE_URL}
+
+
+# ---------------------------------------------------------------------------
+# Email preview (development only)
+# ---------------------------------------------------------------------------
+if os.getenv("CURRENT_ENVIRONMENT") == "development":
+
+    @app.get("/dev/email-preview")
+    def email_preview_index():
+        """Index page listing all email previews."""
+        html = """<!DOCTYPE html><html><head><title>Email Previews</title>
+        <style>body{font-family:Segoe UI,sans-serif;max-width:700px;margin:2rem auto;padding:0 1rem;}
+        a{color:#19433c;display:block;margin:.5rem 0;font-size:1.1rem;}</style></head><body>
+        <h1>📧 Email Previews</h1>
+        <h3>Digest Emails</h3>
+        <a href="/dev/email-preview/weekly-digest" target="_blank">Weekly Digest</a>
+        <a href="/dev/email-preview/daily-digest" target="_blank">Daily Digest</a>
+        <h3>Watch Alert</h3>
+        <a href="/dev/email-preview/watch-alert" target="_blank">Feature Watch Alert</a>
+        <h3>Verification Emails</h3>
+        <a href="/dev/email-preview/verify-weekly" target="_blank">Verify — Weekly Subscription</a>
+        <a href="/dev/email-preview/verify-daily" target="_blank">Verify — Daily Subscription</a>
+        <a href="/dev/email-preview/verify-watch" target="_blank">Verify — Feature Watch</a>
+        <h3>Account Emails</h3>
+        <a href="/dev/email-preview/preferences-link" target="_blank">Preferences Link</a>
+        </body></html>"""
+        return html
+
+    @app.get("/dev/email-preview/<email_type>")
+    def email_preview(email_type):
+        """Render a preview of an email type. Development only."""
+        from datetime import datetime, timedelta
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from weekly_email_job import WeeklyEmailSender
+
+        sample_changes = [
+            {
+                "release_item_id": "preview-001",
+                "feature_name": "Real-Time Intelligence in Power BI",
+                "product_name": "Power BI",
+                "release_type": "General availability",
+                "release_status": "Shipped",
+                "feature_description": "Bring real-time data streams into Power BI dashboards with automatic refresh and live alerting capabilities.",
+                "release_date": (datetime.utcnow() + timedelta(days=30)).strftime("%Y-%m-%d"),
+                "last_modified": datetime.utcnow().strftime("%Y-%m-%d"),
+                "active": True,
+            },
+            {
+                "release_item_id": "preview-002",
+                "feature_name": "Dataflow Gen2 Incremental Refresh",
+                "product_name": "Data Factory",
+                "release_type": "Public preview",
+                "release_status": "Coming soon",
+                "feature_description": "Configure incremental refresh policies for Dataflow Gen2 to process only new and changed data.",
+                "release_date": (datetime.utcnow() + timedelta(days=60)).strftime("%Y-%m-%d"),
+                "last_modified": (datetime.utcnow() - timedelta(days=1)).strftime("%Y-%m-%d"),
+                "active": True,
+            },
+            {
+                "release_item_id": "preview-003",
+                "feature_name": "Lakehouse Shortcut Enhancements",
+                "product_name": "OneLake",
+                "release_type": "General availability",
+                "release_status": "Shipped",
+                "feature_description": "New shortcut types and improved metadata sync for OneLake Lakehouse.",
+                "release_date": datetime.utcnow().strftime("%Y-%m-%d"),
+                "last_modified": (datetime.utcnow() - timedelta(days=2)).strftime("%Y-%m-%d"),
+                "active": True,
+            },
+            {
+                "release_item_id": "preview-004",
+                "feature_name": "Legacy Workspace Migration Tool",
+                "product_name": "Power BI",
+                "release_type": "General availability",
+                "release_status": "Shipped",
+                "feature_description": "Automated migration tool for converting legacy workspaces to the new workspace experience.",
+                "release_date": (datetime.utcnow() - timedelta(days=10)).strftime("%Y-%m-%d"),
+                "last_modified": (datetime.utcnow() - timedelta(days=3)).strftime("%Y-%m-%d"),
+                "active": False,
+            },
+        ]
+
+        # Build a mock subscription
+        mock_sub = type("MockSub", (), {
+            "email": "preview@example.com",
+            "email_cadence": "weekly",
+            "product_filter": None,
+            "release_type_filter": None,
+            "release_status_filter": None,
+            "unsubscribe_token": "preview-unsub-token",
+        })()
+
+        # Create sender without Azure connection (we only need HTML generation)
+        sender = object.__new__(WeeklyEmailSender)
+        sender.base_url = EMAIL_BASE_URL or "http://localhost:8000"
+
+        sample_ai_summary = (
+            "This week saw significant movement across Power BI and OneLake. "
+            "Real-Time Intelligence reached general availability in Power BI, "
+            "while Data Factory introduced incremental refresh for Dataflow Gen2 in public preview. "
+            "The Legacy Workspace Migration Tool was removed from the roadmap."
+        )
+
+        if email_type == "weekly-digest":
+            mock_sub.email_cadence = "weekly"
+            html = sender.generate_email_html(sample_changes, mock_sub, ai_summary=sample_ai_summary, cadence_label="Weekly")
+        elif email_type == "daily-digest":
+            mock_sub.email_cadence = "daily"
+            html = sender.generate_email_html(sample_changes[:2], mock_sub, ai_summary=None, cadence_label="Daily")
+        elif email_type == "watch-alert":
+            watch_changes = [
+                {
+                    "release_item_id": "preview-001",
+                    "feature_name": "Real-Time Intelligence in Power BI",
+                    "product_name": "Power BI",
+                    "release_type": "General availability",
+                    "release_status": "Shipped",
+                    "last_modified": datetime.utcnow().strftime("%Y-%m-%d"),
+                    "active": True,
+                },
+                {
+                    "release_item_id": "preview-004",
+                    "feature_name": "Legacy Workspace Migration Tool",
+                    "product_name": "Power BI",
+                    "release_type": "General availability",
+                    "release_status": "Shipped",
+                    "last_modified": datetime.utcnow().strftime("%Y-%m-%d"),
+                    "active": False,
+                },
+            ]
+            html = sender.send_watch_alert_email.__func__  # we need the HTML directly
+            # Generate watch HTML inline (reuse the method's HTML generation logic)
+            unsubscribe_url = f"{sender.base_url}/unsubscribe?token=preview-unsub-token"
+            preferences_url = f"{sender.base_url}/preferences?token=preview-unsub-token"
+            BODY_BG = "#f3f2f1"
+            CARD_BG = "#ffffff"
+            CARD_BORDER = "#e1e5e9"
+            CARD_SHADOW = "0 1px 2px rgba(0,0,0,0.04),0 4px 10px rgba(0,0,0,0.06)"
+            TEXT_SECONDARY = "#605e5c"
+            HERO_GRADIENT = "linear-gradient(135deg,#19433c 0%,#286c61 100%)"
+            items_html = ""
+            for w in watch_changes:
+                release_url = f"{sender.base_url}/release/{w['release_item_id']}"
+                removed_badge = ' <span style="background:#d13438;color:#fff;padding:2px 8px;border-radius:4px;font-size:11px;">REMOVED</span>' if w.get('active') is False else ''
+                items_html += f"""<div style="background:{CARD_BG};border:1px solid {CARD_BORDER};border-radius:10px;padding:18px 20px;margin-bottom:12px;box-shadow:{CARD_SHADOW};">
+  <div style="font-weight:600;font-size:15px;color:#323130;margin-bottom:6px;">
+    <a href="{release_url}" style="color:#19433c;text-decoration:none;">{w.get('feature_name', 'Unknown')}</a>{removed_badge}
+  </div>
+  <div style="font-size:13px;color:{TEXT_SECONDARY};">{w.get('product_name', '')} · {w.get('release_type', '')} · {w.get('release_status', '')}</div>
+  <div style="font-size:12px;color:{TEXT_SECONDARY};margin-top:4px;">Last modified: {w.get('last_modified', 'Unknown')}</div>
+</div>"""
+            html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fabric GPS Watch Alert</title>
+<style>body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif; }}</style>
+</head><body style="margin:0;padding:0;background:{BODY_BG};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:{BODY_BG};padding:24px 0;">
+  <tr><td align="center" style="padding:0 12px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:640px;">
+      <tr><td style="background:{HERO_GRADIENT};color:#ffffff;border-radius:14px;padding:30px 34px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
+        <h1 style="margin:0 0 8px 0;font-size:24px;font-weight:600;">Fabric GPS</h1>
+        <p style="margin:0 0 4px 0;font-size:16px;font-weight:600;">Feature Watch Alert</p>
+        <p style="margin:0;font-size:14px;color:rgba(255,255,255,0.9);">Features you're watching have been updated.</p>
+      </td></tr>
+      <tr><td style="height:24px;"></td></tr>
+      <tr><td style="padding:0;">{items_html}</td></tr>
+      <tr><td style="height:12px;"></td></tr>
+      <tr><td style="background:#f8f9fa;border:1px solid {CARD_BORDER};border-radius:10px;padding:18px 20px;text-align:center;font-size:12px;color:{TEXT_SECONDARY};line-height:1.5;">
+        <p style="margin:0 0 6px 0;">Sent to preview@example.com</p>
+        <p style="margin:0 0 6px 0;">
+          <a href="{preferences_url}" style="color:#19433c;text-decoration:none;font-weight:500;">Manage Watches</a>&nbsp;|&nbsp;
+          <a href="{unsubscribe_url}" style="color:#19433c;text-decoration:none;font-weight:500;">Unsubscribe</a>
+        </p>
+      </td></tr>
+      <tr><td style="height:30px;"></td></tr>
+    </table>
+  </td></tr>
+</table></body></html>"""
+        elif email_type in ("verify-weekly", "verify-daily", "verify-watch"):
+            # Build verification email HTML using the same function logic
+            base = EMAIL_BASE_URL or "http://localhost:8000"
+            verification_url = f"{base}/verify-email?token=preview-token"
+            cadence = "daily" if email_type == "verify-daily" else "weekly"
+            watch_name = "Real-Time Intelligence in Power BI" if email_type == "verify-watch" else None
+            is_watch = bool(watch_name)
+            if is_watch:
+                preheader = f"Verify your email to start watching {watch_name}."
+                hero_text = "Verify your email to start watching a feature on the Microsoft Fabric roadmap."
+                heading = "Start Watching a Feature"
+                body_text = (f"You requested to watch <strong>{watch_name}</strong> on the Fabric roadmap. "
+                             f"Click the button below to confirm your email and start receiving alerts when this feature changes.")
+                after_text = "After verifying, you&rsquo;ll be notified whenever this feature is updated on the roadmap."
+            else:
+                cadence_desc = "daily updates" if cadence == "daily" else "weekly updates every Monday"
+                preheader = f"Confirm your email to start {cadence_desc}."
+                hero_text = f"Verify your email to begin receiving {cadence_desc} about Microsoft Fabric roadmap changes."
+                heading = "Confirm Your Subscription"
+                body_text = f"Thanks for signing up! One quick step: click the button below to confirm this address and activate {cadence_desc}."
+                after_text = f"After verifying, you&rsquo;ll receive {cadence_desc} with the latest Microsoft Fabric roadmap changes. No spam &mdash; unsubscribe anytime."
+            html = f"""<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Verify Your Email - Fabric GPS</title>
+<style>body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif; }}</style>
+</head><body style='margin:0;padding:0;background:#f3f2f1;'>
+<span style="display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;">{preheader}</span>
+<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='background:#f3f2f1;padding:28px 0;'>
+<tr><td align='center' style='padding:0 14px;'>
+<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='max-width:620px;'>
+<tr><td style="background:linear-gradient(135deg,#19433c 0%,#286c61 100%);color:#ffffff;border-radius:14px;padding:40px 36px 42px 36px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
+<h1 style='margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;'>Fabric GPS</h1>
+<p style='margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);'>{hero_text}</p>
+</td></tr><tr><td style='height:30px;'></td></tr><tr>
+<td style='background:#ffffff;border:1px solid #e1e5e9;border-radius:12px;padding:34px 32px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 10px rgba(0,0,0,0.06);'>
+<h2 style='margin:0 0 18px 0;font-size:22px;line-height:1.25;color:#323130;font-weight:600;text-align:center;'>{heading}</h2>
+<p style='margin:0 0 24px 0;font-size:15px;line-height:1.55;color:#605e5c;text-align:center;'>{body_text}</p>
+<div style='text-align:center;margin:10px 0 34px 0;'>
+<a href='{verification_url}' style="background:#19433c;background-image:linear-gradient(90deg,#19433c,#286c61);color:#ffffff;text-decoration:none;padding:14px 26px;font-size:15px;font-weight:600;border-radius:8px;display:inline-block;box-shadow:0 2px 4px rgba(0,0,0,0.18);">Verify Email</a>
+</div>
+<div style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:16px 18px;'>
+<p style='margin:0;font-size:13px;line-height:1.5;color:#605e5c;'>{after_text}</p>
+</div></td></tr><tr><td style='height:26px;'></td></tr><tr>
+<td style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:20px 22px;text-align:center;font-size:12px;line-height:1.55;color:#605e5c;'>
+<p style='margin:0 0 6px 0;'>This verification link expires in 24 hours.</p>
+<p style='margin:0 0 6px 0;'>If you didn't request this, ignore the message and you won't be subscribed.</p>
+<p style='margin:10px 0 0 0;color:#8a8886;'>&copy; Fabric GPS</p>
+</td></tr><tr><td style='height:34px;'></td></tr></table></td></tr></table></body></html>"""
+        elif email_type == "preferences-link":
+            base = EMAIL_BASE_URL or "http://localhost:8000"
+            preferences_url = f"{base}/preferences?token=preview-token"
+            html = f"""<!DOCTYPE html><html lang='en'><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Manage Your Subscription - Fabric GPS</title>
+<style>body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif; }}</style>
+</head><body style='margin:0;padding:0;background:#f3f2f1;'>
+<span style="display:none!important;visibility:hidden;opacity:0;height:0;width:0;overflow:hidden;mso-hide:all;color:transparent;">Your Fabric GPS preferences link is inside.</span>
+<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='background:#f3f2f1;padding:28px 0;'>
+<tr><td align='center' style='padding:0 14px;'>
+<table role='presentation' width='100%' cellpadding='0' cellspacing='0' border='0' style='max-width:620px;'>
+<tr><td style="background:linear-gradient(135deg,#19433c 0%,#286c61 100%);color:#ffffff;border-radius:14px;padding:40px 36px 42px 36px;text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);">
+<h1 style='margin:0 0 12px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;'>Fabric GPS</h1>
+<p style='margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);'>Manage your subscription preferences</p>
+</td></tr><tr><td style='height:30px;'></td></tr><tr>
+<td style='background:#ffffff;border:1px solid #e1e5e9;border-radius:12px;padding:34px 32px;box-shadow:0 1px 2px rgba(0,0,0,0.04),0 4px 10px rgba(0,0,0,0.06);'>
+<h2 style='margin:0 0 18px 0;font-size:22px;line-height:1.25;color:#323130;font-weight:600;text-align:center;'>Your Preferences Link</h2>
+<p style='margin:0 0 24px 0;font-size:15px;line-height:1.55;color:#605e5c;text-align:center;'>Click the button below to manage your Fabric GPS subscription &mdash; update your email cadence, filters, and feature watches.</p>
+<div style='text-align:center;margin:10px 0 34px 0;'>
+<a href='{preferences_url}' style="background:#19433c;background-image:linear-gradient(90deg,#19433c,#286c61);color:#ffffff;text-decoration:none;padding:14px 26px;font-size:15px;font-weight:600;border-radius:8px;display:inline-block;box-shadow:0 2px 4px rgba(0,0,0,0.18);">Manage Preferences</a>
+</div>
+<div style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:16px 18px;'>
+<p style='margin:0;font-size:13px;line-height:1.5;color:#605e5c;'>Keep this link private &mdash; anyone with it can change your subscription settings.</p>
+</div></td></tr><tr><td style='height:26px;'></td></tr><tr>
+<td style='background:#f8f9fa;border:1px solid #e1e5e9;border-radius:10px;padding:20px 22px;text-align:center;font-size:12px;line-height:1.55;color:#605e5c;'>
+<p style='margin:0 0 6px 0;'>If you didn't request this, you can safely ignore this email.</p>
+<p style='margin:10px 0 0 0;color:#8a8886;'>&copy; Fabric GPS</p>
+</td></tr><tr><td style='height:34px;'></td></tr></table></td></tr></table></body></html>"""
+        else:
+            return "Unknown email type", 404
+
+        return html

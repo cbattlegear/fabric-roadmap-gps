@@ -32,11 +32,11 @@ def upgrade():
         IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'feature_watches')
         BEGIN
             CREATE TABLE feature_watches (
-                id NVARCHAR(36) NOT NULL PRIMARY KEY,
-                subscription_id NVARCHAR(36) NOT NULL,
-                release_item_id NVARCHAR(36) NOT NULL,
+                id VARCHAR(36) NOT NULL PRIMARY KEY,
+                subscription_id VARCHAR(36) NOT NULL,
+                release_item_id VARCHAR(36) NOT NULL,
                 created_at DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
-                last_notified_hash NVARCHAR(64) NULL,
+                last_notified_hash VARCHAR(64) NULL,
                 CONSTRAINT fk_feature_watches_subscription
                     FOREIGN KEY (subscription_id) REFERENCES email_subscriptions(id)
                     ON DELETE CASCADE,

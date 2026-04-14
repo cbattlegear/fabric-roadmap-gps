@@ -7,68 +7,58 @@
 {% block twitter_description %}Subscribe to Microsoft Fabric roadmap email summaries. Choose daily or weekly digests, filter by product, and watch specific features.{% endblock %}
 {% block extra_head %}
 <style>
-.subscription-section{max-width:600px;margin:0 auto;padding:var(--spacing-xl) 0;}
-.subscription-benefits{margin-top:var(--spacing-l);padding:var(--spacing-l);background:var(--color-background);border-radius:8px;border-left:4px solid var(--color-primary);} 
-.subscription-benefits h4{margin-top:0;color:var(--color-primary);} 
-.subscription-benefits ul{margin:var(--spacing-m) 0 0 0;padding-left:var(--spacing-l);} 
-.subscription-benefits li{margin-bottom:var(--spacing-s);color:var(--color-text-secondary);} 
-.email-input{flex:1;min-width:200px;} 
-.subscription-form{display:flex;gap:var(--spacing-m);margin:var(--spacing-l) 0;} 
-.cadence-row{display:flex;gap:var(--spacing-l);margin:var(--spacing-m) 0;}
-.cadence-label{display:flex;align-items:center;gap:var(--spacing-s);cursor:pointer;}
-.cadence-label input{accent-color:var(--color-primary);}
-.filter-section{margin-top:var(--spacing-l);}
-.filter-section summary{cursor:pointer;font-weight:600;color:var(--color-primary);margin-bottom:var(--spacing-m);}
-.filter-field{margin-bottom:var(--spacing-m);}
-.filter-field label{display:block;font-weight:500;margin-bottom:var(--spacing-s);font-size:.9rem;}
-.filter-field select{width:100%;padding:6px 10px;border:1px solid var(--fabric-neutral-grey-40);border-radius:6px;font-size:.85rem;min-height:70px;}
-@media (max-width:768px){.subscription-form{flex-direction:column;}.email-input{min-width:auto;}}
+.subscribe-section { max-width: 640px; margin: 0 auto; padding: var(--spacing-xl) 0; }
+.subscribe-benefits { margin-top: var(--spacing-l); padding: var(--spacing-l); background: var(--fabric-neutral-grey-10); border-radius: 8px; border-left: 4px solid var(--fabric-primary); }
+.subscribe-benefits h4 { margin: 0 0 var(--spacing-s) 0; color: var(--fabric-primary); }
+.subscribe-benefits ul { margin: var(--spacing-s) 0 0 0; padding-left: var(--spacing-l); }
+.subscribe-benefits li { margin-bottom: var(--spacing-s); color: var(--fabric-neutral-grey-90); }
+@media (max-width: 768px) { .subscribe-section { padding: var(--spacing-l) var(--spacing-m); } }
 </style>
 {% endblock %}
-{% block herotitle%}Email Notifications{% endblock %}
-{% block herosubtitle%}
+{% block herotitle %}Email Notifications{% endblock %}
+{% block herosubtitle %}
 Stay informed about the latest Microsoft Fabric roadmap updates. Choose daily or weekly digests delivered to your inbox.
 {% endblock %}
 {% block content %}
 <div class="container">
-    <div class="subscription-section">
+    <div class="subscribe-section">
         <div class="card">
-            <h3>Subscribe to Updates</h3>
-            <p>Get roadmap change summaries delivered to your inbox.</p>
-            <div class="subscription-item">
-                <div class="subscription-form">
-                    <input type="email" id="email-input" placeholder="Enter your email address" class="email-input" />
-                    <button id="subscribe-btn" class="btn btn-primary">Subscribe</button>
-                </div>
+            <h3 class="card-title" style="font-size: var(--font-size-subtitle);">Subscribe to Updates</h3>
+            <p class="card-description">Get roadmap change summaries delivered to your inbox.</p>
 
-                <div class="cadence-row">
-                    <label class="cadence-label">
-                        <input type="radio" name="cadence" value="weekly" checked> Weekly (Mondays)
-                    </label>
-                    <label class="cadence-label">
-                        <input type="radio" name="cadence" value="daily"> Daily
-                    </label>
-                </div>
-
-                <details class="filter-section">
-                    <summary>Filter by product, type, or status (optional)</summary>
-                    <div class="filter-field">
-                        <label for="sub-product-select">Products</label>
-                        <select id="sub-product-select" multiple></select>
-                    </div>
-                    <div class="filter-field">
-                        <label for="sub-type-select">Release Types</label>
-                        <select id="sub-type-select" multiple></select>
-                    </div>
-                    <div class="filter-field">
-                        <label for="sub-status-select">Statuses</label>
-                        <select id="sub-status-select" multiple></select>
-                    </div>
-                </details>
-
-                <div id="subscription-message" class="subscription-message"></div>
+            <div class="subscription-form">
+                <input type="email" id="email-input" placeholder="Enter your email address" class="form-input" style="flex: 1; min-width: 200px;" />
+                <button id="subscribe-btn" class="button button-primary">Subscribe</button>
             </div>
-            <div class="subscription-benefits">
+
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="cadence" value="weekly" checked> Weekly (Mondays)
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="cadence" value="daily"> Daily
+                </label>
+            </div>
+
+            <details style="margin-top: var(--spacing-m);">
+                <summary style="cursor: pointer; font-weight: 600; color: var(--fabric-primary); margin-bottom: var(--spacing-m);">Filter by product, type, or status (optional)</summary>
+                <div class="form-group">
+                    <label for="sub-product-select">Products</label>
+                    <select id="sub-product-select" multiple></select>
+                </div>
+                <div class="form-group">
+                    <label for="sub-type-select">Release Types</label>
+                    <select id="sub-type-select" multiple></select>
+                </div>
+                <div class="form-group">
+                    <label for="sub-status-select">Statuses</label>
+                    <select id="sub-status-select" multiple></select>
+                </div>
+            </details>
+
+            <div id="subscription-message" class="subscription-message"></div>
+
+            <div class="subscribe-benefits">
                 <h4>What you'll receive:</h4>
                 <ul>
                     <li>Summaries of new and updated roadmap items (daily or weekly)</li>
@@ -76,6 +66,16 @@ Stay informed about the latest Microsoft Fabric roadmap updates. Choose daily or
                     <li>Zero junk mail — easy unsubscribe in every email</li>
                 </ul>
             </div>
+        </div>
+
+        <div class="card" style="margin-top: var(--spacing-l);">
+            <h3 class="card-title" style="font-size: var(--font-size-subtitle);">Already subscribed?</h3>
+            <p class="card-description">Enter your email to receive a link to manage your preferences, filters, and feature watches.</p>
+            <div class="subscription-form">
+                <input type="email" id="manage-email-input" placeholder="Enter your email address" class="form-input" style="flex: 1; min-width: 200px;" />
+                <button id="manage-btn" class="button button-primary" style="white-space:nowrap;">Send Link</button>
+            </div>
+            <div id="manage-message" class="subscription-message"></div>
         </div>
     </div>
 </div>
@@ -142,6 +142,44 @@ class EmailSubscription{
 document.addEventListener('DOMContentLoaded',()=>{
     new EmailSubscription();
     loadFilterOptions();
+
+    const manageBtn = document.getElementById('manage-btn');
+    const manageInput = document.getElementById('manage-email-input');
+    const manageMsg = document.getElementById('manage-message');
+
+    async function sendPreferencesLink() {
+        const email = manageInput.value.trim();
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            manageMsg.textContent = 'Please enter a valid email address.';
+            manageMsg.className = 'subscription-message error';
+            manageMsg.style.display = 'block';
+            return;
+        }
+        manageBtn.disabled = true;
+        manageBtn.textContent = 'Sending...';
+        try {
+            const resp = await fetch('/api/send-preferences-link', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({email})
+            });
+            const result = await resp.json();
+            manageMsg.textContent = result.message || result.error;
+            manageMsg.className = 'subscription-message ' + (resp.ok ? 'success' : 'error');
+            manageMsg.style.display = 'block';
+            if (resp.ok) manageInput.value = '';
+        } catch (e) {
+            manageMsg.textContent = 'Network error. Please try again.';
+            manageMsg.className = 'subscription-message error';
+            manageMsg.style.display = 'block';
+        } finally {
+            manageBtn.disabled = false;
+            manageBtn.textContent = 'Send Link';
+        }
+    }
+
+    manageBtn.addEventListener('click', sendPreferencesLink);
+    manageInput.addEventListener('keypress', e => { if (e.key === 'Enter') sendPreferencesLink(); });
 });
 </script>
 {% endblock %}

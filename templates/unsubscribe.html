@@ -2,43 +2,42 @@
 {% block title %}Unsubscribe - Fabric GPS{% endblock %}
 {% block extra_head %}
 <meta name="robots" content="noindex, nofollow">
-<style>
-    .unsubscribe-container { max-width: 600px; margin: 2rem auto; padding: var(--spacing-xl); background: white; border-radius: 12px; box-shadow: var(--elevation-2); text-align: center; }
-    .success-icon, .error-icon, .pending-icon { font-size: 4rem; margin-bottom: var(--spacing-l); }
-    .success-message { color: var(--fabric-semantic-success); }
-    .error-message { color: var(--fabric-semantic-error); }
-</style>
 {% endblock %}
-
+{% block herotitle %}Unsubscribe{% endblock %}
+{% block herosubtitle %}Manage your Fabric GPS email subscription.{% endblock %}
 {% block content %}
-<div class="unsubscribe-container">
-    {% if pending %}
-        <div class="pending-icon">👋</div>
-        <h1 style="margin-top:0;">Confirm Unsubscribe</h1>
-        <p>Click the button below to unsubscribe from Fabric GPS weekly updates.</p>
-        <form method="POST" style="margin-top:var(--spacing-l);">
-          <input type="hidden" name="token" value="{{ token }}">
-          <button type="submit" class="button button-primary">Unsubscribe</button>
-        </form>
-        <p style="margin-top:var(--spacing-l);font-size:.85rem;color:var(--fabric-neutral-grey-90);">This page does nothing until you press Unsubscribe.</p>
-    {% elif success %}
-        <div class="success-icon">✅</div>
-        <h1 class="success-message">Successfully Unsubscribed</h1>
-        <p>You have been unsubscribed from Fabric GPS weekly updates. We're sorry to see you go!</p>
-        <p>A confirmation email has been sent. You can subscribe again at any time.</p>
-        <a href="/subscribe" class="button button-primary" style="margin-top: var(--spacing-l);">Re-subscribe</a>
-        <a href="/" class="button button-secondary" style="margin-top: var(--spacing-l);">Back to Home</a>
-    {% elif error %}
-        <div class="error-icon">❌</div>
-        <h1 class="error-message">Unsubscribe Failed</h1>
-        <p>{{ error }}</p>
-        <p>The unsubscribe link may be invalid or expired. If you continue to receive emails, please contact support.</p>
-        <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
-    {% else %}
-        <div class="error-icon">❓</div>
-        <h1 class="error-message">Invalid Request</h1>
-        <p>No unsubscribe token provided.</p>
-        <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
-    {% endif %}
+<div class="container">
+    <div class="page-card" style="text-align: center;">
+        {% if pending %}
+            <div class="status-icon">📬</div>
+            <h2 style="margin-top: 0;">Confirm Unsubscribe</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">Click the button below to unsubscribe from Fabric GPS updates.</p>
+            <form method="POST" style="margin-top: var(--spacing-l);">
+                <input type="hidden" name="token" value="{{ token }}">
+                <button type="submit" class="button button-primary">Unsubscribe</button>
+            </form>
+            <p style="margin-top: var(--spacing-l); font-size: var(--font-size-caption); color: var(--fabric-neutral-grey-90);">This page does nothing until you press Unsubscribe.</p>
+        {% elif success %}
+            <div class="status-icon">✅</div>
+            <h2 style="margin-top: 0; color: var(--fabric-semantic-success);">Successfully Unsubscribed</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">You have been unsubscribed from Fabric GPS updates. We're sorry to see you go!</p>
+            <p style="color: var(--fabric-neutral-grey-90);">A confirmation email has been sent. You can subscribe again at any time.</p>
+            <div class="card-actions" style="justify-content: center; margin-top: var(--spacing-l);">
+                <a href="/subscribe" class="button button-primary">Re-subscribe</a>
+                <a href="/" class="button button-secondary">Back to Home</a>
+            </div>
+        {% elif error %}
+            <div class="status-icon">❌</div>
+            <h2 style="margin-top: 0; color: var(--fabric-semantic-error);">Unsubscribe Failed</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">{{ error }}</p>
+            <p style="color: var(--fabric-neutral-grey-90);">The unsubscribe link may be invalid or expired. If you continue to receive emails, please contact support.</p>
+            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+        {% else %}
+            <div class="status-icon">❓</div>
+            <h2 style="margin-top: 0; color: var(--fabric-semantic-error);">Invalid Request</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">No unsubscribe token provided.</p>
+            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+        {% endif %}
+    </div>
 </div>
 {% endblock %}

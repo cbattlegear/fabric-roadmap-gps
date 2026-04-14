@@ -2,58 +2,41 @@
 {% block title %}Watch {{ feature_name or 'Feature' }} — Fabric GPS{% endblock %}
 {% block extra_head %}
 <meta name="robots" content="noindex, nofollow">
-<style>
-    .watch-container { max-width: 600px; margin: 2rem auto; padding: var(--spacing-xl); background: white; border-radius: 12px; box-shadow: var(--elevation-2); text-align: center; }
-    .watch-feature-name { font-size: 1.1rem; font-weight: 600; color: var(--fabric-neutral-grey-130); margin-bottom: var(--spacing-s); }
-    .watch-product { font-size: .9rem; color: var(--fabric-neutral-grey-90); margin-bottom: var(--spacing-l); }
-    .watch-form { margin: var(--spacing-xl) 0; }
-    .watch-form input[type="email"] { width: 100%; max-width: 400px; padding: 10px 14px; border: 1px solid var(--fabric-neutral-grey-40); border-radius: 8px; font-size: 1rem; margin-bottom: var(--spacing-m); }
-    .success-icon, .error-icon { font-size: 4rem; margin-bottom: var(--spacing-l); }
-    .success-message { color: var(--fabric-semantic-success); }
-    .error-message { color: var(--fabric-semantic-error); }
-    .error-inline { color: var(--fabric-semantic-error); font-size: .9rem; margin-bottom: var(--spacing-m); }
-</style>
 {% endblock %}
-
+{% block herotitle %}Watch a Feature{% endblock %}
+{% block herosubtitle %}Get notified when a specific roadmap item changes.{% endblock %}
 {% block content %}
-<div class="watch-container">
-    {% if not release_item_id %}
-        <div class="error-icon">❌</div>
-        <h1 class="error-message">Release Not Found</h1>
-        <p>The requested release item could not be found.</p>
-        <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Roadmap</a>
-
-    {% elif success %}
-        <div class="success-icon">📧</div>
-        <h1 style="margin-top:0;">Check Your Email</h1>
-        <p>We've sent a verification email to confirm your watch request.</p>
-        <p>Once verified, you'll receive alerts whenever <strong>{{ feature_name }}</strong> changes.</p>
-        <p style="font-size:.85rem; color:var(--fabric-neutral-grey-90); margin-top: var(--spacing-m);">Make sure to check your Spam or Junk folder.</p>
-        <a href="/release/{{ release_item_id }}" class="button button-secondary" style="margin-top: var(--spacing-l);">← Back to Release</a>
-
-    {% else %}
-        <div style="font-size: 3rem; margin-bottom: var(--spacing-l);">👁️</div>
-        <h1 style="margin-top:0;">Watch this Feature</h1>
-        <div class="watch-feature-name">{{ feature_name }}</div>
-        <div class="watch-product">{{ product_name }}</div>
-        <p>Get alerted within an hour whenever this feature is updated on the roadmap.</p>
-
+<div class="container">
+    <div class="page-card" style="text-align: center;">
         {% if error %}
-        <p class="error-inline">{{ error }}</p>
+            <div class="status-icon">❌</div>
+            <h2 style="margin-top: 0; color: var(--fabric-semantic-error);">{{ error }}</h2>
+            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+        {% elif success %}
+            <div class="status-icon">✅</div>
+            <h2 style="margin-top: 0;">Watch Request Submitted</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">We've sent a verification email to confirm your watch request.</p>
+            <a href="/release/{{ release_item_id }}" class="button button-secondary" style="margin-top: var(--spacing-l);">Back to Release</a>
+        {% else %}
+            <h2 style="margin-top: 0;">Watch this Feature</h2>
+            <p style="font-weight: 600; color: var(--fabric-neutral-grey-160); margin-bottom: var(--spacing-s);">{{ feature_name }}</p>
+            <p style="font-size: var(--font-size-body); color: var(--fabric-neutral-grey-90); margin-bottom: var(--spacing-l);">{{ product_name }}</p>
+
+            <p style="color: var(--fabric-neutral-grey-90); margin-bottom: var(--spacing-l);">
+                Enter your email to get notified when this feature is updated on the roadmap.
+            </p>
+
+            <form method="POST">
+                <input type="hidden" name="release_item_id" value="{{ release_item_id }}">
+                <div style="max-width: 400px; margin: 0 auto var(--spacing-m) auto;">
+                    <input type="email" name="email" placeholder="Enter your email address" required class="form-input" />
+                </div>
+                <button type="submit" class="button button-primary">Subscribe &amp; Watch</button>
+            </form>
+            <p style="margin-top: var(--spacing-l); font-size: var(--font-size-caption); color: var(--fabric-neutral-grey-90);">
+                If you're already subscribed, the watch will be added instantly.
+            </p>
         {% endif %}
-
-        <form method="POST" class="watch-form">
-            <div>
-                <input type="email" name="email" placeholder="Enter your email address" required autofocus />
-            </div>
-            <button type="submit" class="button button-primary">Subscribe & Watch</button>
-        </form>
-
-        <p style="font-size:.8rem; color:var(--fabric-neutral-grey-90);">
-            If you're already subscribed, the watch will be added instantly.
-            Otherwise, you'll receive a verification email first.
-        </p>
-        <a href="/release/{{ release_item_id }}" class="button button-secondary" style="margin-top: var(--spacing-m);">← Back to Release</a>
-    {% endif %}
+    </div>
 </div>
 {% endblock %}

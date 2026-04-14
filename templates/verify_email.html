@@ -2,51 +2,42 @@
 {% block title %}Email Verification - Fabric GPS{% endblock %}
 {% block extra_head %}
 <meta name="robots" content="noindex, nofollow">
-<style>
-    .verification-container {
-        max-width: 600px;
-        margin: 2rem auto;
-        padding: var(--spacing-xl);
-        background: white;
-        border-radius: 12px;
-        box-shadow: var(--elevation-2);
-        text-align: center;
-    }
-    .success-icon,.error-icon,.pending-icon {
-        font-size: 4rem;
-        margin-bottom: var(--spacing-l);
-    }
-    .success-message { color: var(--fabric-semantic-success); }
-    .error-message { color: var(--fabric-semantic-error); }
-</style>
 {% endblock %}
-
+{% block herotitle %}Email Verification{% endblock %}
+{% block herosubtitle %}Confirm your email address to start receiving updates.{% endblock %}
 {% block content %}
-<div class="verification-container">
-    {% if pending %}
-        <div class="pending-icon">✉️</div>
-        <h1 style="margin-top:0;">Confirm Your Subscription</h1>
-        <p>Click the button below to verify your email and activate weekly updates every Monday.</p>
-        <form method="POST" style="margin-top:var(--spacing-l);">
-          <input type="hidden" name="token" value="{{ token }}">
-          <button type="submit" class="button button-primary">Verify Email</button>
-        </form>
-        <p style="margin-top:var(--spacing-l);font-size:.85rem;color:var(--fabric-neutral-grey-90);">Link valid for 24 hours. This page does nothing until you press Verify.</p>
-    {% elif success %}
-        <div class="success-icon">✅</div>
-        <h1 class="success-message">Email Verified!</h1>
-        <p>You will now receive weekly Microsoft Fabric roadmap change summaries.</p>
-        <a href="/" class="button button-primary" style="margin-top:var(--spacing-l);">Back to Home</a>
-    {% elif error %}
-        <div class="error-icon">❌</div>
-        <h1 class="error-message">Verification Failed</h1>
-        <p>{{ error }}</p>
-        <a href="/" class="button button-primary" style="margin-top:var(--spacing-l);">Back to Home</a>
-    {% else %}
-        <div class="error-icon">❓</div>
-        <h1 class="error-message">Invalid Request</h1>
-        <p>No verification token provided.</p>
-        <a href="/" class="button button-primary" style="margin-top:var(--spacing-l);">Back to Home</a>
-    {% endif %}
+<div class="container">
+    <div class="page-card" style="text-align: center;">
+        {% if pending %}
+            <div class="status-icon">✉️</div>
+            {% if watch_feature_name %}
+            <h2 style="margin-top: 0;">Start Watching a Feature</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">Verify your email to start watching <strong>{{ watch_feature_name }}</strong>. You'll be notified whenever it changes on the roadmap.</p>
+            {% else %}
+            <h2 style="margin-top: 0;">Confirm Your Subscription</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">Verify your email to activate {{ 'daily updates' if cadence == 'daily' else 'weekly updates every Monday' }}.</p>
+            {% endif %}
+            <form method="POST" style="margin-top: var(--spacing-l);">
+                <input type="hidden" name="token" value="{{ token }}">
+                <button type="submit" class="button button-primary">Verify Email</button>
+            </form>
+            <p style="margin-top: var(--spacing-l); font-size: var(--font-size-caption); color: var(--fabric-neutral-grey-90);">Link valid for 24 hours. This page does nothing until you press Verify.</p>
+        {% elif success %}
+            <div class="status-icon">✅</div>
+            <h2 style="margin-top: 0; color: var(--fabric-semantic-success);">Email Verified!</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">You will now receive Microsoft Fabric roadmap change summaries.</p>
+            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+        {% elif error %}
+            <div class="status-icon">❌</div>
+            <h2 style="margin-top: 0; color: var(--fabric-semantic-error);">Verification Failed</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">{{ error }}</p>
+            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+        {% else %}
+            <div class="status-icon">❓</div>
+            <h2 style="margin-top: 0; color: var(--fabric-semantic-error);">Invalid Request</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">No verification token provided.</p>
+            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+        {% endif %}
+    </div>
 </div>
 {% endblock %}
