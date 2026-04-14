@@ -1664,7 +1664,6 @@ if os.getenv("CURRENT_ENVIRONMENT") == "development":
                     "active": False,
                 },
             ]
-            html = sender.send_watch_alert_email.__func__  # we need the HTML directly
             # Generate watch HTML inline (reuse the method's HTML generation logic)
             unsubscribe_url = f"{sender.base_url}/unsubscribe?token=preview-unsub-token"
             preferences_url = f"{sender.base_url}/preferences?token=preview-unsub-token"
