@@ -2,6 +2,7 @@ import os
 import json
 import uuid
 import hashlib
+from collections import defaultdict
 from datetime import datetime, date, timedelta
 from typing import Iterable, Any, Tuple, Dict
 import urllib.parse
@@ -1278,7 +1279,6 @@ def get_subscriptions_with_changed_watches(engine) -> List[Tuple[EmailSubscripti
 
     Uses a single joined query to avoid N+1 DB round-trips.
     """
-    from collections import defaultdict
     SessionLocal = sessionmaker(bind=engine, future=True)
     with SessionLocal() as session:
         rows = session.execute(
