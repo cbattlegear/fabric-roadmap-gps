@@ -53,7 +53,7 @@ def downgrade():
         CREATE TABLE [dbo].[email_content_cache](
             [id] INT NOT NULL DEFAULT 1,
             [generated_at] DATETIME2 NOT NULL,
-            [content_json] NVARCHAR(MAX) NOT NULL,
+            [content_json] NVARCHAR(MAX) NOT NULL
         PRIMARY KEY CLUSTERED ([id] ASC),
         CONSTRAINT [ck_email_content_cache_singleton] CHECK ([id] = 1)
         )

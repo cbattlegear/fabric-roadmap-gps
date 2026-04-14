@@ -11,6 +11,7 @@ import os
 import sys
 import json
 import time
+import hashlib
 import requests
 import logging
 from datetime import datetime, timedelta
@@ -73,6 +74,8 @@ class WeeklyEmailSender:
 
         # In-memory cache for raw 7-day data (populated once per run)
         self._raw_changes = None
+        # Engine shared across the current job run (set by send_emails)
+        self._engine = None
 
     @staticmethod
     def _add_utm(url: str, source: str = 'email', medium: str = 'email',
@@ -95,14 +98,19 @@ class WeeklyEmailSender:
 
     @staticmethod
     def _build_cache_key(subscription: EmailSubscriptionModel) -> str:
-        """Build a deterministic cache key from subscriber cadence + filters."""
+        """Build a deterministic, collision-free cache key from subscriber cadence + filters.
+
+        Uses SHA-256 of the full key string to avoid truncation collisions when
+        subscribers have long filter lists.
+        """
         parts = [
             subscription.email_cadence or 'weekly',
             (subscription.product_filter or '').strip().lower(),
             (subscription.release_type_filter or '').strip().lower(),
             (subscription.release_status_filter or '').strip().lower(),
         ]
-        return '|'.join(parts)[:255]
+        raw = '|'.join(parts)
+        return hashlib.sha256(raw.encode()).hexdigest()
 
     def _get_subscriber_content(self, subscription: EmailSubscriptionModel):
         """Return (changes, ai_summary) for a subscriber, using per-date per-filter DB cache.
@@ -119,7 +127,7 @@ class WeeklyEmailSender:
         cache_key = self._build_cache_key(subscription)
         cache_date = datetime.utcnow().strftime('%Y-%m-%d')
 
-        engine = make_engine()
+        engine = self._engine or make_engine()
         SessionLocal = sessionmaker(bind=engine, future=True)
 
         # Try DB cache
@@ -202,6 +210,7 @@ class WeeklyEmailSender:
         """Send digest and watch alert emails to eligible subscribers."""
         try:
             engine = make_engine()
+            self._engine = engine  # share engine across _get_subscriber_content calls
 
             # --- Digest queue: daily/weekly subscribers whose interval elapsed ---
             subscriptions = get_digest_eligible_subscriptions(engine)

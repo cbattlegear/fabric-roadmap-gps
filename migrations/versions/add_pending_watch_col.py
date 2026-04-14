@@ -22,7 +22,7 @@ def upgrade():
                        WHERE object_id = OBJECT_ID('email_verifications')
                        AND name = 'pending_watch_release_id')
         BEGIN
-            ALTER TABLE email_verifications ADD pending_watch_release_id NVARCHAR(36) NULL
+            ALTER TABLE email_verifications ADD pending_watch_release_id VARCHAR(36) NULL
         END
     """)
 

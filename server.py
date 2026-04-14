@@ -40,7 +40,7 @@ from db.db_sqlserver import (
     get_subscription_by_unsubscribe_token, update_subscription_preferences,
     get_verified_subscription_by_email,
     add_feature_watch, remove_feature_watch, get_feature_watches_for_subscription,
-    create_watch_verification,
+    create_watch_verification, get_release_item_by_id,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 
@@ -1237,6 +1237,9 @@ def api_add_watch():
     sub = get_subscription_by_unsubscribe_token(engine, token)
     if not sub:
         return jsonify({"error": "Invalid token"}), 404
+
+    if not get_release_item_by_id(engine, release_item_id):
+        return jsonify({"error": "Release item not found"}), 404
 
     created = add_feature_watch(engine, sub.id, release_item_id)
     if created:
