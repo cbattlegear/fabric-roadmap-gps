@@ -7,6 +7,7 @@ from datetime import datetime, date, time, timezone
 from typing import Optional, List
 
 from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory
+from flask_limiter import Limiter
 from html import escape
 from email.utils import format_datetime
 import hashlib
@@ -101,6 +102,51 @@ REDIRECT_HOSTS = {h.strip() for h in os.getenv('REDIRECT_HOSTS', '').split(',') 
 EMAIL_BASE_URL = f"https://{CANONICAL_HOST}" if CANONICAL_HOST else BASE_URL
 
 _NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/watch/", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch", "/api/send-preferences-link", "/dev/")
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting (per-worker in-memory; effective behind Azure Front Door)
+# ---------------------------------------------------------------------------
+def _get_real_ip():
+    """Get real client IP from X-Forwarded-For header (set by Azure Front Door)."""
+    forwarded = request.headers.get('X-Forwarded-For', '')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.remote_addr or '127.0.0.1'
+
+
+limiter = Limiter(
+    key_func=_get_real_ip,
+    app=app,
+    default_limits=[],
+    storage_uri="memory://",
+)
+
+
+# ---------------------------------------------------------------------------
+# CSRF protection for form-based POST endpoints
+# ---------------------------------------------------------------------------
+_CSRF_FORM_PATHS = ('/verify-email', '/unsubscribe', '/watch/')
+
+
+@app.before_request
+def validate_form_origin():
+    """Reject cross-origin form POST submissions.
+
+    JSON API endpoints are inherently CSRF-safe because browsers cannot
+    send Content-Type: application/json cross-origin without a CORS
+    preflight. This check only targets HTML form POSTs.
+    """
+    if request.method != 'POST':
+        return
+    if not request.path.startswith(_CSRF_FORM_PATHS):
+        return
+    if request.content_type and 'application/json' in request.content_type:
+        return
+    origin = request.headers.get('Origin', '')
+    if origin and not origin.startswith(EMAIL_BASE_URL) and not origin.startswith(BASE_URL):
+        otelLogger.warning(f"Blocked cross-origin form POST from {origin} to {request.path}")
+        return Response("Forbidden: cross-origin form submission", status=403)
 
 
 @app.after_request
@@ -967,6 +1013,7 @@ def api_version():
 
 
 @app.route("/api/subscribe", methods=["POST"])
+@limiter.limit("5 per hour")
 def api_subscribe():
     """Subscribe to weekly email updates"""
     data = request.get_json()
@@ -1023,6 +1070,7 @@ def api_subscribe():
 
 
 @app.route("/api/send-preferences-link", methods=["POST"])
+@limiter.limit("3 per hour")
 def api_send_preferences_link():
     """Send an email with a link to manage subscription preferences.
 
@@ -1073,6 +1121,7 @@ def api_verify_email():
 
 
 @app.route("/verify-email", methods=["GET", "POST"])
+@limiter.limit("10 per hour", methods=["POST"])
 def verify_email_page():
     """HTML page for email verification with explicit confirm step.
     GET: display confirmation page (does NOT verify).
@@ -1123,6 +1172,7 @@ def verify_email_page():
 
 
 @app.route("/unsubscribe", methods=["GET", "POST"])
+@limiter.limit("10 per hour", methods=["POST"])
 def unsubscribe_page():
     """HTML page for unsubscribing with explicit confirm step.
     GET: display confirmation page (does NOT unsubscribe).
@@ -1302,6 +1352,7 @@ def release_detail(release_item_id):
 
 
 @app.route("/watch/<release_item_id>", methods=["GET", "POST"])
+@limiter.limit("5 per hour", methods=["POST"])
 def watch_feature_page(release_item_id):
     """Page to subscribe to watch alerts for a specific release item."""
     engine = get_engine()
