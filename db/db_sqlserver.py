@@ -2,8 +2,8 @@ import os
 import json
 import uuid
 import hashlib
+from collections import defaultdict
 from datetime import datetime, date, timedelta
-from datetime import timezone
 from typing import Iterable, Any, Tuple, Dict
 import urllib.parse
 import time
@@ -71,7 +71,7 @@ class EmailSubscriptionModel(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     verified_at = Column(DateTime, nullable=True)
-    last_email_sent = Column(Date, nullable=True)
+    last_email_sent = Column(DateTime, nullable=True)
     unsubscribe_token = Column(String(64), nullable=False, index=True)
     
     # Optional filters for personalized emails
@@ -82,6 +82,18 @@ class EmailSubscriptionModel(Base):
     # Bounce tracking
     bounce_count = Column(Integer, nullable=False, server_default='0', default=0)
     last_bounced_at = Column(DateTime, nullable=True)
+
+    # Email cadence: 'daily' or 'weekly'
+    email_cadence = Column(String(10), nullable=False, server_default='weekly', default='weekly')
+
+
+class FeatureWatchModel(Base):
+    __tablename__ = "feature_watches"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    subscription_id = Column(String(36), nullable=False, index=True)
+    release_item_id = Column(String(36), nullable=False, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_notified_hash = Column(String(64), nullable=True)
 
 
 class EmailVerificationModel(Base):
@@ -94,13 +106,17 @@ class EmailVerificationModel(Base):
     expires_at = Column(DateTime, nullable=False)
     is_used = Column(Boolean, default=False, nullable=False)
     used_at = Column(DateTime, nullable=True)
+    # Optional: auto-add a feature watch after verification completes
+    pending_watch_release_id = Column(String(36), nullable=True)
 
 
 class EmailContentCacheModel(Base):
     __tablename__ = "email_content_cache"
-    id = Column(Integer, primary_key=True, default=1)
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    cache_date = Column(String(10), nullable=False, index=True)
+    cache_key = Column(String(255), nullable=False)
     generated_at = Column(DateTime, nullable=False)
-    content_json = Column(Text, nullable=False)  # JSON blob: {changes: [...], ai_summary: "..."}
+    content_json = Column(Text, nullable=False)
 
 
 def _is_transient_sql_azure_error(exc: Exception) -> bool:
@@ -793,11 +809,14 @@ def generate_secure_token() -> str:
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
-def create_email_subscription(engine, email: str, filters: Optional[Dict[str, str]] = None) -> Tuple[str, str]:
+def create_email_subscription(engine, email: str, filters: Optional[Dict[str, str]] = None, cadence: str = 'weekly') -> Tuple[str, str]:
     """Create an email subscription with verification token.
-    
-    Returns tuple of (subscription_id, verification_token)
+
+    Returns tuple of (subscription_id, verification_token).
+    An empty verification_token means the user is already verified.
     """
+    if cadence not in ('daily', 'weekly'):
+        cadence = 'weekly'
     SessionLocal = sessionmaker(bind=engine, future=True)
     
     with SessionLocal() as session:
@@ -819,6 +838,7 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
             existing.unsubscribe_token = unsubscribe_token
             existing.created_at = datetime.utcnow()
             existing.is_active = True
+            existing.email_cadence = cadence
             if filters:
                 existing.product_filter = filters.get('products', '')
                 existing.release_type_filter = filters.get('types', '')
@@ -830,6 +850,7 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
                 email=email,
                 verification_token=verification_token,
                 unsubscribe_token=unsubscribe_token,
+                email_cadence=cadence,
                 product_filter=filters.get('products', '') if filters else '',
                 release_type_filter=filters.get('types', '') if filters else '',
                 release_status_filter=filters.get('statuses', '') if filters else ''
@@ -843,7 +864,7 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
             email=email,
             token=verification_token,
             action_type='subscribe',
-            expires_at=datetime.utcnow() + timedelta(hours=24)
+            expires_at=datetime.utcnow() + timedelta(hours=24),
         )
         session.add(verification)
         session.commit()
@@ -852,8 +873,62 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def create_watch_verification(engine, email: str, release_item_id: str) -> Tuple[Optional[str], str]:
+    """Create a verification record for adding a feature watch.
+
+    If the email is already a verified subscriber, a watch-specific
+    verification record is created. If the email is not subscribed at all,
+    a new subscription is created first (unverified).
+
+    Returns (subscription_id, verification_token). The watch is only added
+    when the user verifies via the token.
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+
+    with SessionLocal() as session:
+        existing = session.scalar(
+            select(EmailSubscriptionModel).where(EmailSubscriptionModel.email == email)
+        )
+
+        if existing and existing.is_verified:
+            subscription_id = existing.id
+        elif existing:
+            # Re-use existing unverified subscription
+            existing.created_at = datetime.utcnow()
+            existing.is_active = True
+            subscription_id = existing.id
+        else:
+            # Create a new subscription (will be verified when token is used)
+            sub = EmailSubscriptionModel(
+                email=email,
+                verification_token=generate_secure_token(),
+                unsubscribe_token=generate_secure_token(),
+            )
+            session.add(sub)
+            session.flush()
+            subscription_id = sub.id
+
+        verification_token = generate_secure_token()
+        verification = EmailVerificationModel(
+            email=email,
+            token=verification_token,
+            action_type='subscribe',
+            expires_at=datetime.utcnow() + timedelta(hours=24),
+            pending_watch_release_id=release_item_id,
+        )
+        session.add(verification)
+        session.commit()
+
+    return subscription_id, verification_token
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def verify_email_subscription(engine, token: str) -> bool:
-    """Verify an email subscription using the verification token"""
+    """Verify an email subscription using the verification token.
+
+    If the verification record has a pending_watch_release_id, the watch
+    is automatically added after successful verification.
+    """
     SessionLocal = sessionmaker(bind=engine, future=True)
     
     with SessionLocal() as session:
@@ -887,8 +962,16 @@ def verify_email_subscription(engine, token: str) -> bool:
         verification.is_used = True
         verification.used_at = datetime.utcnow()
         
+        pending_release_id = verification.pending_watch_release_id
+        subscription_id = subscription.id
+        
         session.commit()
-        return True
+
+    # Add pending watch outside the verification transaction
+    if pending_release_id:
+        add_feature_watch(engine, subscription_id, pending_release_id)
+
+    return True
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
@@ -971,28 +1054,272 @@ def get_active_subscriptions(engine) -> List[EmailSubscriptionModel]:
         return list(subscriptions)
     
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
-def get_unsent_active_subscriptions(engine, time_frame: int) -> List[EmailSubscriptionModel]:
-    """Get all active and verified email subscriptions"""
+def get_unsent_active_subscriptions(engine, time_frame: int, cadence: Optional[str] = None) -> List[EmailSubscriptionModel]:
+    """Get active, verified subscriptions whose last_email_sent is older than time_frame days.
+
+    If *cadence* is provided, only subscriptions matching that cadence are returned.
+    """
     SessionLocal = sessionmaker(bind=engine, future=True)
-    #filter based on last_email_sent is 7 or more days ago
-    # limit to 100 to prevent overwhelming the email service
     with SessionLocal() as session:
-        subscriptions = session.scalars(
+        query = (
             select(EmailSubscriptionModel)
             .where(EmailSubscriptionModel.is_active == True)
             .where(EmailSubscriptionModel.is_verified == True)
             .where(
                 or_(
                     EmailSubscriptionModel.last_email_sent == None,
-                    EmailSubscriptionModel.last_email_sent <= datetime.now(timezone.utc) - timedelta(days=time_frame)
+                    EmailSubscriptionModel.last_email_sent <= datetime.utcnow() - timedelta(days=time_frame)
                 )
             )
-            .limit(100)
-        ).all()
-        
-        # Detach from session to avoid lazy loading issues
+        )
+        if cadence:
+            query = query.where(EmailSubscriptionModel.email_cadence == cadence)
+        query = query.limit(1000)
+        subscriptions = session.scalars(query).all()
+
         session.expunge_all()
         return list(subscriptions)
+
+
+CADENCE_INTERVALS = {
+    'daily': 1,
+    'weekly': 7,
+}
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_digest_eligible_subscriptions(engine) -> List[EmailSubscriptionModel]:
+    """Get all subscriptions eligible for a digest email based on their cadence.
+
+    Weekly subscribers are only eligible on Mondays (UTC).
+    """
+    results = []
+    for cadence, days in CADENCE_INTERVALS.items():
+        if cadence == 'weekly' and datetime.utcnow().weekday() != 0:
+            continue
+        batch = get_unsent_active_subscriptions(engine, time_frame=days, cadence=cadence)
+        results.extend(batch)
+    return results
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_release_item_by_id(engine, release_item_id: str) -> Optional[ReleaseItemModel]:
+    """Return a ReleaseItemModel by primary key, or None if not found."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        item = session.get(ReleaseItemModel, release_item_id)
+        if item:
+            session.expunge(item)
+        return item
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def add_feature_watch(engine, subscription_id: str, release_item_id: str) -> bool:
+    """Add a feature watch. Returns True if created, False if already exists."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        with session.begin():
+            existing = session.scalar(
+                select(FeatureWatchModel).where(
+                    FeatureWatchModel.subscription_id == subscription_id,
+                    FeatureWatchModel.release_item_id == release_item_id,
+                )
+            )
+            if existing:
+                return False
+            session.add(FeatureWatchModel(
+                subscription_id=subscription_id,
+                release_item_id=release_item_id,
+            ))
+    return True
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def remove_feature_watch(engine, subscription_id: str, release_item_id: str) -> bool:
+    """Remove a feature watch. Returns True if deleted, False if not found."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        with session.begin():
+            result = session.execute(
+                delete(FeatureWatchModel).where(
+                    FeatureWatchModel.subscription_id == subscription_id,
+                    FeatureWatchModel.release_item_id == release_item_id,
+                )
+            )
+    return (result.rowcount or 0) > 0
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_watched_changes(engine, subscription_id: str) -> List[Dict[str, Any]]:
+    """Return watched releases whose row_hash differs from last_notified_hash."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(FeatureWatchModel, ReleaseItemModel)
+            .join(ReleaseItemModel, FeatureWatchModel.release_item_id == ReleaseItemModel.release_item_id)
+            .where(FeatureWatchModel.subscription_id == subscription_id)
+            .where(
+                or_(
+                    FeatureWatchModel.last_notified_hash == None,
+                    FeatureWatchModel.last_notified_hash != ReleaseItemModel.row_hash,
+                )
+            )
+        ).all()
+        results = []
+        for watch, release in rows:
+            results.append({
+                'watch_id': watch.id,
+                'release_item_id': release.release_item_id,
+                'feature_name': release.feature_name,
+                'product_name': release.product_name,
+                'release_type': release.release_type,
+                'release_status': release.release_status,
+                'feature_description': release.feature_description,
+                'last_modified': release.last_modified.isoformat() if release.last_modified else None,
+                'active': release.active,
+                'current_hash': release.row_hash,
+            })
+        return results
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def update_watch_hashes(engine, hash_updates: List[Tuple[str, str]]):
+    """Update last_notified_hash for a list of (watch_id, new_hash) tuples."""
+    if not hash_updates:
+        return
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        with session.begin():
+            for watch_id, new_hash in hash_updates:
+                watch = session.get(FeatureWatchModel, watch_id)
+                if watch:
+                    watch.last_notified_hash = new_hash
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_subscription_by_unsubscribe_token(engine, token: str) -> Optional[EmailSubscriptionModel]:
+    """Look up a subscription by its unsubscribe_token."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        sub = session.scalar(
+            select(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
+        )
+        if sub:
+            session.expunge(sub)
+        return sub
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_verified_subscription_by_email(engine, email: str) -> Optional[EmailSubscriptionModel]:
+    """Look up a verified, active subscription by email address."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        sub = session.scalar(
+            select(EmailSubscriptionModel)
+            .where(EmailSubscriptionModel.email == email.strip().lower())
+            .where(EmailSubscriptionModel.is_verified == True)
+            .where(EmailSubscriptionModel.is_active == True)
+        )
+        if sub:
+            session.expunge(sub)
+        return sub
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def update_subscription_preferences(engine, token: str, preferences: Dict[str, Any]) -> bool:
+    """Update subscription preferences identified by unsubscribe_token.
+
+    Accepted keys in *preferences*: email_cadence, product_filter, release_type_filter, release_status_filter.
+    Returns True if subscription found and updated.
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    allowed_keys = {'email_cadence', 'product_filter', 'release_type_filter', 'release_status_filter'}
+    with SessionLocal() as session:
+        with session.begin():
+            sub = session.scalar(
+                select(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
+            )
+            if not sub:
+                return False
+            for key, value in preferences.items():
+                if key in allowed_keys:
+                    setattr(sub, key, value)
+    return True
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_feature_watches_for_subscription(engine, subscription_id: str) -> List[Dict[str, Any]]:
+    """Return all feature watches for a subscription with release details."""
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(FeatureWatchModel, ReleaseItemModel.feature_name, ReleaseItemModel.product_name)
+            .join(ReleaseItemModel, FeatureWatchModel.release_item_id == ReleaseItemModel.release_item_id)
+            .where(FeatureWatchModel.subscription_id == subscription_id)
+            .order_by(FeatureWatchModel.created_at.desc())
+        ).all()
+        return [
+            {
+                'watch_id': w.id,
+                'release_item_id': w.release_item_id,
+                'feature_name': name,
+                'product_name': product,
+                'created_at': w.created_at.isoformat() if w.created_at else None,
+            }
+            for w, name, product in rows
+        ]
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_subscriptions_with_changed_watches(engine) -> List[Tuple[EmailSubscriptionModel, List[Dict[str, Any]]]]:
+    """Return all active, verified subscribers that have watched features with hash mismatches.
+
+    Used by the hourly email job to send watch alert emails.
+    Returns list of (subscription, [changed_watch_dicts]).
+
+    Uses a single joined query to avoid N+1 DB round-trips.
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(EmailSubscriptionModel, FeatureWatchModel, ReleaseItemModel)
+            .join(FeatureWatchModel, EmailSubscriptionModel.id == FeatureWatchModel.subscription_id)
+            .join(ReleaseItemModel, FeatureWatchModel.release_item_id == ReleaseItemModel.release_item_id)
+            .where(EmailSubscriptionModel.is_active == True)
+            .where(EmailSubscriptionModel.is_verified == True)
+            .where(
+                or_(
+                    FeatureWatchModel.last_notified_hash == None,
+                    FeatureWatchModel.last_notified_hash != ReleaseItemModel.row_hash,
+                )
+            )
+        ).all()
+
+        subs_by_id: Dict[str, EmailSubscriptionModel] = {}
+        changes_by_sub_id: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+
+        for sub, watch, release in rows:
+            if sub.id not in subs_by_id:
+                subs_by_id[sub.id] = sub
+            changes_by_sub_id[sub.id].append({
+                'watch_id': watch.id,
+                'release_item_id': release.release_item_id,
+                'feature_name': release.feature_name,
+                'product_name': release.product_name,
+                'release_type': release.release_type,
+                'release_status': release.release_status,
+                'feature_description': release.feature_description,
+                'last_modified': release.last_modified.isoformat() if release.last_modified else None,
+                'active': release.active,
+                'current_hash': release.row_hash,
+            })
+
+        session.expunge_all()
+
+    return [
+        (subs_by_id[sub_id], changes_by_sub_id[sub_id])
+        for sub_id in subs_by_id
+    ]
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
 def fetch_history_rows(engine, release_item_id: str):

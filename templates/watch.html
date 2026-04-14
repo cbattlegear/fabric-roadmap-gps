@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block title %}Watch {{ feature_name or 'Feature' }} — Fabric GPS{% endblock %}
+{% block extra_head %}
+<meta name="robots" content="noindex, nofollow">
+{% endblock %}
+{% block herotitle %}Watch a Feature{% endblock %}
+{% block herosubtitle %}Get notified when a specific roadmap item changes.{% endblock %}
+{% block content %}
+<div class="container">
+    <div class="page-card" style="text-align: center;">
+        {% if error %}
+            <div class="status-icon">❌</div>
+            <h2 style="margin-top: 0; color: var(--fabric-semantic-error);">{{ error }}</h2>
+            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+        {% elif success %}
+            <div class="status-icon">✅</div>
+            <h2 style="margin-top: 0;">Watch Request Submitted</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">We've sent a verification email to confirm your watch request.</p>
+            <a href="/release/{{ release_item_id }}" class="button button-secondary" style="margin-top: var(--spacing-l);">Back to Release</a>
+        {% else %}
+            <h2 style="margin-top: 0;">Watch this Feature</h2>
+            <p style="font-weight: 600; color: var(--fabric-neutral-grey-160); margin-bottom: var(--spacing-s);">{{ feature_name }}</p>
+            <p style="font-size: var(--font-size-body); color: var(--fabric-neutral-grey-90); margin-bottom: var(--spacing-l);">{{ product_name }}</p>
+
+            <p style="color: var(--fabric-neutral-grey-90); margin-bottom: var(--spacing-l);">
+                Enter your email to get notified when this feature is updated on the roadmap.
+            </p>
+
+            <form method="POST">
+                <input type="hidden" name="release_item_id" value="{{ release_item_id }}">
+                <div style="max-width: 400px; margin: 0 auto var(--spacing-m) auto;">
+                    <input type="email" name="email" placeholder="Enter your email address" required class="form-input" />
+                </div>
+                <button type="submit" class="button button-primary">Subscribe &amp; Watch</button>
+            </form>
+            <p style="margin-top: var(--spacing-l); font-size: var(--font-size-caption); color: var(--fabric-neutral-grey-90);">
+                We'll send a verification email to confirm your watch request, even if you're already subscribed.
+            </p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

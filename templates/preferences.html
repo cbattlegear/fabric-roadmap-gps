@@ -1,0 +1,199 @@
+{% extends 'base.html' %}
+{% block title %}Manage Preferences — Fabric GPS{% endblock %}
+{% block extra_head %}
+<meta name="robots" content="noindex, nofollow">
+<style>
+.save-bar {
+    display: flex;
+    gap: var(--spacing-m);
+    justify-content: flex-end;
+    margin-top: var(--spacing-l);
+    padding-top: var(--spacing-l);
+    border-top: 1px solid var(--fabric-neutral-grey-30);
+}
+.empty-watches {
+    color: var(--fabric-neutral-grey-90);
+    font-style: italic;
+    text-align: center;
+    padding: var(--spacing-l) 0;
+}
+</style>
+{% endblock %}
+{% block herotitle %}Email Preferences{% endblock %}
+{% block herosubtitle %}Customize your Fabric GPS email notifications.{% endblock %}
+{% block content %}
+<div class="container">
+    <div class="page-card-wide">
+    {% if error %}
+        <div style="text-align: center;">
+            <div class="status-icon">❌</div>
+            <h2 style="color: var(--fabric-semantic-error);">{{ error }}</h2>
+            <p style="color: var(--fabric-neutral-grey-90);">Please use the link from your email to access preferences.</p>
+            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+        </div>
+    {% elif subscription %}
+        <h2 style="margin-top: 0; font-size: var(--font-size-subtitle);">Email Preferences</h2>
+        <p style="color: var(--fabric-neutral-grey-90); margin-bottom: var(--spacing-xl);">Managing preferences for <strong>{{ subscription.email }}</strong></p>
+
+        <div style="margin-bottom: var(--spacing-xl);">
+            <h3 style="font-size: 1rem; margin-bottom: var(--spacing-s);">Email Frequency</h3>
+            <div class="radio-group">
+                <label class="radio-label">
+                    <input type="radio" name="cadence" value="weekly" {{ 'checked' if subscription.email_cadence == 'weekly' else '' }}> Weekly (Mondays)
+                </label>
+                <label class="radio-label">
+                    <input type="radio" name="cadence" value="daily" {{ 'checked' if subscription.email_cadence == 'daily' else '' }}> Daily
+                </label>
+            </div>
+        </div>
+
+        <div style="margin-bottom: var(--spacing-xl);">
+            <h3 style="font-size: 1rem; margin-bottom: var(--spacing-m);">Filters (optional)</h3>
+            <div class="form-group">
+                <label for="product-select">Products</label>
+                <select id="product-select" multiple></select>
+            </div>
+            <div class="form-group">
+                <label for="type-select">Release Types</label>
+                <select id="type-select" multiple></select>
+            </div>
+            <div class="form-group">
+                <label for="status-select">Statuses</label>
+                <select id="status-select" multiple></select>
+            </div>
+        </div>
+
+        {% if watches is defined %}
+        <div style="margin-bottom: var(--spacing-xl);">
+            <h3 style="font-size: 1rem; margin-bottom: var(--spacing-m);">👁️ Feature Watches</h3>
+            {% if watches %}
+            <ul class="watch-list" id="watches-list">
+                {% for w in watches %}
+                <li class="watch-list-item" data-release-id="{{ w.release_item_id }}">
+                    <div>
+                        <div><a href="/release/{{ w.release_item_id }}">{{ w.feature_name }}</a></div>
+                        <div style="font-size: var(--font-size-caption); color: var(--fabric-neutral-grey-90);">{{ w.product_name }}</div>
+                    </div>
+                    <button class="btn-remove" onclick="removeWatch('{{ w.release_item_id }}')">Remove</button>
+                </li>
+                {% endfor %}
+            </ul>
+            {% else %}
+            <p class="empty-watches" id="no-watches-msg">No feature watches. Visit a release page to add one.</p>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="save-bar">
+            <a href="/" class="button button-secondary">Cancel</a>
+            <button class="button button-primary" id="save-btn" onclick="savePreferences()">Save Preferences</button>
+        </div>
+        <div id="save-message" class="subscription-message" style="text-align: center;"></div>
+    {% endif %}
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TOKEN = {{ token | tojson }};
+const CURRENT = {
+    products: {{ (subscription.product_filter or "") | tojson }}.split(',').filter(Boolean),
+    types: {{ (subscription.release_type_filter or "") | tojson }}.split(',').filter(Boolean),
+    statuses: {{ (subscription.release_status_filter or "") | tojson }}.split(',').filter(Boolean),
+};
+
+async function loadFilterOptions() {
+    try {
+        const resp = await fetch('/api/filter-options');
+        const data = await resp.json();
+        populateSelect('product-select', data.product_names || [], CURRENT.products);
+        populateSelect('type-select', data.release_types || [], CURRENT.types);
+        populateSelect('status-select', data.release_statuses || [], CURRENT.statuses);
+    } catch(e) { console.error('Failed to load filter options', e); }
+}
+
+function populateSelect(id, options, selected) {
+    const sel = document.getElementById(id);
+    sel.innerHTML = '';
+    options.forEach(opt => {
+        const o = document.createElement('option');
+        o.value = opt; o.textContent = opt;
+        if (selected.includes(opt)) o.selected = true;
+        sel.appendChild(o);
+    });
+}
+
+function getSelected(id) {
+    return Array.from(document.getElementById(id).selectedOptions).map(o => o.value);
+}
+
+async function savePreferences() {
+    const btn = document.getElementById('save-btn');
+    const msg = document.getElementById('save-message');
+    btn.disabled = true; btn.textContent = 'Saving...';
+
+    const body = {
+        token: TOKEN,
+        cadence: document.querySelector('input[name="cadence"]:checked').value,
+        products: getSelected('product-select'),
+        types: getSelected('type-select'),
+        statuses: getSelected('status-select'),
+    };
+
+    try {
+        const resp = await fetch('/api/preferences', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        const result = await resp.json();
+        if (resp.ok) {
+            msg.textContent = '✅ Preferences saved!';
+            msg.className = 'subscription-message success';
+        } else {
+            msg.textContent = '❌ ' + (result.error || 'Failed to save');
+            msg.className = 'subscription-message error';
+        }
+        msg.style.display = 'block';
+    } catch(e) {
+        msg.textContent = '❌ Network error';
+        msg.className = 'subscription-message error';
+        msg.style.display = 'block';
+    }
+    btn.disabled = false; btn.textContent = 'Save Preferences';
+}
+
+async function removeWatch(releaseId) {
+    try {
+        const resp = await fetch('/api/watch', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({token: TOKEN, release_item_id: releaseId}),
+        });
+        if (resp.ok) {
+            const item = document.querySelector(`[data-release-id="${releaseId}"]`);
+            if (item) item.remove();
+            if (!document.querySelector('.watch-list-item')) {
+                const list = document.getElementById('watches-list');
+                if (list) list.remove();
+                const msg = document.getElementById('no-watches-msg');
+                if (msg) msg.style.display = 'block';
+                else {
+                    const container = document.querySelector('.watch-list')?.parentElement;
+                    if (container) {
+                        const p = document.createElement('p');
+                        p.className = 'empty-watches';
+                        p.id = 'no-watches-msg';
+                        p.textContent = 'No feature watches. Visit a release page to add one.';
+                        container.appendChild(p);
+                    }
+                }
+            }
+        }
+    } catch(e) { console.error('Failed to remove watch', e); }
+}
+
+document.addEventListener('DOMContentLoaded', () => { loadFilterOptions(); });
+</script>
+{% endblock %}
