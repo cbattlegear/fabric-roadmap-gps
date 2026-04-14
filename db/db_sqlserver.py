@@ -1291,8 +1291,9 @@ def get_subscriptions_with_changed_watches(engine) -> List[Tuple[EmailSubscripti
         SessionLocal2 = sessionmaker(bind=engine, future=True)
         with SessionLocal2() as session:
             sub = session.get(EmailSubscriptionModel, sub_id)
-            if sub:
-                session.expunge(sub)
+            if not sub:
+                continue
+            session.expunge(sub)
         changes = get_watched_changes(engine, sub_id)
         if changes:
             results.append((sub, changes))
