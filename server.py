@@ -184,12 +184,13 @@ def send_verification_email(email: str, verification_token: str,
         # Build context-aware copy
         is_watch = bool(watch_feature_name)
         if is_watch:
-            preheader = f"Verify your email to start watching {watch_feature_name}."
+            escaped_watch_feature_name = escape(watch_feature_name)
+            preheader = f"Verify your email to start watching {escaped_watch_feature_name}."
             hero_text = "Verify your email to start watching a feature on the Microsoft Fabric roadmap."
             subject = f"Verify your email to watch {watch_feature_name} — Fabric GPS"
             heading = "Start Watching a Feature"
             body_text = (
-                f"You requested to watch <strong>{watch_feature_name}</strong> on the Fabric roadmap. "
+                f"You requested to watch <strong>{escaped_watch_feature_name}</strong> on the Fabric roadmap. "
                 f"Click the button below to confirm your email and start receiving alerts when this feature changes."
             )
             after_text = "After verifying, you&rsquo;ll be notified whenever this feature is updated on the roadmap."
