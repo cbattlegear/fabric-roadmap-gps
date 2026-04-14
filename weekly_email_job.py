@@ -14,6 +14,7 @@ import time
 import hashlib
 import requests
 import logging
+import sqlalchemy.exc
 from datetime import datetime, timedelta
 from urllib.parse import urlencode
 from typing import List, Dict, Any, Optional
@@ -200,9 +201,11 @@ class WeeklyEmailSender:
                         content_json=content,
                     ))
             logger.info("Cached content for key=%s (%d items)", cache_key[:40], len(items))
+        except sqlalchemy.exc.IntegrityError:
+            # Another process already cached this key; safe to ignore
+            logger.info("Cache key=%s already exists (concurrent write), using generated content", cache_key[:40])
         except Exception as e:
-            # IntegrityError means another process cached it; that's fine
-            logger.warning(f"Cache write failed for key={cache_key[:40]}: {e}")
+            logger.error(f"Cache write failed for key={cache_key[:40]}: {e}")
 
         return items, ai_summary
 
@@ -441,7 +444,7 @@ class WeeklyEmailSender:
     def update_last_email_sent(self, subscription_id: str):
         """Update the last_email_sent timestamp for a subscription"""
         try:
-            engine = make_engine()
+            engine = self._engine or make_engine()
             from sqlalchemy.orm import sessionmaker
             SessionLocal = sessionmaker(bind=engine, future=True)
             with SessionLocal() as session:
