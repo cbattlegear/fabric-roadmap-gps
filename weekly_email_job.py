@@ -221,18 +221,37 @@ class WeeklyEmailSender:
 
             sent_count = 0
             error_count = 0
-            # Azure Communication Services quota: 30 emails/minute
-            MIN_SEND_INTERVAL = 2.0  # seconds between sends (60/30)
+            # Azure Communication Services quota: 100 emails/min, 1000 emails/hr.
+            # Reserve ~20% headroom for transactional emails (verification, preferences links)
+            # sent by the web server from the same quota.
+            MIN_SEND_INTERVAL = 0.75  # seconds between sends (~80/min)
+            MAX_HOURLY_SENDS = 800    # leave 200/hr for transactional emails
             last_send_time = 0.0
+            hourly_sent = 0
+            hourly_window_start = time.monotonic()
 
             for subscription in subscriptions:
                 try:
+                    # Enforce hourly quota
+                    elapsed_in_window = time.monotonic() - hourly_window_start
+                    if elapsed_in_window >= 3600:
+                        hourly_sent = 0
+                        hourly_window_start = time.monotonic()
+                    elif hourly_sent >= MAX_HOURLY_SENDS:
+                        wait_time = 3600 - elapsed_in_window
+                        logger.info(f"Hourly quota reached ({MAX_HOURLY_SENDS}), pausing {wait_time:.0f}s")
+                        time.sleep(wait_time)
+                        hourly_sent = 0
+                        hourly_window_start = time.monotonic()
+
+                    # Enforce per-minute rate
                     elapsed = time.monotonic() - last_send_time
                     if elapsed < MIN_SEND_INTERVAL:
                         time.sleep(MIN_SEND_INTERVAL - elapsed)
 
                     if self.send_digest_email(subscription):
                         sent_count += 1
+                        hourly_sent += 1
                         last_send_time = time.monotonic()
                         self.update_last_email_sent(subscription.id)
                     else:
@@ -252,12 +271,25 @@ class WeeklyEmailSender:
 
                 for sub, changed_watches in watch_results:
                     try:
+                        # Enforce hourly quota (shared with digest sends)
+                        elapsed_in_window = time.monotonic() - hourly_window_start
+                        if elapsed_in_window >= 3600:
+                            hourly_sent = 0
+                            hourly_window_start = time.monotonic()
+                        elif hourly_sent >= MAX_HOURLY_SENDS:
+                            wait_time = 3600 - elapsed_in_window
+                            logger.info(f"Hourly quota reached ({MAX_HOURLY_SENDS}), pausing {wait_time:.0f}s")
+                            time.sleep(wait_time)
+                            hourly_sent = 0
+                            hourly_window_start = time.monotonic()
+
                         elapsed = time.monotonic() - last_send_time
                         if elapsed < MIN_SEND_INTERVAL:
                             time.sleep(MIN_SEND_INTERVAL - elapsed)
 
                         if self.send_watch_alert_email(sub, changed_watches):
                             watch_sent += 1
+                            hourly_sent += 1
                             last_send_time = time.monotonic()
                             hash_updates = [(w['watch_id'], w['current_hash']) for w in changed_watches]
                             update_watch_hashes(engine, hash_updates)

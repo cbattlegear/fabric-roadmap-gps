@@ -1074,7 +1074,7 @@ def get_unsent_active_subscriptions(engine, time_frame: int, cadence: Optional[s
         )
         if cadence:
             query = query.where(EmailSubscriptionModel.email_cadence == cadence)
-        query = query.limit(100)
+        query = query.limit(1000)
         subscriptions = session.scalars(query).all()
 
         session.expunge_all()
