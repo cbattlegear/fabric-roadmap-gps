@@ -8,7 +8,7 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-INDEXNOW_ENDPOINT = "https://api.indexnow.org/indexnow"
+INDEXNOW_ENDPOINT = "https://www.bing.com/indexnow"
 MAX_URLS_PER_REQUEST = 10_000
 
 

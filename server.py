@@ -349,7 +349,7 @@ Fabric GPS
                 "to": [{"address": email}]
             },
             "content": {
-                "subject": "Verify your email for Fabric GPS weekly updates",
+                "subject": subject,
                 "plainText": text_content,
                 "html": html_content
             }
