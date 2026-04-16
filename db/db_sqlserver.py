@@ -1127,9 +1127,17 @@ def add_feature_watch(engine, subscription_id: str, release_item_id: str) -> boo
             )
             if existing:
                 return False
+            # Stamp the current row_hash so the subscriber isn't immediately
+            # alerted for a feature that hasn't changed since they subscribed.
+            current_hash = session.scalar(
+                select(ReleaseItemModel.row_hash).where(
+                    ReleaseItemModel.release_item_id == release_item_id
+                )
+            )
             session.add(FeatureWatchModel(
                 subscription_id=subscription_id,
                 release_item_id=release_item_id,
+                last_notified_hash=current_hash,
             ))
     return True
 
