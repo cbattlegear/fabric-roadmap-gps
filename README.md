@@ -16,13 +16,13 @@ Existing subscribers can manage their preferences at `/preferences?token=<unsubs
 
 ### Scheduling
 
-The email job (`APP_MODE=email`) should be scheduled to run **hourly**. It handles both cadences internally:
+The refresh job (`APP_MODE=refresh`) runs the data fetch pipeline (roadmap, blog scrape, vectorization, matching) followed by the email send job. It should be scheduled to run **hourly**. The email step handles both cadences internally:
 - Digest emails are sent when each subscriber's cadence interval has elapsed
 - Feature watch alerts are checked every run
 
 ```bash
 # Example cron (every hour at minute 0)
-0 * * * * docker run --rm -e APP_MODE=email -e SQLSERVER_CONN="..." fabric-gps
+0 * * * * docker run --rm -e APP_MODE=refresh -e SQLSERVER_CONN="..." fabric-gps
 ```
 
 ## Caching

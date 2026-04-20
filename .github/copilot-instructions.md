@@ -2,11 +2,10 @@
 
 ## Architecture
 
-Fabric GPS is a Python/Flask application that tracks Microsoft Fabric roadmap releases and matches them with related blog posts using vector embeddings. It runs as a single Docker image with three operational modes controlled by the `APP_MODE` environment variable:
+Fabric GPS is a Python/Flask application that tracks Microsoft Fabric roadmap releases and matches them with related blog posts using vector embeddings. It runs as a single Docker image with two operational modes controlled by the `APP_MODE` environment variable:
 
 - **`web`** — Flask app served via Gunicorn (`server.py`). Exposes an RSS 2.0 feed, a REST API (`/api/releases`), HTML pages, and email subscription management endpoints.
-- **`fetch`** — Data pipeline that runs sequentially: `get_current_releases.py` → `scrape_fabric_blog.py --rss` → `vectorize_blog_posts.py` → `match_releases_to_blogs.py`. Scrapes the Fabric roadmap and blog, generates Azure OpenAI embeddings (`text-embedding-3-small`), and matches releases to blog posts via SQL Server `VECTOR_DISTANCE('cosine', ...)`.
-- **`email`** — Weekly batch job (`weekly_email_job.py`) that sends personalized digest emails to verified subscribers via Azure Communication Services.
+- **`refresh`** — Hourly batch job that runs the data pipeline followed by the email sender, sequentially: `get_current_releases.py` → `scrape_fabric_blog.py --rss` → `vectorize_blog_posts.py` → `match_releases_to_blogs.py` → `weekly_email_job.py`. Scrapes the Fabric roadmap and blog, generates Azure OpenAI embeddings (`text-embedding-3-small`), matches releases to blog posts via SQL Server `VECTOR_DISTANCE('cosine', ...)`, and then sends digest and watch-alert emails to verified subscribers via Azure Communication Services.
 
 ### Key data flow
 
@@ -45,8 +44,8 @@ gunicorn -c gunicorn.conf.py
 docker build -t fabric-gps .
 docker run -e APP_MODE=web -e SQLSERVER_CONN="..." -p 8000:8000 fabric-gps
 
-# Run the data fetch pipeline
-APP_MODE=fetch bash start.sh
+# Run the data refresh + email pipeline
+APP_MODE=refresh bash start.sh
 
 # Run a single pipeline step
 python get_current_releases.py
