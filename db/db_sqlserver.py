@@ -8,6 +8,7 @@ from typing import Iterable, Any, Tuple, Dict
 import urllib.parse
 import time
 import random
+import secrets
 import logging
 
 # ...existing code...
@@ -804,8 +805,48 @@ def get_changelog_with_changes(
 
 
 def generate_secure_token() -> str:
-    """Generate a secure random token for email verification/unsubscribe"""
-    return hashlib.sha256(f"{uuid.uuid4()}{time.time()}{random.random()}".encode()).hexdigest()
+    """Generate a cryptographically secure random token for email verification/unsubscribe.
+
+    Returns a 64-character URL-safe base64 string from `secrets.token_urlsafe(48)`.
+    Fits in the existing String(64) token columns.
+    """
+    return secrets.token_urlsafe(48)
+
+
+class EmailRateLimitExceeded(Exception):
+    """Raised when an email address has requested too many verifications recently."""
+    pass
+
+
+# Per-email cap on verification emails (subscribe + watch combined). Pairs with
+# the per-IP rate limits in server.py to mitigate proxy-rotation email bombing.
+_EMAIL_VERIFICATION_HOURLY_CAP = 5
+
+
+def _enforce_email_verification_quota(session, email: str) -> None:
+    """Raise EmailRateLimitExceeded if `email` has hit the hourly verification cap.
+
+    Counts EmailVerificationModel rows created in the last hour for this address.
+    Must be called inside an active SQLAlchemy session before the new verification
+    row is added.
+
+    Note: this is a *soft* cap. The count-then-insert sequence is not atomic, so
+    a burst of concurrent requests for the same email can let a few extra
+    verifications through. That's acceptable — the goal is to prevent
+    thousands-of-emails abuse, not to enforce an exact per-hour count. Per-IP
+    rate limits in server.py provide an additional layer of defense.
+    """
+    cutoff = datetime.utcnow() - timedelta(hours=1)
+    recent = session.scalar(
+        select(func.count())
+        .select_from(EmailVerificationModel)
+        .where(EmailVerificationModel.email == email)
+        .where(EmailVerificationModel.created_at >= cutoff)
+    ) or 0
+    if recent >= _EMAIL_VERIFICATION_HOURLY_CAP:
+        raise EmailRateLimitExceeded(
+            f"Too many verification requests for {email} in the last hour"
+        )
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
@@ -814,6 +855,8 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
 
     Returns tuple of (subscription_id, verification_token).
     An empty verification_token means the user is already verified.
+
+    Raises EmailRateLimitExceeded if the email has hit the hourly verification cap.
     """
     if cadence not in ('daily', 'weekly'):
         cadence = 'weekly'
@@ -828,7 +871,9 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
         if existing and existing.is_verified:
             # Already subscribed and verified
             return existing.id, ""
-        
+
+        _enforce_email_verification_quota(session, email)
+
         verification_token = generate_secure_token()
         unsubscribe_token = generate_secure_token()
         
@@ -882,10 +927,14 @@ def create_watch_verification(engine, email: str, release_item_id: str) -> Tuple
 
     Returns (subscription_id, verification_token). The watch is only added
     when the user verifies via the token.
+
+    Raises EmailRateLimitExceeded if the email has hit the hourly verification cap.
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
 
     with SessionLocal() as session:
+        _enforce_email_verification_quota(session, email)
+
         existing = session.scalar(
             select(EmailSubscriptionModel).where(EmailSubscriptionModel.email == email)
         )

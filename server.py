@@ -42,6 +42,7 @@ from db.db_sqlserver import (
     get_verified_subscription_by_email,
     add_feature_watch, remove_feature_watch, get_feature_watches_for_subscription,
     create_watch_verification, get_release_item_by_id,
+    EmailRateLimitExceeded,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 
@@ -91,8 +92,15 @@ FROM_EMAIL = os.getenv('FROM_EMAIL', 'noreply@yourdomain.com')
 FROM_NAME = os.getenv('FROM_NAME', 'Fabric GPS')
 BASE_URL = os.getenv('BASE_URL', 'http://localhost:8000')
 ASYNC_EMAIL_VERIFICATION = os.getenv('ASYNC_EMAIL_VERIFICATION', '1') != '0'
-# ACS resource ID for validating Event Grid webhook events
+# ACS resource ID for validating Event Grid webhook events. Required in non-dev
+# so the /webhooks/email-events endpoint can reject events from unknown topics
+# instead of silently accepting any caller's bounce data.
 ACS_RESOURCE_ID = os.getenv('ACS_RESOURCE_ID', '')
+if os.getenv("CURRENT_ENVIRONMENT") != "development" and not ACS_RESOURCE_ID:
+    raise RuntimeError(
+        "ACS_RESOURCE_ID must be set in production so the email events webhook "
+        "can validate the Event Grid topic."
+    )
 
 
 CANONICAL_HOST = os.getenv('CANONICAL_HOST', '')
@@ -100,6 +108,14 @@ REDIRECT_HOSTS = {h.strip() for h in os.getenv('REDIRECT_HOSTS', '').split(',') 
 
 # Use canonical host for email URLs if configured, otherwise fall back to BASE_URL
 EMAIL_BASE_URL = f"https://{CANONICAL_HOST}" if CANONICAL_HOST else BASE_URL
+
+# Enforce HTTPS for outbound email URLs in non-development environments. Tokens
+# embedded in these links must not be transmitted over cleartext HTTP.
+if os.getenv("CURRENT_ENVIRONMENT") != "development" and not EMAIL_BASE_URL.startswith("https://"):
+    raise RuntimeError(
+        f"EMAIL_BASE_URL must use HTTPS in production (got {EMAIL_BASE_URL!r}). "
+        "Set CANONICAL_HOST or BASE_URL to an https:// URL."
+    )
 
 _NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/watch/", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch", "/api/send-preferences-link", "/dev/")
 
@@ -147,6 +163,20 @@ def validate_form_origin():
     if origin and not origin.startswith(EMAIL_BASE_URL) and not origin.startswith(BASE_URL):
         otelLogger.warning(f"Blocked cross-origin form POST from {origin} to {request.path}")
         return Response("Forbidden: cross-origin form submission", status=403)
+
+
+@app.after_request
+def set_security_headers(response):
+    """Apply baseline security headers to every response.
+
+    CSP is deliberately omitted — see issue tracking the in-depth CSP
+    refactor (inline scripts, onclick handlers, and external trackers
+    need to be reworked before a strict policy can be enforced).
+    """
+    response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+    response.headers.setdefault('X-Frame-Options', 'DENY')
+    response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+    return response
 
 
 @app.after_request
@@ -1037,33 +1067,32 @@ def api_subscribe():
     if cadence not in ('daily', 'weekly'):
         cadence = 'weekly'
     
+    # Generic message used for every non-error outcome to avoid leaking whether
+    # the email is already subscribed, newly created, or pending verification.
+    generic_success_message = (
+        "If this email isn't already subscribed, a verification email is on its way. "
+        "Check your Spam or Junk folder if you don't see it soon."
+    )
+
     try:
         engine = get_engine()
         subscription_id, verification_token = create_email_subscription(engine, email, filters, cadence=cadence)
-        
+
         if not verification_token:
-            return jsonify({"message": "Email is already subscribed and verified"}), 200
-        
-        # Send verification email (async by default)
+            # Already verified — silently accept without re-sending.
+            return jsonify({"message": generic_success_message, "async": False}), 200
+
         email_queued = send_verification_email(email, verification_token, cadence=cadence)
-        if email_queued:
-            if ASYNC_EMAIL_VERIFICATION:
-                return jsonify({
-                    "message": "Subscription created! Verification email is being sent. Make sure to check your Spam or Junk folder if you don't see it soon.",
-                    "async": True
-                }), 201
-            else:
-                return jsonify({
-                    "message": "Subscription created! Verification email sent.",
-                    "async": False
-                }), 201
-        else:
+        if not email_queued:
             otelLogger.warning(f"Subscription created for {email} but verification email failed to initiate")
-            return jsonify({
-                "message": "Subscription created, but the verification email couldn't be sent. Try again later.",
-                "async": ASYNC_EMAIL_VERIFICATION
-            }), 201
-        
+        return jsonify({
+            "message": generic_success_message,
+            "async": ASYNC_EMAIL_VERIFICATION,
+        }), 200
+
+    except EmailRateLimitExceeded:
+        otelLogger.warning(f"Subscribe rate limit hit for {email}")
+        return jsonify({"error": "Too many requests. Please try again later."}), 429
     except Exception as e:
         otelLogger.error(f"Error creating subscription: {e}")
         return jsonify({"error": "Failed to create subscription"}), 500
@@ -1100,6 +1129,7 @@ def api_send_preferences_link():
 
 
 @app.route("/api/verify-email", methods=["GET"])
+@limiter.limit("10 per hour")
 def api_verify_email():
     """Verify email subscription"""
     token = request.args.get('token')
@@ -1380,6 +1410,11 @@ def watch_feature_page(release_item_id):
             return render_template('watch.html', release_item_id=release_item_id,
                                    feature_name=feature_name, product_name=product_name,
                                    success=True)
+        except EmailRateLimitExceeded:
+            otelLogger.warning(f"Watch verification rate limit hit for {email}")
+            return render_template('watch.html', release_item_id=release_item_id,
+                                   feature_name=feature_name, product_name=product_name,
+                                   error="Too many requests. Please try again later."), 429
         except Exception as e:
             otelLogger.error(f"Error creating watch subscription: {e}")
             return render_template('watch.html', release_item_id=release_item_id,
