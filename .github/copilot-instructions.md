@@ -68,3 +68,9 @@ alembic revision --autogenerate -m "description"
 - **Templates**: Jinja2 HTML templates in `templates/`, static assets in `static/`. The frontend is server-rendered.
 - **Environment variables**: All configuration is via env vars — see `.env.example`. Key vars: `SQLSERVER_CONN`, `AZURE_COMMUNICATION_CONNECTION_STRING`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY`, `APP_MODE`, `CURRENT_ENVIRONMENT`, `BASE_URL`.
 - **Naming convention for SQLAlchemy constraints**: Defined in `db/db_sqlserver.py` metadata (`ix_`, `uq_`, `ck_`, `fk_`, `pk_` prefixes). Alembic's `env.py` references `Base.metadata` from this module.
+
+## Workflow
+
+- **Starting new work**: When the user asks to start a new branch (phrases like "jump to main", "pop up to main, new branch for X", "let's start a branch"), run `git checkout main && git pull` first, then create the branch. Use descriptive prefixes matching the task type: `fix/`, `chore/`, `feature/`, `hotfix/`.
+- **Pre-push code review**: Before pushing a branch intended for a PR (user says "push and PR", "let's ship this", "send it up", etc.), first invoke the `code-review` sub-agent via the `task` tool on the pending diff. Summarize any high-signal findings (bugs, logic errors, security issues) to the user and wait for their approval or fixes before proceeding to push. Skip this for trivial doc-only changes when the user asks for a fast path.
+- **Creating PRs with `gh`**: This repo is developed on Windows/PowerShell. Always write the PR body to a file and pass `--body-file <path>` to `gh pr create` and `gh pr edit`. Never use inline `--body "..."` — PowerShell strips backticks and interprets `\r`/`\f`/`\v`/`\e`/`\n` sequences, which garbles filenames and variable names in the rendered markdown (e.g., `fetch` → `etch`, `refresh` → `\r` + `efresh`). A temp file under the session workspace works well.
