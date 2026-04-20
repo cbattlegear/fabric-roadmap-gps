@@ -30,5 +30,5 @@ ENV APP_MODE=web \
 
 EXPOSE 8000
 
-# Entrypoint dispatches based on APP_MODE (web | fetch)
+# Entrypoint dispatches based on APP_MODE (web | refresh)
 CMD ["bash", "start.sh"]
