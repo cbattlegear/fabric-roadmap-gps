@@ -13,7 +13,7 @@ import logging
 
 # ...existing code...
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete
+    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete, text
 )
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -618,23 +618,42 @@ def get_changelog_with_changes(
     Uses the same LAG-based diff logic as GetReleaseItemHistoryById but runs
     across ALL items modified within the window, returning one row per item
     with its most-recent change summary.
-    """
-    filters = []
-    params = [days]
-    if not include_inactive:
-        filters.append("AND active = 1")
-    if product_name:
-        filters.append("AND product_name = ?")
-        params.append(product_name)
-    if release_type:
-        filters.append("AND release_type = ?")
-        params.append(release_type)
-    if release_status:
-        filters.append("AND release_status = ?")
-        params.append(release_status)
-    filter_clause = " ".join(filters)
 
-    sql = f"""
+    Defense-in-depth: every value supplied by the caller (including HTTP
+    request args via /api/changelog) flows into the query exclusively as a
+    named bind parameter via SQLAlchemy ``text()``. The set of optional
+    filters is a closed whitelist (``_OPTIONAL_FILTERS``); callers cannot
+    introduce new column names or SQL fragments. The static "active = 1"
+    fragment carries no caller value.
+    """
+    # Closed whitelist of (kwarg_name -> SQL fragment using a named bind
+    # param). Every entry is a literal string defined here, never derived
+    # from caller input. To add a filter, add an entry; never splice values.
+    _OPTIONAL_FILTERS: Tuple[Tuple[str, str], ...] = (
+        ("product_name",   "AND product_name = :product_name"),
+        ("release_type",   "AND release_type = :release_type"),
+        ("release_status", "AND release_status = :release_status"),
+    )
+
+    bind_values: Dict[str, Any] = {"days": int(days)}
+    filter_fragments: List[str] = []
+    if not include_inactive:
+        filter_fragments.append("AND active = 1")
+
+    supplied = {
+        "product_name": product_name,
+        "release_type": release_type,
+        "release_status": release_status,
+    }
+    for name, fragment in _OPTIONAL_FILTERS:
+        value = supplied.get(name)
+        if value:
+            filter_fragments.append(fragment)
+            bind_values[name] = value
+
+    filter_clause = " ".join(filter_fragments)
+
+    sql = text(f"""
     WITH Hist AS (
         SELECT
             release_item_id, release_date, release_type, release_status,
@@ -644,7 +663,7 @@ def get_changelog_with_changes(
         FROM dbo.release_items FOR SYSTEM_TIME ALL
         WHERE release_item_id IN (
             SELECT release_item_id FROM release_items
-            WHERE last_modified >= DATEADD(day, -?, CAST(GETUTCDATE() AS DATE))
+            WHERE last_modified >= DATEADD(day, -:days, CAST(GETUTCDATE() AS DATE))
             {filter_clause}
         )
     ),
@@ -772,36 +791,28 @@ def get_changelog_with_changes(
     FROM Diffs d
     INNER JOIN Latest l ON d.release_item_id = l.release_item_id AND d.VersionNum = l.ContentVer
     ORDER BY d.last_modified DESC, d.product_name, d.feature_name
-    """
+    """)
 
-    conn = engine.raw_connection()
-    try:
-        cursor = conn.cursor()
-        cursor.execute(sql, params)
-        columns = [col[0] for col in cursor.description]
-        results = []
-        for row in cursor.fetchall():
-            row_dict = dict(zip(columns, row))
-            changed_raw = row_dict.pop("ChangedColumns", "") or ""
-            changed_list = [c.strip() for c in changed_raw.split(',') if c and c.strip()]
-            results.append({
-                "release_item_id": row_dict["release_item_id"],
-                "feature_name": row_dict["feature_name"],
-                "product_name": row_dict["product_name"],
-                "release_type": row_dict["release_type"],
-                "release_status": row_dict["release_status"],
-                "release_date": row_dict.get("release_date"),
-                "last_modified": row_dict.get("last_modified"),
-                "active": row_dict.get("active"),
-                "changed_columns": changed_list,
-            })
-        return results
-    finally:
-        try:
-            cursor.close()
-        except Exception:
-            pass
-        conn.close()
+    with engine.connect() as conn:
+        result = conn.execute(sql, bind_values)
+        rows = result.mappings().all()
+
+    items: List[Dict] = []
+    for row in rows:
+        changed_raw = row.get("ChangedColumns") or ""
+        changed_list = [c.strip() for c in changed_raw.split(',') if c and c.strip()]
+        items.append({
+            "release_item_id": row["release_item_id"],
+            "feature_name": row["feature_name"],
+            "product_name": row["product_name"],
+            "release_type": row["release_type"],
+            "release_status": row["release_status"],
+            "release_date": row.get("release_date"),
+            "last_modified": row.get("last_modified"),
+            "active": row.get("active"),
+            "changed_columns": changed_list,
+        })
+    return items
 
 
 def generate_secure_token() -> str:
