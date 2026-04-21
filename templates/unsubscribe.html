@@ -30,13 +30,24 @@
             <div class="status-icon">❌</div>
             <h2 style="margin-top: 0; color: var(--fabric-semantic-error);">Unsubscribe Failed</h2>
             <p style="color: var(--fabric-neutral-grey-90);">{{ error }}</p>
-            <p style="color: var(--fabric-neutral-grey-90);">The unsubscribe link may be invalid or expired. If you continue to receive emails, please contact support.</p>
-            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+            {% if show_request_link %}
+                <p style="color: var(--fabric-neutral-grey-90);">You can request a fresh management link by entering your email on the subscribe page. From that link you can unsubscribe or change your preferences.</p>
+                <div class="card-actions" style="justify-content: center; margin-top: var(--spacing-l);">
+                    <a href="/subscribe#manage" class="button button-primary">Request a new link</a>
+                    <a href="/" class="button button-secondary">Back to Home</a>
+                </div>
+            {% else %}
+                <p style="color: var(--fabric-neutral-grey-90);">If you continue to receive emails, please contact support.</p>
+                <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+            {% endif %}
         {% else %}
             <div class="status-icon">❓</div>
             <h2 style="margin-top: 0; color: var(--fabric-semantic-error);">Invalid Request</h2>
             <p style="color: var(--fabric-neutral-grey-90);">No unsubscribe token provided.</p>
-            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+            <div class="card-actions" style="justify-content: center; margin-top: var(--spacing-l);">
+                <a href="/subscribe#manage" class="button button-primary">Request a new link</a>
+                <a href="/" class="button button-secondary">Back to Home</a>
+            </div>
         {% endif %}
     </div>
 </div>
