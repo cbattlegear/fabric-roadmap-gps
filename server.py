@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, date, time, timezone
 from typing import Optional, List
 
-from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory
+from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory, url_for
 from flask_limiter import Limiter
 from html import escape
 from email.utils import format_datetime
@@ -43,6 +43,7 @@ from db.db_sqlserver import (
     add_feature_watch, remove_feature_watch, get_feature_watches_for_subscription,
     create_watch_verification, get_release_item_by_id,
     EmailRateLimitExceeded,
+    rotate_unsubscribe_token,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 
@@ -1210,7 +1211,9 @@ def unsubscribe_page():
     """
     token = request.values.get('token')
     if not token:
-        return render_template('unsubscribe.html', error="Missing unsubscribe token"), 400
+        return render_template('unsubscribe.html',
+                               error="Missing unsubscribe token",
+                               show_request_link=True), 400
 
     if request.method == 'POST':
         try:
@@ -1221,27 +1224,62 @@ def unsubscribe_page():
                 send_goodbye_email(email)
                 return render_template('unsubscribe.html', success=True)
             else:
-                return render_template('unsubscribe.html', error="Invalid unsubscribe token")
+                return render_template('unsubscribe.html',
+                                       error="Invalid unsubscribe token",
+                                       show_request_link=True)
 
         except Exception as e:
             otelLogger.error(f"Error unsubscribing: {e}")
-            return render_template('unsubscribe.html', error="Failed to unsubscribe"), 500
+            return render_template('unsubscribe.html',
+                                   error="Failed to unsubscribe",
+                                   show_request_link=True), 500
 
-    # GET -> show pending confirmation UI
+    # GET -> verify token resolves before showing the confirm UI so users with
+    # stale links see the recovery option instead of a button that will fail.
+    engine = get_engine()
+    sub = get_subscription_by_unsubscribe_token(engine, token)
+    if not sub:
+        return render_template('unsubscribe.html',
+                               error="This unsubscribe link has expired or is invalid",
+                               show_request_link=True), 404
+
     return render_template('unsubscribe.html', pending=True, token=token)
 
 
 @app.route("/preferences", methods=["GET"])
 def preferences_page():
-    """HTML page for managing subscription preferences."""
+    """HTML page for managing subscription preferences.
+
+    Rotates the unsubscribe_token on first use so a leaked URL token doesn't
+    grant indefinite access. Recently-rotated tokens remain valid via the
+    history-table grace window so older email links keep working.
+    """
     token = request.args.get('token')
     if not token:
-        return render_template('preferences.html', error="Missing preferences token"), 400
+        return render_template('preferences.html',
+                               error="Missing preferences token",
+                               show_request_link=True), 400
 
     engine = get_engine()
     sub = get_subscription_by_unsubscribe_token(engine, token)
     if not sub:
-        return render_template('preferences.html', error="Invalid or expired token"), 404
+        return render_template('preferences.html',
+                               error="Invalid or expired token",
+                               show_request_link=True), 404
+
+    # If the URL token is the current one, rotate and redirect with the new
+    # token so the now-leaked old value (which may live in browser history,
+    # access logs, or referrer headers) becomes a history-only token. If the
+    # URL token resolved via the history table, don't rotate — just redirect
+    # to the current token so the user lands on the canonical URL.
+    if token == sub.unsubscribe_token:
+        new_token = rotate_unsubscribe_token(engine, token)
+        if new_token:
+            return redirect(url_for('preferences_page', token=new_token), code=303)
+    else:
+        # Resolved via the history-table grace window — send the user to the
+        # canonical URL so subsequent API calls use the current token.
+        return redirect(url_for('preferences_page', token=sub.unsubscribe_token), code=303)
 
     watches = get_feature_watches_for_subscription(engine, sub.id)
     return render_template('preferences.html', subscription=sub, watches=watches, token=token)
@@ -1609,6 +1647,21 @@ def healthcheck():
             "web_server_status": "healthy",
             "sql_status": "healthy" if sql_health else "unhealthy",
         }), 200
+
+
+@app.context_processor
+def inject_no_analytics():
+    """Suppress third-party analytics scripts on pages whose URLs carry
+    sensitive query tokens. Without this the Umami and App Insights snippets
+    in base.html could read window.location.href and exfiltrate the token to
+    third-party endpoints (referrer policy doesn't help for in-page JS).
+    """
+    try:
+        path = request.path
+    except RuntimeError:
+        return {"no_analytics": False}
+    no_analytics = path in ("/preferences", "/unsubscribe", "/verify-email")
+    return {"no_analytics": no_analytics}
 
 
 @app.context_processor
