@@ -28,8 +28,16 @@
         <div style="text-align: center;">
             <div class="status-icon">❌</div>
             <h2 style="color: var(--fabric-semantic-error);">{{ error }}</h2>
-            <p style="color: var(--fabric-neutral-grey-90);">Please use the link from your email to access preferences.</p>
-            <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+            {% if show_request_link %}
+                <p style="color: var(--fabric-neutral-grey-90);">Request a fresh management link by entering your email on the subscribe page. From that link you can change your preferences or unsubscribe.</p>
+                <div class="card-actions" style="justify-content: center; margin-top: var(--spacing-l);">
+                    <a href="/subscribe#manage" class="button button-primary">Request a new link</a>
+                    <a href="/" class="button button-secondary">Back to Home</a>
+                </div>
+            {% else %}
+                <p style="color: var(--fabric-neutral-grey-90);">Please use the link from your email to access preferences.</p>
+                <a href="/" class="button button-primary" style="margin-top: var(--spacing-l);">Back to Home</a>
+            {% endif %}
         </div>
     {% elif subscription %}
         <h2 style="margin-top: 0; font-size: var(--font-size-subtitle);">Email Preferences</h2>
