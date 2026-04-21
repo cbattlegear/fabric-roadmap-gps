@@ -6,8 +6,6 @@ from collections import defaultdict
 from datetime import datetime, date, timedelta
 from typing import Iterable, Any, Tuple, Dict
 import urllib.parse
-import time
-import random
 import secrets
 import logging
 
@@ -18,8 +16,12 @@ from sqlalchemy import (
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker
 
-# SQLAlchemy-specific exceptions we may inspect
-from sqlalchemy.exc import DBAPIError
+# Retry decorator lives in lib/db_retry.py so raw-pyodbc pipeline scripts
+# can share the same Azure-SQL transient-error detection.
+from lib.db_retry import (
+    retry_on_transient_errors,
+    is_transient_sql_azure_error as _retry_is_transient,
+)
 
 naming_convention = {
     "ix": "ix_%(column_0_label)s",
@@ -143,100 +145,14 @@ class EmailContentCacheModel(Base):
 
 
 def _is_transient_sql_azure_error(exc: Exception) -> bool:
-    """
-    Try to detect common transient SQL Azure / network errors.
-    Inspect message text and DBAPI/SQL error codes found in the exception.
-    """
-    if exc is None:
-        return False
-
-    # Known SQL/Azure transient error codes & phrases (string search)
-    transient_codes = {
-        "40197", "40501", "40613", "10928", "10929", "49918", "49919", "49920", "4060",
-        "10053", "10054", "10060", "1205",  # 1205 = deadlock; sometimes transient as well
-    }
-    msg = str(exc).lower()
-
-    # check presence of numeric codes
-    for code in transient_codes:
-        if code in msg:
-            return True
-
-    # common transient / network phrases
-    transient_phrases = (
-        "transport-level error",
-        "a transport-level error has occurred",
-        "the connection is broken",
-        "connection reset by peer",
-        "connection was closed by the server",
-        "the server was not found or was not accessible",
-        "cannot open database requested by the login",
-        "login failed",
-        "connection timeout",
-        "timed out",
-        "timeout expired",
-        "operation timed out",
-        "could not open connection",
-        "server is busy",
-        "service is currently paused",
-        "service is busy",
-        "deadlocked",  # fallback
-    )
-    for ph in transient_phrases:
-        if ph in msg:
-            return True
-
-    # inspect SQLAlchemy DBAPIError .orig (if present) for underlying DBAPI messages
-    try:
-        if isinstance(exc, DBAPIError):
-            orig = getattr(exc, "orig", None)
-            if orig is not None and any(code in str(orig) for code in transient_codes):
-                return True
-            # connection_invalidated is often True when SQLAlchemy detects a disconnect
-            if getattr(exc, "connection_invalidated", False):
-                return True
-    except Exception:
-        pass
-
-    return False
+    """Backwards-compatible alias — see :func:`lib.db_retry.is_transient_sql_azure_error`."""
+    return _retry_is_transient(exc)
 
 
-def retry_on_transient_errors(max_attempts: int = 5, initial_delay: float = 1.0, backoff: float = 2.0, max_delay: float = 30.0):
-    """
-    Decorator to retry a DB operation on transient SQL Azure / network errors.
-
-    Usage:
-      @retry_on_transient_errors()
-      def init_db(...):
-          ...
-    """
-    def decorator(func):
-        def wrapper(*args, **kwargs):
-            attempt = 1
-            delay = float(initial_delay)
-            while True:
-                try:
-                    return func(*args, **kwargs)
-                except Exception as exc:
-                    if not _is_transient_sql_azure_error(exc):
-                        logger.exception("Non-transient DB error encountered, not retrying.")
-                        raise
-                    if attempt >= max_attempts:
-                        logger.exception("Transient DB error and max attempts reached (%d).", max_attempts)
-                        raise
-                    # transient and we will retry
-                    logger.warning("Transient DB error detected; attempt %d/%d will retry after %.2fs: %s",
-                                   attempt, max_attempts, delay, exc)
-                    # jitter
-                    sleep_time = delay + (random.random() * 0.5)
-                    time.sleep(sleep_time)
-                    delay = min(delay * backoff, max_delay)
-                    attempt += 1
-        # copy some identity
-        wrapper.__name__ = getattr(func, "__name__", "wrapped")
-        wrapper.__doc__ = getattr(func, "__doc__", "")
-        return wrapper
-    return decorator
+# retry_on_transient_errors is re-exported from lib.db_retry (extracted so
+# raw-pyodbc pipeline scripts can use the same decorator without depending
+# on the SQLAlchemy module). The aliasing preserves the public API for
+# callers that still import these symbols from db.db_sqlserver.
 
 
 def make_engine(conn_str: str | None = None):

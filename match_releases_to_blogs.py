@@ -12,6 +12,8 @@ import pyodbc
 from openai import AzureOpenAI
 import json
 
+from lib.db_retry import retry_on_transient_errors, is_transient_sql_azure_error
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -60,6 +62,38 @@ class ReleaseBlogMatcher:
             self.conn = pyodbc.connect(self.connection_string)
             self.cursor = self.conn.cursor()
             logger.info("Database connection established")
+
+    def _ensure_connection(self):
+        """Reconnect if the connection has been dropped (used by retry path)."""
+        if self.conn is None or self.cursor is None:
+            self.connect()
+
+    def _drop_connection_silently(self):
+        """Close and clear the current connection so the next attempt reconnects."""
+        try:
+            if self.cursor is not None:
+                self.cursor.close()
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            pass
+        try:
+            if self.conn is not None:
+                self.conn.close()
+        except Exception:  # noqa: BLE001 — best-effort cleanup
+            pass
+        self.cursor = None
+        self.conn = None
+
+    def _run_with_reconnect(self, body):
+        """Run *body* (a no-arg callable) under reconnect-on-transient-error semantics."""
+        try:
+            self._ensure_connection()
+            return body()
+        except Exception as exc:
+            if is_transient_sql_azure_error(exc):
+                # Drop the (likely broken) connection so the retry decorator's
+                # next attempt establishes a fresh one before re-running body.
+                self._drop_connection_silently()
+            raise
     
     def close(self):
         """Close database connection"""
@@ -76,24 +110,25 @@ class ReleaseBlogMatcher:
         if self.conn:
             self.conn.commit()
     
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
     def get_releases_without_articles(self) -> List[Dict]:
         """
         Fetch releases that have null blog_url
-        
+
         Returns:
             List of dictionaries containing release data
         """
-        try:
+        def body():
             query = """
             SELECT release_item_id, feature_name, product_name, feature_description, release_vector
             FROM release_items
             WHERE blog_url IS NULL
             ORDER BY last_modified DESC
             """
-            
+
             self.cursor.execute(query)
             rows = self.cursor.fetchall()
-            
+
             releases = []
             for row in rows:
                 releases.append({
@@ -103,13 +138,11 @@ class ReleaseBlogMatcher:
                     'feature_description': row[3] or '',
                     'release_vector': row[4] or ''
                 })
-            
+
             logger.info(f"Found {len(releases)} releases without blogs")
             return releases
-        
-        except Exception as e:
-            logger.error(f"Error fetching releases without blogs: {e}")
-            raise
+
+        return self._run_with_reconnect(body)
     
     def create_text_for_embedding(self, release: Dict) -> str:
         """
@@ -165,46 +198,47 @@ class ReleaseBlogMatcher:
             logger.error(f"Error generating embedding: {e}")
             return None
     
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
     def update_release_vector(self, release_item_id: str, embedding) -> bool:
         """
         Update the release_vector column for a specific release
-        
+
         Args:
             release_item_id: Database ID of the release
             embedding: OpenAI embedding response object
-            
+
         Returns:
-            True if successful, False otherwise
+            True if successful. Raises after retry exhaustion; the caller's
+            per-item try/except is expected to catch and count as a failure.
         """
-        try:
+        def body():
             update_sql = """
             UPDATE release_items
             SET release_vector = JSON_QUERY(CAST(? AS NVARCHAR(MAX)), '$.data[0].embedding')
             WHERE release_item_id = ?
             """
-            
+
             self.cursor.execute(update_sql, (embedding.model_dump_json(), release_item_id))
             self.commit()
-            
             return True
-        
-        except Exception as e:
-            logger.error(f"Error updating vector for release {release_item_id}: {e}")
-            return False
-    
+
+        return self._run_with_reconnect(body)
+
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
     def find_most_related_blog(self, release_item_id) -> Optional[Tuple[str, str, float]]:
         """
         Find the most related blog article using vector similarity
-        
+
         Args:
             release_item_id: ID of release_item to find blog
-            
+
         Returns:
-            Tuple of (blog_title, blog_url, distance) or None if no match found
+            Tuple of (blog_title, blog_url, distance) or None if no match found.
+            Raises after retry exhaustion; the caller is expected to catch.
         """
-        try:
+        def body():
             query = """
-            SELECT TOP 1 title, url, 
+            SELECT TOP 1 title, url,
                    VECTOR_DISTANCE('cosine', (SELECT release_vector FROM release_items WHERE release_item_id = ?), blog_vector) as distance
             FROM fabric_blog_posts
             WHERE blog_vector IS NOT NULL
@@ -213,29 +247,29 @@ class ReleaseBlogMatcher:
 
             self.cursor.execute(query, (release_item_id,))
             row = self.cursor.fetchone()
-            
+
             if row:
                 return (row[0], row[1], row[2])
-            
+
             return None
-        
-        except Exception as e:
-            logger.error(f"Error finding related blog: {e}")
-            return None
+
+        return self._run_with_reconnect(body)
     
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
     def update_release_blog_info(self, release_item_id: str, blog_title: str, blog_url: str, distance) -> bool:
         """
         Update the blog_title and blog_url columns for a specific release
-        
+
         Args:
             release_item_id: Database ID of the release
             blog_title: Title of the related blog article
             blog_url: URL of the related blog article
-            
+
         Returns:
-            True if successful, False otherwise
+            True if successful. Raises after retry exhaustion; the caller is
+            expected to catch and count as a failure.
         """
-        try:
+        def body():
             update_sql = """
             UPDATE release_items
             SET blog_title = ?,
@@ -243,15 +277,12 @@ class ReleaseBlogMatcher:
                 vector_distance = ?
             WHERE release_item_id = ?
             """
-            
+
             self.cursor.execute(update_sql, (blog_title, blog_url, distance, release_item_id))
             self.commit()
-            
             return True
-        
-        except Exception as e:
-            logger.error(f"Error updating blog info for release {release_item_id}: {e}")
-            return False
+
+        return self._run_with_reconnect(body)
     
     def vectorize_and_match_all_releases(self):
         """
@@ -339,9 +370,10 @@ class ReleaseBlogMatcher:
             raise
 
 
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
     def get_all_matched_releases(self) -> List[Dict]:
         """Fetch all releases that already have a blog match and a vector."""
-        try:
+        def body():
             query = """
             SELECT release_item_id, feature_name, product_name,
                    blog_title, blog_url, vector_distance
@@ -363,9 +395,8 @@ class ReleaseBlogMatcher:
                 }
                 for row in rows
             ]
-        except Exception as e:
-            logger.error(f"Error fetching matched releases: {e}")
-            raise
+
+        return self._run_with_reconnect(body)
 
     def rerank_all_matches(self):
         """Re-check all matched releases for a better blog article.

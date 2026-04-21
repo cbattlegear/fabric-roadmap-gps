@@ -12,6 +12,8 @@ from typing import List, Dict, Optional
 import pyodbc
 from openai import AzureOpenAI
 
+from lib.db_retry import retry_on_transient_errors
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -48,27 +50,30 @@ class BlogVectorizer:
         
         logger.info("BlogVectorizer initialized successfully")
     
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
     def get_posts_without_vectors(self) -> List[Dict]:
         """
         Fetch blog posts that have null blog_vector
-        
+
         Returns:
             List of dictionaries containing post data
         """
+        conn = None
+        cursor = None
         try:
             conn = pyodbc.connect(self.connection_string)
             cursor = conn.cursor()
-            
+
             query = """
             SELECT id, title, categories, summary, url
             FROM fabric_blog_posts
             WHERE blog_vector IS NULL
             ORDER BY post_date DESC
             """
-            
+
             cursor.execute(query)
             rows = cursor.fetchall()
-            
+
             posts = []
             for row in rows:
                 posts.append({
@@ -78,16 +83,20 @@ class BlogVectorizer:
                     'summary': row[3] or '',
                     'url': row[4] or ''
                 })
-            
-            cursor.close()
-            conn.close()
-            
+
             logger.info(f"Found {len(posts)} posts without vectors")
             return posts
-        
-        except Exception as e:
-            logger.error(f"Error fetching posts without vectors: {e}")
-            raise
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
     
     def create_text_for_embedding(self, post: Dict) -> str:
         """
@@ -145,38 +154,43 @@ class BlogVectorizer:
             logger.error(f"Error generating embedding: {e}")
             return None
     
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
     def update_post_vector(self, post_id: int, embedding) -> bool:
         """
         Update the blog_vector column for a specific post
-        
+
         Args:
             post_id: Database ID of the post
             vector: Embedding vector to store
-            
+
         Returns:
-            True if successful, False otherwise
+            True if successful. Raises on database error after retry exhaustion;
+            the caller is expected to catch and count as a failure.
         """
+        conn = None
+        cursor = None
         try:
             conn = pyodbc.connect(self.connection_string)
             cursor = conn.cursor()
-            
-            # Convert vector to JSON string format for SQL Server vector type
-            
+
             update_sql = """
             UPDATE fabric_blog_posts SET blog_vector = JSON_QUERY(CAST(? AS NVARCHAR(MAX)), '$.data[0].embedding') WHERE id = ?
             """
-            
+
             cursor.execute(update_sql, (embedding.model_dump_json(), post_id))
             conn.commit()
-            
-            cursor.close()
-            conn.close()
-            
             return True
-        
-        except Exception as e:
-            logger.error(f"Error updating vector for post ID {post_id}: {e}")
-            return False
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
     
     def vectorize_all_posts(self, batch_size: int = 10):
         """
