@@ -13,7 +13,7 @@ import logging
 
 # ...existing code...
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete
+    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete, update
 )
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker
@@ -74,6 +74,10 @@ class EmailSubscriptionModel(Base):
     verified_at = Column(DateTime, nullable=True)
     last_email_sent = Column(DateTime, nullable=True)
     unsubscribe_token = Column(String(64), nullable=False, index=True)
+    # Timestamp of the last unsubscribe_token rotation. Gates how often the
+    # /preferences flow rotates (see _MIN_ROTATION_INTERVAL) so successive
+    # requests in the same session don't keep churning tokens.
+    unsubscribe_token_rotated_at = Column(DateTime, nullable=True)
     
     # Optional filters for personalized emails
     product_filter = Column(String(200), nullable=True)  # Comma-separated product names
@@ -95,6 +99,24 @@ class FeatureWatchModel(Base):
     release_item_id = Column(String(36), nullable=False, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     last_notified_hash = Column(String(64), nullable=True)
+
+
+class UnsubscribeTokenHistoryModel(Base):
+    """Recently-rotated unsubscribe tokens kept valid during their grace
+    window so older email-footer links keep working after rotation.
+
+    A row is appended on each rotate_unsubscribe_token() call and pruned once
+    expires_at has passed.
+    """
+    __tablename__ = "unsubscribe_token_history"
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    # No standalone index on subscription_id; the migration creates a
+    # composite (subscription_id, expires_at) index that covers the only
+    # query filtering by subscription_id (the prune in rotate).
+    subscription_id = Column(String(36), nullable=False)
+    token = Column(String(64), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
 class EmailVerificationModel(Base):
@@ -813,6 +835,105 @@ def generate_secure_token() -> str:
     return secrets.token_urlsafe(48)
 
 
+# Grace window: a rotated unsubscribe_token remains valid via the history
+# table for this many days after rotation so older email-footer links keep
+# working. Picked to comfortably cover weekly digest senders while still
+# bounding leaked-link exposure.
+_UNSUBSCRIBE_TOKEN_GRACE_DAYS = 7
+
+# Minimum interval between rotations of the same subscription's unsubscribe
+# token. Prevents redirect loops when the user makes back-to-back requests
+# (each visit to /preferences would otherwise rotate again) while still
+# bounding the leak window for any URL that escapes during a session.
+_MIN_ROTATION_INTERVAL = timedelta(hours=1)
+
+
+def _unsubscribe_token_select(token: str):
+    """Build a SELECT for EmailSubscriptionModel that matches either the
+    current unsubscribe_token or any non-expired token in the history table.
+
+    Returns a SQLAlchemy Select; callers wrap with session.scalar(...).
+    """
+    now = datetime.utcnow()
+    history_subq = (
+        select(UnsubscribeTokenHistoryModel.subscription_id)
+        .where(UnsubscribeTokenHistoryModel.token == token)
+        .where(UnsubscribeTokenHistoryModel.expires_at > now)
+    )
+    return select(EmailSubscriptionModel).where(
+        or_(
+            EmailSubscriptionModel.unsubscribe_token == token,
+            EmailSubscriptionModel.id.in_(history_subq),
+        )
+    )
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def rotate_unsubscribe_token(engine, current_token: str) -> Optional[str]:
+    """Rotate the unsubscribe_token for the subscription identified by current_token.
+
+    Generates a new current token, atomically swaps it in via a CAS-style
+    UPDATE, and appends the old token to unsubscribe_token_history with a
+    grace-window expiry. Returns the new token, or None if:
+      - no subscription has current_token as its current unsubscribe_token, or
+      - the subscription's token was rotated within _MIN_ROTATION_INTERVAL
+        (in which case the caller should keep using the existing token), or
+      - a concurrent rotation won the CAS (the caller should re-resolve).
+
+    Callers should not rotate when resolution went via the history table —
+    that's already a stale link being reused via the grace window.
+    """
+    SessionLocal = sessionmaker(bind=engine, future=True)
+    now = datetime.utcnow()
+    grace_expires = now + timedelta(days=_UNSUBSCRIBE_TOKEN_GRACE_DAYS)
+
+    with SessionLocal() as session:
+        with session.begin():
+            sub = session.scalar(
+                select(EmailSubscriptionModel)
+                .where(EmailSubscriptionModel.unsubscribe_token == current_token)
+            )
+            if not sub:
+                return None
+            if sub.unsubscribe_token_rotated_at and \
+               (now - sub.unsubscribe_token_rotated_at) < _MIN_ROTATION_INTERVAL:
+                # Recently rotated — caller can keep using current_token.
+                return None
+
+            new_token = generate_secure_token()
+            sub_id = sub.id
+
+            # Atomic compare-and-swap: only the request whose current_token
+            # is still on the row wins. Concurrent rotations lose the race.
+            result = session.execute(
+                update(EmailSubscriptionModel)
+                .where(EmailSubscriptionModel.id == sub_id)
+                .where(EmailSubscriptionModel.unsubscribe_token == current_token)
+                .values(
+                    unsubscribe_token=new_token,
+                    unsubscribe_token_rotated_at=now,
+                )
+            )
+            if result.rowcount == 0:
+                return None
+
+            session.add(UnsubscribeTokenHistoryModel(
+                subscription_id=sub_id,
+                token=current_token,
+                expires_at=grace_expires,
+            ))
+
+            # Opportunistic prune of this subscription's expired history rows
+            # so the table stays small. Bounded per-subscription work.
+            session.execute(
+                delete(UnsubscribeTokenHistoryModel)
+                .where(UnsubscribeTokenHistoryModel.subscription_id == sub_id)
+                .where(UnsubscribeTokenHistoryModel.expires_at <= now)
+            )
+
+        return new_token
+
+
 class EmailRateLimitExceeded(Exception):
     """Raised when an email address has requested too many verifications recently."""
     pass
@@ -1027,22 +1148,24 @@ def verify_email_subscription(engine, token: str) -> bool:
 def unsubscribe_email(engine, token: str) -> Optional[str]:
     """Unsubscribe an email using the unsubscribe token.
 
-    Returns the email address that was removed, or None if the token was invalid.
+    Accepts either the current unsubscribe_token or the previous one (within
+    the rotation grace window). Returns the email address that was removed,
+    or None if the token was invalid.
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
-    
+
     with SessionLocal() as session:
-        subscription = session.scalar(
-            select(EmailSubscriptionModel)
-            .where(EmailSubscriptionModel.unsubscribe_token == token)
-        )
-        
+        subscription = session.scalar(_unsubscribe_token_select(token))
+
         if not subscription:
             return None
-        
+
         email = subscription.email
-        stmt = delete(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
-        session.execute(stmt)
+        # Delete by primary key — the input token may be the previous_token,
+        # which would not match a delete keyed on unsubscribe_token.
+        session.execute(
+            delete(EmailSubscriptionModel).where(EmailSubscriptionModel.id == subscription.id)
+        )
         session.commit()
         return email
 
@@ -1255,12 +1378,14 @@ def update_watch_hashes(engine, hash_updates: List[Tuple[str, str]]):
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def get_subscription_by_unsubscribe_token(engine, token: str) -> Optional[EmailSubscriptionModel]:
-    """Look up a subscription by its unsubscribe_token."""
+    """Look up a subscription by its unsubscribe_token.
+
+    Accepts either the current unsubscribe_token or the previous one (within
+    the rotation grace window).
+    """
     SessionLocal = sessionmaker(bind=engine, future=True)
     with SessionLocal() as session:
-        sub = session.scalar(
-            select(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
-        )
+        sub = session.scalar(_unsubscribe_token_select(token))
         if sub:
             session.expunge(sub)
         return sub
@@ -1287,15 +1412,14 @@ def update_subscription_preferences(engine, token: str, preferences: Dict[str, A
     """Update subscription preferences identified by unsubscribe_token.
 
     Accepted keys in *preferences*: email_cadence, product_filter, release_type_filter, release_status_filter.
-    Returns True if subscription found and updated.
+    Accepts either the current unsubscribe_token or the previous one (within
+    the rotation grace window). Returns True if subscription found and updated.
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
     allowed_keys = {'email_cadence', 'product_filter', 'release_type_filter', 'release_status_filter'}
     with SessionLocal() as session:
         with session.begin():
-            sub = session.scalar(
-                select(EmailSubscriptionModel).where(EmailSubscriptionModel.unsubscribe_token == token)
-            )
+            sub = session.scalar(_unsubscribe_token_select(token))
             if not sub:
                 return False
             for key, value in preferences.items():
