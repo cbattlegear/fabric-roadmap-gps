@@ -727,8 +727,18 @@ def build_rss_xml(rows: List[ReleaseItemModel],
     return "\n".join(parts)
 
 
-def _make_cached_response(body: str, mimetype: str = "application/json; charset=utf-8") -> Response:
-    """Build a Response with ETag, Cache-Control, and Last-Modified headers for Front Door caching."""
+def _make_cached_response(
+    body: str,
+    mimetype: str = "application/json; charset=utf-8",
+    last_modified: "datetime | date | None" = None,
+) -> Response:
+    """Build a Response with ETag, Cache-Control, and Last-Modified headers for Front Door caching.
+
+    ``last_modified`` should be the actual most-recent modification time of the
+    underlying data (date or datetime). When omitted, falls back to "now",
+    which prevents `If-Modified-Since` short-circuits — pass a data-derived
+    value whenever available.
+    """
     etag = 'W/"' + hashlib.sha256(body.encode('utf-8')).hexdigest() + '"'
     inm = request.headers.get("If-None-Match")
     if inm and inm == etag:
@@ -736,8 +746,43 @@ def _make_cached_response(body: str, mimetype: str = "application/json; charset=
     resp = Response(body, mimetype=mimetype)
     resp.headers['ETag'] = etag
     resp.headers['Cache-Control'] = f'public, max-age={_FRONT_END_TTL}, stale-while-revalidate={_STALE_TTL}, must-revalidate'
-    resp.headers['Last-Modified'] = format_datetime(datetime.now(timezone.utc))
+
+    lm_dt: datetime
+    if isinstance(last_modified, datetime):
+        lm_dt = last_modified if last_modified.tzinfo else last_modified.replace(tzinfo=timezone.utc)
+    elif isinstance(last_modified, date):
+        lm_dt = datetime.combine(last_modified, time.min, tzinfo=timezone.utc)
+    else:
+        lm_dt = datetime.now(timezone.utc)
+    resp.headers['Last-Modified'] = format_datetime(lm_dt)
     return resp
+
+
+def _max_last_modified(items, attr: str = "last_modified"):
+    """Pick the maximum non-null last_modified value from a list of dicts or ORM rows.
+
+    Accepts ISO strings, date, or datetime values. Returns the most recent as a
+    UTC datetime, or None when nothing is set.
+    """
+    best: "datetime | None" = None
+    for it in items or ():
+        val = it.get(attr) if isinstance(it, dict) else getattr(it, attr, None)
+        if val is None:
+            continue
+        if isinstance(val, str):
+            try:
+                val = datetime.fromisoformat(val)
+            except ValueError:
+                continue
+        if isinstance(val, datetime):
+            dt_val = val if val.tzinfo else val.replace(tzinfo=timezone.utc)
+        elif isinstance(val, date):
+            dt_val = datetime.combine(val, time.min, tzinfo=timezone.utc)
+        else:
+            continue
+        if best is None or dt_val > best:
+            best = dt_val
+    return best
 
 
 @app.get("/rss")
@@ -760,7 +805,11 @@ def rss_feed():
         release_status=release_status,
     )
     xml = build_rss_xml(rows, link=EMAIL_BASE_URL, description=f"Up to {limit} most recently modified releases")
-    return _make_cached_response(xml, mimetype="application/rss+xml; charset=utf-8")
+    return _make_cached_response(
+        xml,
+        mimetype="application/rss+xml; charset=utf-8",
+        last_modified=_max_last_modified(rows),
+    )
 
 
 @app.get("/")
@@ -924,7 +973,7 @@ def api_releases():
                 return jsonify({"error": "release_item_id not found"}), 404
             data = _row_to_dict(row)
             json_item = json.dumps(data, sort_keys=True, separators=(",", ":"))
-            return _make_cached_response(json_item)
+            return _make_cached_response(json_item, last_modified=row.last_modified)
 
     # Generate embedding for vector search when q is provided
     query_embedding = None
@@ -1001,7 +1050,7 @@ def api_releases():
         "links": links,
     }
     json_str = json.dumps(envelope, sort_keys=True, separators=(",", ":"))
-    resp = _make_cached_response(json_str)
+    resp = _make_cached_response(json_str, last_modified=_max_last_modified(data_rows))
     if links.get("next") or links.get("prev"):
         link_header_parts = []
         if links.get("next"): link_header_parts.append(f"<{links['next']}>; rel=\"next\"")
@@ -1398,7 +1447,7 @@ def api_release_history(release_item_id: str):
     """
     rows = fetch_history_rows(get_engine(), release_item_id)
     json_str = json.dumps(rows, sort_keys=True, separators=(",", ":"))
-    return _make_cached_response(json_str)
+    return _make_cached_response(json_str, last_modified=_max_last_modified(rows))
 
 
 @app.get("/about")
@@ -1507,7 +1556,7 @@ def api_changelog():
 
     body = json.dumps({"days": days_list, "total_items": len(items)},
                        separators=(",", ":"), sort_keys=True)
-    return _make_cached_response(body)
+    return _make_cached_response(body, last_modified=_max_last_modified(items))
 
 
 @app.post("/webhooks/email-events")

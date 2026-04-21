@@ -447,19 +447,27 @@ def deactivate_missing_releases(engine, current_ids: set) -> Dict[str, int]:
 
             now = date.today()
 
-            # Find all currently-active rows whose IDs are not in the fetch
-            active_rows = session.scalars(
-                select(ReleaseItemModel)
+            # Find all currently-active rows whose IDs are not in the fetch.
+            # Server-side filter via NOT IN — only the rows that will actually
+            # change come back, instead of materializing every active row.
+            stale_ids = session.scalars(
+                select(ReleaseItemModel.release_item_id)
                 .where(ReleaseItemModel.active == True)  # noqa: E712
+                .where(ReleaseItemModel.release_item_id.notin_(current_ids) if current_ids else True)
             ).all()
 
-            for row in active_rows:
-                if row.release_item_id not in current_ids:
-                    row.active = False
-                    if not is_first_run:
-                        row.last_modified = now
-                    deactivated += 1
-                    deactivated_ids.append(str(row.release_item_id))
+            deactivated_ids = [str(rid) for rid in stale_ids]
+            deactivated = len(deactivated_ids)
+
+            if deactivated_ids:
+                update_values = {"active": False}
+                if not is_first_run:
+                    update_values["last_modified"] = now
+                session.execute(
+                    update(ReleaseItemModel)
+                    .where(ReleaseItemModel.release_item_id.in_(deactivated_ids))
+                    .values(**update_values)
+                )
 
             # Count rows that were already inactive (informational)
             already_inactive = session.scalar(
@@ -995,57 +1003,57 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
     SessionLocal = sessionmaker(bind=engine, future=True)
     
     with SessionLocal() as session:
-        # Check if subscription already exists
-        existing = session.scalar(
-            select(EmailSubscriptionModel).where(EmailSubscriptionModel.email == email)
-        )
-        
-        if existing and existing.is_verified:
-            # Already subscribed and verified
-            return existing.id, ""
-
-        _enforce_email_verification_quota(session, email)
-
-        verification_token = generate_secure_token()
-        unsubscribe_token = generate_secure_token()
-        
-        if existing:
-            # Update existing unverified subscription
-            existing.verification_token = verification_token
-            existing.unsubscribe_token = unsubscribe_token
-            existing.created_at = datetime.utcnow()
-            existing.is_active = True
-            existing.email_cadence = cadence
-            if filters:
-                existing.product_filter = filters.get('products', '')
-                existing.release_type_filter = filters.get('types', '')
-                existing.release_status_filter = filters.get('statuses', '')
-            subscription_id = existing.id
-        else:
-            # Create new subscription
-            subscription = EmailSubscriptionModel(
-                email=email,
-                verification_token=verification_token,
-                unsubscribe_token=unsubscribe_token,
-                email_cadence=cadence,
-                product_filter=filters.get('products', '') if filters else '',
-                release_type_filter=filters.get('types', '') if filters else '',
-                release_status_filter=filters.get('statuses', '') if filters else ''
+        with session.begin():
+            # Check if subscription already exists
+            existing = session.scalar(
+                select(EmailSubscriptionModel).where(EmailSubscriptionModel.email == email)
             )
-            session.add(subscription)
-            session.flush()
-            subscription_id = subscription.id
-        
-        # Create verification record
-        verification = EmailVerificationModel(
-            email=email,
-            token=verification_token,
-            action_type='subscribe',
-            expires_at=datetime.utcnow() + timedelta(hours=24),
-        )
-        session.add(verification)
-        session.commit()
-        
+
+            if existing and existing.is_verified:
+                # Already subscribed and verified
+                return existing.id, ""
+
+            _enforce_email_verification_quota(session, email)
+
+            verification_token = generate_secure_token()
+            unsubscribe_token = generate_secure_token()
+
+            if existing:
+                # Update existing unverified subscription
+                existing.verification_token = verification_token
+                existing.unsubscribe_token = unsubscribe_token
+                existing.created_at = datetime.utcnow()
+                existing.is_active = True
+                existing.email_cadence = cadence
+                if filters:
+                    existing.product_filter = filters.get('products', '')
+                    existing.release_type_filter = filters.get('types', '')
+                    existing.release_status_filter = filters.get('statuses', '')
+                subscription_id = existing.id
+            else:
+                # Create new subscription
+                subscription = EmailSubscriptionModel(
+                    email=email,
+                    verification_token=verification_token,
+                    unsubscribe_token=unsubscribe_token,
+                    email_cadence=cadence,
+                    product_filter=filters.get('products', '') if filters else '',
+                    release_type_filter=filters.get('types', '') if filters else '',
+                    release_status_filter=filters.get('statuses', '') if filters else ''
+                )
+                session.add(subscription)
+                session.flush()
+                subscription_id = subscription.id
+
+            # Create verification record
+            verification = EmailVerificationModel(
+                email=email,
+                token=verification_token,
+                action_type='subscribe',
+                expires_at=datetime.utcnow() + timedelta(hours=24),
+            )
+            session.add(verification)
+
         return subscription_id, verification_token
 
 
@@ -1065,40 +1073,40 @@ def create_watch_verification(engine, email: str, release_item_id: str) -> Tuple
     SessionLocal = sessionmaker(bind=engine, future=True)
 
     with SessionLocal() as session:
-        _enforce_email_verification_quota(session, email)
+        with session.begin():
+            _enforce_email_verification_quota(session, email)
 
-        existing = session.scalar(
-            select(EmailSubscriptionModel).where(EmailSubscriptionModel.email == email)
-        )
-
-        if existing and existing.is_verified:
-            subscription_id = existing.id
-        elif existing:
-            # Re-use existing unverified subscription
-            existing.created_at = datetime.utcnow()
-            existing.is_active = True
-            subscription_id = existing.id
-        else:
-            # Create a new subscription (will be verified when token is used)
-            sub = EmailSubscriptionModel(
-                email=email,
-                verification_token=generate_secure_token(),
-                unsubscribe_token=generate_secure_token(),
+            existing = session.scalar(
+                select(EmailSubscriptionModel).where(EmailSubscriptionModel.email == email)
             )
-            session.add(sub)
-            session.flush()
-            subscription_id = sub.id
 
-        verification_token = generate_secure_token()
-        verification = EmailVerificationModel(
-            email=email,
-            token=verification_token,
-            action_type='subscribe',
-            expires_at=datetime.utcnow() + timedelta(hours=24),
-            pending_watch_release_id=release_item_id,
-        )
-        session.add(verification)
-        session.commit()
+            if existing and existing.is_verified:
+                subscription_id = existing.id
+            elif existing:
+                # Re-use existing unverified subscription
+                existing.created_at = datetime.utcnow()
+                existing.is_active = True
+                subscription_id = existing.id
+            else:
+                # Create a new subscription (will be verified when token is used)
+                sub = EmailSubscriptionModel(
+                    email=email,
+                    verification_token=generate_secure_token(),
+                    unsubscribe_token=generate_secure_token(),
+                )
+                session.add(sub)
+                session.flush()
+                subscription_id = sub.id
+
+            verification_token = generate_secure_token()
+            verification = EmailVerificationModel(
+                email=email,
+                token=verification_token,
+                action_type='subscribe',
+                expires_at=datetime.utcnow() + timedelta(hours=24),
+                pending_watch_release_id=release_item_id,
+            )
+            session.add(verification)
 
     return subscription_id, verification_token
 
@@ -1112,41 +1120,43 @@ def verify_email_subscription(engine, token: str) -> bool:
     """
     SessionLocal = sessionmaker(bind=engine, future=True)
     
+    pending_release_id = None
+    subscription_id = None
+
     with SessionLocal() as session:
-        # Find verification record
-        verification = session.scalar(
-            select(EmailVerificationModel)
-            .where(EmailVerificationModel.token == token)
-            .where(EmailVerificationModel.action_type == 'subscribe')
-            .where(EmailVerificationModel.is_used == False)
-            .where(EmailVerificationModel.expires_at > datetime.utcnow())
-        )
-        
-        if not verification:
-            return False
-        
-        # Find and update subscription
-        subscription = session.scalar(
-            select(EmailSubscriptionModel)
-            .where(EmailSubscriptionModel.email == verification.email)
-        )
-        
-        if not subscription:
-            return False
-        
-        # Mark as verified
-        subscription.is_verified = True
-        subscription.verified_at = datetime.utcnow()
-        subscription.verification_token = None
-        
-        # Mark verification as used
-        verification.is_used = True
-        verification.used_at = datetime.utcnow()
-        
-        pending_release_id = verification.pending_watch_release_id
-        subscription_id = subscription.id
-        
-        session.commit()
+        with session.begin():
+            # Find verification record
+            verification = session.scalar(
+                select(EmailVerificationModel)
+                .where(EmailVerificationModel.token == token)
+                .where(EmailVerificationModel.action_type == 'subscribe')
+                .where(EmailVerificationModel.is_used == False)
+                .where(EmailVerificationModel.expires_at > datetime.utcnow())
+            )
+
+            if not verification:
+                return False
+
+            # Find and update subscription
+            subscription = session.scalar(
+                select(EmailSubscriptionModel)
+                .where(EmailSubscriptionModel.email == verification.email)
+            )
+
+            if not subscription:
+                return False
+
+            # Mark as verified
+            subscription.is_verified = True
+            subscription.verified_at = datetime.utcnow()
+            subscription.verification_token = None
+
+            # Mark verification as used
+            verification.is_used = True
+            verification.used_at = datetime.utcnow()
+
+            pending_release_id = verification.pending_watch_release_id
+            subscription_id = subscription.id
 
     # Add pending watch outside the verification transaction
     if pending_release_id:
@@ -1166,18 +1176,18 @@ def unsubscribe_email(engine, token: str) -> Optional[str]:
     SessionLocal = sessionmaker(bind=engine, future=True)
 
     with SessionLocal() as session:
-        subscription = session.scalar(_unsubscribe_token_select(token))
+        with session.begin():
+            subscription = session.scalar(_unsubscribe_token_select(token))
 
-        if not subscription:
-            return None
+            if not subscription:
+                return None
 
-        email = subscription.email
-        # Delete by primary key — the input token may be the previous_token,
-        # which would not match a delete keyed on unsubscribe_token.
-        session.execute(
-            delete(EmailSubscriptionModel).where(EmailSubscriptionModel.id == subscription.id)
-        )
-        session.commit()
+            email = subscription.email
+            # Delete by primary key — the input token may be the previous_token,
+            # which would not match a delete keyed on unsubscribe_token.
+            session.execute(
+                delete(EmailSubscriptionModel).where(EmailSubscriptionModel.id == subscription.id)
+            )
         return email
 
 
@@ -1381,10 +1391,12 @@ def update_watch_hashes(engine, hash_updates: List[Tuple[str, str]]):
     SessionLocal = sessionmaker(bind=engine, future=True)
     with SessionLocal() as session:
         with session.begin():
-            for watch_id, new_hash in hash_updates:
-                watch = session.get(FeatureWatchModel, watch_id)
-                if watch:
-                    watch.last_notified_hash = new_hash
+            # Bulk update — single roundtrip instead of one session.get() per id.
+            session.bulk_update_mappings(
+                FeatureWatchModel,
+                [{"id": watch_id, "last_notified_hash": new_hash}
+                 for watch_id, new_hash in hash_updates],
+            )
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
