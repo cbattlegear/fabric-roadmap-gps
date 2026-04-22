@@ -35,7 +35,6 @@ from db.db_sqlserver import (
     vector_search_releases, count_vector_search_releases,
     record_bounce,
     healthcheck as db_healthcheck,
-    VALID_SORT_OPTIONS,
     get_changelog_with_changes,
     get_subscription_by_unsubscribe_token, update_subscription_preferences,
     get_verified_subscription_by_email,
@@ -47,6 +46,13 @@ from db.db_sqlserver import (
     rotate_unsubscribe_token,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
+from lib.releases_api import (
+    ReleasesQuery,
+    _build_pagination_links,
+    _build_pagination_meta,
+    _format_release_row,
+    _parse_releases_query,
+)
 
 os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
@@ -914,143 +920,53 @@ def api_releases():
       page (1-based, default 1)
       page_size (default 50, max 200)
     """
-    release_item_id = request.args.get("release_item_id")
-    product_name = request.args.get("product_name")
-    release_type = request.args.get("release_type")
-    release_status = request.args.get("release_status")
-    modified_within_days = request.args.get("modified_within_days", type=int)
-    q = request.args.get("q")  # partial search
-    page = request.args.get("page", type=int) or 1
-    page_size = request.args.get("page_size", type=int) or 50
-    sort = request.args.get("sort")
-    include_inactive = request.args.get("include_inactive", "").lower() in ("1", "true", "yes")
-
-    if sort not in VALID_SORT_OPTIONS:
-        sort = "last_modified"
-
-    if page < 1:
-        page = 1
-    if page_size < 1:
-        page_size = 1
-    if page_size > 200:
-        page_size = 200
-
-    if modified_within_days is not None:
-        modified_within_days = max(1, min(modified_within_days, 30))
-
-    def _row_to_dict(r: ReleaseItemModel):
-        return {
-            "release_item_id": r.release_item_id,
-            "feature_name": r.feature_name,
-            "release_date": r.release_date.isoformat() if r.release_date else None,
-            "release_type": r.release_type,
-            "release_status": r.release_status,
-            "product_id": r.product_id,
-            "product_name": r.product_name,
-            "feature_description": r.feature_description,
-            "blog_title": r.blog_title,
-            "blog_url": r.blog_url,
-            "last_modified": r.last_modified.isoformat() if hasattr(r.last_modified, 'isoformat') and r.last_modified else None,
-            "active": r.active,
-        }
-
-    def _format_vector_row(row):
-        rd = row.get("release_date")
-        lm = row.get("last_modified")
-        return {
-            "release_item_id": row.get("release_item_id"),
-            "feature_name": row.get("feature_name"),
-            "release_date": rd.isoformat() if rd and hasattr(rd, 'isoformat') else None,
-            "release_type": row.get("release_type"),
-            "release_status": row.get("release_status"),
-            "product_id": row.get("product_id"),
-            "product_name": row.get("product_name"),
-            "feature_description": row.get("feature_description"),
-            "blog_title": row.get("blog_title"),
-            "blog_url": row.get("blog_url"),
-            "last_modified": lm.isoformat() if lm and hasattr(lm, 'isoformat') else None,
-            "active": row.get("active"),
-            "distance": round(row.get("distance"), 4) if row.get("distance") is not None else None,
-        }
+    query = _parse_releases_query(request.args)
 
     # Single item path
-    if release_item_id:
+    if query.release_item_id:
         engine = get_engine()
-        row = get_release_item_by_id(engine, release_item_id)
+        row = get_release_item_by_id(engine, query.release_item_id)
         if not row:
             return jsonify({"error": "release_item_id not found"}), 404
-        data = _row_to_dict(row)
+        data = _format_release_row(row)
         json_item = json.dumps(data, sort_keys=True, separators=(",", ":"))
         return _make_cached_response(json_item, last_modified=row.last_modified)
 
     # Generate embedding for vector search when q is provided
     query_embedding = None
-    if q and str(q).strip() and embeddings_available():
-        query_embedding = get_embedding(str(q).strip())
+    if query.q and query.q.strip() and embeddings_available():
+        query_embedding = get_embedding(query.q.strip())
 
-    offset = (page - 1) * page_size
-
-    # Build response data
+    engine = get_engine()
     if query_embedding is not None:
         total = count_vector_search_releases(
-            get_engine(), product_name=product_name, release_type=release_type,
-            release_status=release_status, modified_within_days=modified_within_days,
-            include_inactive=include_inactive
+            engine, product_name=query.product_name, release_type=query.release_type,
+            release_status=query.release_status, modified_within_days=query.modified_within_days,
+            include_inactive=query.include_inactive
         )
         vs_rows = vector_search_releases(
-            get_engine(), query_embedding, limit=page_size, offset=offset,
-            product_name=product_name, release_type=release_type,
-            release_status=release_status, modified_within_days=modified_within_days,
-            include_inactive=include_inactive
+            engine, query_embedding, limit=query.page_size, offset=query.offset,
+            product_name=query.product_name, release_type=query.release_type,
+            release_status=query.release_status, modified_within_days=query.modified_within_days,
+            include_inactive=query.include_inactive
         )
-        data_rows = [_format_vector_row(r) for r in vs_rows]
+        data_rows = [_format_release_row(r) for r in vs_rows]
     else:
         total = count_recently_modified_releases(
-            get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-            modified_within_days=modified_within_days, q=q, include_inactive=include_inactive
+            engine, product_name=query.product_name, release_type=query.release_type,
+            release_status=query.release_status, modified_within_days=query.modified_within_days,
+            q=query.q, include_inactive=query.include_inactive
         )
         rows = get_recently_modified_releases(
-            get_engine(), product_name=product_name, release_type=release_type, release_status=release_status,
-            modified_within_days=modified_within_days, q=q, limit=page_size, offset=offset, sort=sort,
-            include_inactive=include_inactive
+            engine, product_name=query.product_name, release_type=query.release_type,
+            release_status=query.release_status, modified_within_days=query.modified_within_days,
+            q=query.q, limit=query.page_size, offset=query.offset, sort=query.sort,
+            include_inactive=query.include_inactive
         )
-        data_rows = [_row_to_dict(r) for r in rows]
-    total_pages = (total + page_size - 1) // page_size if total else 1
-    pagination = {
-        "page": page,
-        "page_size": page_size,
-        "total_items": total,
-        "total_pages": total_pages,
-        "has_next": page < total_pages,
-        "has_prev": page > 1,
-        "next_page": page + 1 if page < total_pages else None,
-        "prev_page": page - 1 if page > 1 else None,
-    }
+        data_rows = [_format_release_row(r) for r in rows]
 
-    # Basic HATEOAS-style links (omit base filters if None)
-    from urllib.parse import urlencode
-    base_params = {
-        k: v for k, v in {
-            "product_name": product_name,
-            "release_type": release_type,
-            "release_status": release_status,
-            "modified_within_days": modified_within_days,
-            "q": q,
-            "page_size": page_size,
-            "sort": sort if sort != "last_modified" else None,
-        }.items() if v not in (None, "")
-    }
-    def _link(p):
-        bp = base_params.copy()
-        bp["page"] = p
-        return f"/api/releases?{urlencode(bp)}"
-    links = {
-        "self": _link(page),
-        "first": _link(1),
-        "last": _link(total_pages),
-        "next": _link(page + 1) if page < total_pages else None,
-        "prev": _link(page - 1) if page > 1 else None,
-    }
+    pagination = _build_pagination_meta(query, total)
+    links = _build_pagination_links(query, total)
 
     envelope = {
         "data": data_rows,
