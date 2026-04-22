@@ -12,6 +12,7 @@ import pyodbc
 from openai import AzureOpenAI
 import json
 
+from lib.batch_commit import BatchCommitter, get_batch_commit_size
 from lib.db_retry import retry_on_transient_errors, is_transient_sql_azure_error
 from lib.telemetry import init_telemetry
 
@@ -223,7 +224,6 @@ class ReleaseBlogMatcher:
             """
 
             self.cursor.execute(update_sql, (embedding.model_dump_json(), release_item_id))
-            self.commit()
             return True
 
         return self._run_with_reconnect(body)
@@ -283,7 +283,6 @@ class ReleaseBlogMatcher:
             """
 
             self.cursor.execute(update_sql, (blog_title, blog_url, distance, release_item_id))
-            self.commit()
             return True
 
         return self._run_with_reconnect(body)
@@ -295,71 +294,111 @@ class ReleaseBlogMatcher:
         try:
             # Get releases without vectors
             releases = self.get_releases_without_articles()
-            
+
             if not releases:
                 logger.info("No releases found that need vectorization")
                 return
-            
-            logger.info(f"Starting vectorization and matching of {len(releases)} releases")
-            
+
+            commit_size = get_batch_commit_size()
+            logger.info(
+                f"Starting vectorization and matching of {len(releases)} "
+                f"releases (commit every {commit_size})"
+            )
+
             success_count = 0
             failure_count = 0
             matched_count = 0
-            
-            for i, release in enumerate(releases, 1):
-                try:
-                    logger.info(f"Processing release {i}/{len(releases)}: {release['feature_name']}")
-                    if release['release_vector'] == '':
-                        # Create combined text
-                        text = self.create_text_for_embedding(release)
-                        
-                        if not text.strip():
-                            logger.warning(f"Skipping release {release['release_item_id']} - no content to vectorize")
-                            failure_count += 1
-                            continue
-                        
-                        # Generate embedding
-                        embedding = self.generate_embedding(text)
-                        
-                        if not embedding:
-                            logger.error(f"Failed to generate embedding for release {release['release_item_id']}")
-                            failure_count += 1
-                            continue
-                        
-                        # Update release vector in database
-                        if not self.update_release_vector(release['release_item_id'], embedding):
-                            logger.error(f"Failed to update vector for release {release['release_item_id']}")
-                            failure_count += 1
-                            continue
-                        
-                        success_count += 1
-                        logger.info(f"✓ Successfully vectorized release {release['release_item_id']}")
-                    else: 
-                        logger.info(f"✓ {release['release_item_id']} already vectorized!")
-                    
-                    # Find most related blog article
-                    blog_match = self.find_most_related_blog(release['release_item_id'])
-                    
-                    if blog_match:
-                        blog_title, blog_url, distance = blog_match
-                        if distance <= self.MAXIMUM_VECTOR_DISTANCE:
-                            logger.info(f"  → Found related blog: '{blog_title}' (distance: {distance:.4f})")
-                            
-                            # Update release with blog info
-                            if self.update_release_blog_info(release['release_item_id'], blog_title, blog_url, distance):
-                                matched_count += 1
-                                logger.info(f"  ✓ Updated release with blog info")
-                            else:
-                                logger.error(f"  ✗ Failed to update release with blog info")
+
+            self._ensure_connection()
+            with BatchCommitter(self.conn, batch_size=commit_size) as committer:
+                for i, release in enumerate(releases, 1):
+                    try:
+                        logger.info(f"Processing release {i}/{len(releases)}: {release['feature_name']}")
+
+                        item_dirty = False  # tracks whether we staged any UPDATE for this release
+
+                        if release['release_vector'] == '':
+                            # Create combined text
+                            text = self.create_text_for_embedding(release)
+
+                            if not text.strip():
+                                logger.warning(f"Skipping release {release['release_item_id']} - no content to vectorize")
+                                failure_count += 1
+                                continue
+
+                            # Generate embedding (API errors must NOT poison the SQL conn)
+                            embedding = self.generate_embedding(text)
+
+                            if not embedding:
+                                logger.error(f"Failed to generate embedding for release {release['release_item_id']}")
+                                failure_count += 1
+                                continue
+
+                            # Stage the UPDATE; commit is deferred to the BatchCommitter.
+                            try:
+                                self.update_release_vector(release['release_item_id'], embedding)
+                            except Exception as e:
+                                if committer.connection is not self.conn:
+                                    committer.replace_connection(self.conn)
+                                logger.error(f"Failed to update vector for release {release['release_item_id']}: {e}")
+                                failure_count += 1
+                                continue
+
+                            if committer.connection is not self.conn:
+                                committer.replace_connection(self.conn)
+
+                            item_dirty = True
+                            success_count += 1
+                            logger.info(f"✓ Successfully vectorized release {release['release_item_id']}")
                         else:
-                            logger.warning(f"  ⚠ Related article too disimilar")
-                    else:
-                        logger.warning(f"  ⚠ No related blog article found")
-                
-                except Exception as e:
-                    logger.error(f"Error processing release {release['release_item_id']}: {e}")
-                    failure_count += 1
-            
+                            logger.info(f"✓ {release['release_item_id']} already vectorized!")
+
+                        # Find most related blog article
+                        try:
+                            blog_match = self.find_most_related_blog(release['release_item_id'])
+                        except Exception as e:
+                            if committer.connection is not self.conn:
+                                committer.replace_connection(self.conn)
+                            logger.error(f"  ✗ Lookup failed for release {release['release_item_id']}: {e}")
+                            if item_dirty:
+                                committer.mark_success()
+                            failure_count += 1
+                            continue
+
+                        if committer.connection is not self.conn:
+                            committer.replace_connection(self.conn)
+
+                        if blog_match:
+                            blog_title, blog_url, distance = blog_match
+                            if distance <= self.MAXIMUM_VECTOR_DISTANCE:
+                                logger.info(f"  → Found related blog: '{blog_title}' (distance: {distance:.4f})")
+
+                                try:
+                                    self.update_release_blog_info(
+                                        release['release_item_id'], blog_title, blog_url, distance
+                                    )
+                                    item_dirty = True
+                                    matched_count += 1
+                                    logger.info(f"  ✓ Updated release with blog info")
+                                except Exception as e:
+                                    if committer.connection is not self.conn:
+                                        committer.replace_connection(self.conn)
+                                    logger.error(f"  ✗ Failed to update release with blog info: {e}")
+                            else:
+                                logger.warning(f"  ⚠ Related article too disimilar")
+                        else:
+                            logger.warning(f"  ⚠ No related blog article found")
+
+                        if committer.connection is not self.conn:
+                            committer.replace_connection(self.conn)
+
+                        if item_dirty:
+                            committer.mark_success()
+
+                    except Exception as e:
+                        logger.error(f"Error processing release {release['release_item_id']}: {e}")
+                        failure_count += 1
+
             # Final summary
             logger.info("=" * 60)
             logger.info(f"Vectorization and matching complete!")
@@ -368,7 +407,7 @@ class ReleaseBlogMatcher:
             logger.info(f"Failed: {failure_count}")
             logger.info(f"Total processed: {len(releases)}")
             logger.info("=" * 60)
-        
+
         except Exception as e:
             logger.error(f"Fatal error during vectorization and matching: {e}")
             raise
@@ -415,34 +454,59 @@ class ReleaseBlogMatcher:
                 logger.info("No matched releases to rerank")
                 return
 
-            logger.info(f"Reranking blog matches for {len(releases)} releases")
+            commit_size = get_batch_commit_size()
+            logger.info(
+                f"Reranking blog matches for {len(releases)} releases "
+                f"(commit every {commit_size})"
+            )
             improved_count = 0
 
-            for i, release in enumerate(releases, 1):
-                try:
-                    blog_match = self.find_most_related_blog(release['release_item_id'])
-                    if not blog_match:
-                        continue
+            self._ensure_connection()
+            with BatchCommitter(self.conn, batch_size=commit_size) as committer:
+                for i, release in enumerate(releases, 1):
+                    try:
+                        try:
+                            blog_match = self.find_most_related_blog(release['release_item_id'])
+                        except Exception:
+                            if committer.connection is not self.conn:
+                                committer.replace_connection(self.conn)
+                            raise
 
-                    new_title, new_url, new_distance = blog_match
-                    if new_distance > self.MAXIMUM_VECTOR_DISTANCE:
-                        continue
+                        if committer.connection is not self.conn:
+                            committer.replace_connection(self.conn)
 
-                    old_distance = release.get('vector_distance')
-                    # Update if the new match is closer or the matched blog changed
-                    if old_distance is None or new_distance < old_distance:
-                        logger.info(
-                            f"  ↑ [{i}/{len(releases)}] {release['feature_name']}: "
-                            f"distance {old_distance} → {new_distance:.4f} "
-                            f"('{new_title}')"
-                        )
-                        self.update_release_blog_info(
-                            release['release_item_id'], new_title, new_url, new_distance
-                        )
-                        improved_count += 1
+                        if not blog_match:
+                            continue
 
-                except Exception as e:
-                    logger.error(f"Error reranking release {release['release_item_id']}: {e}")
+                        new_title, new_url, new_distance = blog_match
+                        if new_distance > self.MAXIMUM_VECTOR_DISTANCE:
+                            continue
+
+                        old_distance = release.get('vector_distance')
+                        # Update if the new match is closer or the matched blog changed
+                        if old_distance is None or new_distance < old_distance:
+                            logger.info(
+                                f"  ↑ [{i}/{len(releases)}] {release['feature_name']}: "
+                                f"distance {old_distance} → {new_distance:.4f} "
+                                f"('{new_title}')"
+                            )
+                            try:
+                                self.update_release_blog_info(
+                                    release['release_item_id'], new_title, new_url, new_distance
+                                )
+                            except Exception:
+                                if committer.connection is not self.conn:
+                                    committer.replace_connection(self.conn)
+                                raise
+
+                            if committer.connection is not self.conn:
+                                committer.replace_connection(self.conn)
+
+                            committer.mark_success()
+                            improved_count += 1
+
+                    except Exception as e:
+                        logger.error(f"Error reranking release {release['release_item_id']}: {e}")
 
             logger.info("=" * 60)
             logger.info(f"Reranking complete! {improved_count} matches improved out of {len(releases)} checked")
