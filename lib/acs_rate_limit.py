@@ -1,22 +1,25 @@
-"""Sliding-window rate limiter for outbound API calls.
+"""ACS-flavoured adapter over :mod:`lib.rate_limit`.
 
-Originally extracted from ``weekly_email_job.py`` where it was tangled into
-the digest-send loop. The implementation is intentionally generic — it
-knows nothing about Azure Communication Services beyond an
-``acs_default_config()`` factory that captures the current production
-quota. Issue #77 (M15) is expected to reuse this for the scraper, at
-which point this module can be promoted to ``lib/rate_limit.py`` without
-behaviour changes.
+This module used to carry its own sliding-window implementation
+(extracted from ``weekly_email_job.py`` in PR #80). PR #81 introduced
+the generic :class:`lib.rate_limit.SlidingWindowLimiter`, which already
+supports the two constraints we need:
 
-Two independent constraints are enforced:
+* ``min_interval_seconds`` — minimum gap between consecutive sends.
+* ``max_calls`` per ``window_seconds`` — rolling-window quota.
 
-* A minimum interval between sends (per-second / per-minute throttling).
-* A maximum number of sends per rolling window (e.g. 800 / hour).
+So this module is now just a thin shim that:
 
-The limiter is *blocking*: callers invoke :meth:`wait_for_capacity`
-before each send and :meth:`record_send` after a successful send. The
-``sleep`` and ``monotonic`` callables are injectable so tests can drive
-the clock deterministically without ``time.sleep`` actually pausing.
+1. Captures the production ACS quota in :func:`acs_default_config` and
+   :class:`RateLimitConfig` (kept as a frozen dataclass for stability /
+   readability at call sites).
+2. Wraps a :class:`SlidingWindowLimiter` behind the original
+   ``wait_for_capacity()`` / ``record_send()`` / ``window_sent`` API
+   that ``weekly_email_job.py`` was written against.
+
+The generic limiter's sliding-window semantics are a strict superset
+of the previous fixed-window behaviour (it is at least as conservative
+at every point in time), so existing ACS quota guarantees are preserved.
 """
 
 from __future__ import annotations
@@ -25,6 +28,8 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Callable, Optional
+
+from lib.rate_limit import SlidingWindowLimiter
 
 
 @dataclass(frozen=True)
@@ -62,12 +67,12 @@ def acs_default_config() -> RateLimitConfig:
 
 
 class SlidingWindowRateLimiter:
-    """Blocking sliding-window rate limiter.
+    """Blocking sliding-window rate limiter for ACS sends.
 
-    The window is *not* a true sliding window in the strict sense: it is
-    a fixed-length window that resets to zero once ``window_seconds`` has
-    elapsed since the window started. This matches the original
-    ``weekly_email_job.py`` semantics exactly.
+    Thin wrapper over :class:`lib.rate_limit.SlidingWindowLimiter` that
+    preserves the original ``wait_for_capacity`` / ``record_send`` API
+    used by ``weekly_email_job.py`` and adds the ``window_sent`` /
+    ``config`` introspection properties the existing tests rely on.
     """
 
     def __init__(
@@ -79,13 +84,14 @@ class SlidingWindowRateLimiter:
         logger: Optional[logging.Logger] = None,
     ) -> None:
         self._config = config
-        self._sleep = sleep
-        self._monotonic = monotonic
-        self._logger = logger or logging.getLogger(__name__)
-
-        self._last_send_time: float = 0.0
-        self._window_sent: int = 0
-        self._window_start: float = monotonic()
+        self._limiter = SlidingWindowLimiter(
+            max_calls=config.max_per_window,
+            window_seconds=config.window_seconds,
+            min_interval_seconds=config.min_interval_seconds,
+            sleep=sleep,
+            monotonic=monotonic,
+            logger=logger,
+        )
 
     @property
     def config(self) -> RateLimitConfig:
@@ -93,35 +99,12 @@ class SlidingWindowRateLimiter:
 
     @property
     def window_sent(self) -> int:
-        return self._window_sent
+        """Number of sends currently counted inside the rolling window."""
+        return self._limiter.current_load()
 
     def wait_for_capacity(self) -> None:
-        """Block until the next send would respect both quotas.
-
-        Order matters: the per-window check runs first (and may sleep
-        for a long time, possibly minutes), then the per-send minimum
-        interval is enforced.
-        """
-        now = self._monotonic()
-        elapsed_in_window = now - self._window_start
-        if elapsed_in_window >= self._config.window_seconds:
-            self._window_sent = 0
-            self._window_start = now
-        elif self._window_sent >= self._config.max_per_window:
-            wait_time = self._config.window_seconds - elapsed_in_window
-            self._logger.info(
-                "Hourly quota reached (%d), pausing %.0fs",
-                self._config.max_per_window,
-                wait_time,
-            )
-            if wait_time > 0:
-                self._sleep(wait_time)
-            self._window_sent = 0
-            self._window_start = self._monotonic()
-
-        elapsed = self._monotonic() - self._last_send_time
-        if elapsed < self._config.min_interval_seconds:
-            self._sleep(self._config.min_interval_seconds - elapsed)
+        """Block until the next send would respect both quotas."""
+        self._limiter.wait_for_capacity()
 
     def record_send(self) -> None:
         """Record that a send completed successfully.
@@ -130,5 +113,4 @@ class SlidingWindowRateLimiter:
         leave the counters untouched so a flapping ACS endpoint doesn't
         falsely consume budget.
         """
-        self._window_sent += 1
-        self._last_send_time = self._monotonic()
+        self._limiter.record()
