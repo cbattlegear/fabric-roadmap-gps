@@ -4,12 +4,32 @@ Small Flask server that exposes an RSS 2.0 feed and basic REST API for the Fabri
 
 ## Tests
 
-Unit tests live in `tests/` and are run with pytest. They cover pure-Python helpers (no live SQL Server or network needed) — currently the Azure SQL retry decorator, the daily/weekly email-cadence filter, and the `ReleaseItem` parsing helpers.
+Unit tests live in `tests/` and run with pytest. They cover pure-Python helpers (no live SQL Server or network needed) — currently the Azure SQL retry decorator, the daily/weekly email-cadence filter, and the `ReleaseItem` parsing helpers.
+
+CI runs `pytest` on every push to `main` and every PR (see `.github/workflows/tests.yml`).
+
+### Run locally — virtualenv
 
 ```bash
-pip install -r requirements-dev.txt
+python -m venv .venv
+source .venv/bin/activate            # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements-dev.txt
 pytest
 ```
+
+### Run locally — Docker
+
+If you do your manual testing by spinning up the Docker image, you can run the test suite inside the same container without rebuilding. Mount the working tree, install the dev deps on top of the image's existing site-packages, and invoke pytest:
+
+```bash
+docker build -t fabric-gps .
+docker run --rm -v "${PWD}:/app" fabric-gps \
+  bash -c "pip install -r requirements-dev.txt && pytest"
+```
+
+(On PowerShell, use `-v "${PWD}:/app"` as written; on `cmd.exe`, use `-v "%cd%:/app"`.)
+
+The tests don't need `SQLSERVER_CONN` or any other env var — they run entirely in-memory.
 
 ## Email Subscriptions
 
