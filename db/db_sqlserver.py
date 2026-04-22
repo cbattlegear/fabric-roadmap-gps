@@ -1314,6 +1314,112 @@ def get_release_item_by_id(engine, release_item_id: str) -> Optional[ReleaseItem
 
 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_latest_release_version(engine) -> str:
+    """Return the ``release_item_id`` of the most-recently-modified release.
+
+    Used as a cache-buster value by ``/api/version``. ``last_modified`` is a
+    Date column so many rows share the same latest day; we add
+    ``release_item_id desc`` as a stable secondary sort so the returned
+    value doesn't flap between equally-recent rows. Returns ``""`` when no
+    releases exist.
+    """
+    with session_scope(engine) as session:
+        row = session.execute(
+            select(ReleaseItemModel.release_item_id)
+            .order_by(
+                ReleaseItemModel.last_modified.desc(),
+                ReleaseItemModel.release_item_id.desc(),
+            )
+            .limit(1)
+        ).first()
+        return row[0] if row else ""
+
+
+@dataclass(frozen=True)
+class SitemapRelease:
+    """Lightweight detached row used by the XML sitemap renderer."""
+
+    release_item_id: str
+    last_modified: Optional[date]
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_active_releases_for_sitemap(engine) -> List[SitemapRelease]:
+    """Return id + last_modified for every active release.
+
+    The sitemap route needs only these two columns and must be safe to use
+    after the session closes — returning frozen dataclass instances avoids
+    detached-ORM-row pitfalls.
+    """
+    with session_scope(engine) as session:
+        rows = session.execute(
+            select(
+                ReleaseItemModel.release_item_id,
+                ReleaseItemModel.last_modified,
+            ).where(ReleaseItemModel.active == True)  # noqa: E712 (SQLAlchemy boolean comparison)
+        ).all()
+        return [
+            SitemapRelease(release_item_id=r[0], last_modified=r[1])
+            for r in rows
+        ]
+
+
+@dataclass(frozen=True)
+class VerifyEmailContext:
+    """Display-only context for the verify-email GET page."""
+
+    cadence: str
+    watch_feature_name: Optional[str]
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+def get_verify_email_context(engine, token: str) -> Optional[VerifyEmailContext]:
+    """Return display context for the verify-email GET page, or ``None``.
+
+    The lookup is intentionally permissive: we filter only by *token* and
+    return context whenever the verification row exists. This preserves the
+    existing GET-page behavior — even a stale or already-used token still
+    renders cadence and the watched-feature label so the user sees
+    consistent context if they bounce back to the page.
+
+    - ``cadence`` defaults to ``'weekly'`` if no subscription exists yet
+      (e.g. brand-new signup verifying for the first time).
+    - ``watch_feature_name`` is populated only when the verification has a
+      ``pending_watch_release_id`` and that release still exists.
+    """
+    with session_scope(engine) as session:
+        verification = session.scalar(
+            select(EmailVerificationModel).where(
+                EmailVerificationModel.token == token
+            )
+        )
+        if verification is None:
+            return None
+
+        cadence = 'weekly'
+        watch_feature_name = None
+
+        sub = session.scalar(
+            select(EmailSubscriptionModel).where(
+                EmailSubscriptionModel.email == verification.email
+            )
+        )
+        if sub:
+            cadence = sub.email_cadence or 'weekly'
+
+        if verification.pending_watch_release_id:
+            release = session.get(
+                ReleaseItemModel, verification.pending_watch_release_id
+            )
+            if release:
+                watch_feature_name = release.feature_name
+
+        return VerifyEmailContext(
+            cadence=cadence, watch_feature_name=watch_feature_name
+        )
+
+
+@retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def add_feature_watch(engine, subscription_id: str, release_item_id: str) -> bool:
     """Add a feature watch. Returns True if created, False if already exists."""
     with session_scope(engine) as session:
