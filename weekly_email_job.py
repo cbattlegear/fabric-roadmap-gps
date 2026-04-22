@@ -113,6 +113,52 @@ class WeeklyEmailSender:
         raw = '|'.join(parts)
         return hashlib.sha256(raw.encode()).hexdigest()
 
+    @staticmethod
+    def _filter_by_cadence(
+        items: List[Dict[str, Any]],
+        cadence: Optional[str],
+        now: Optional[datetime] = None,
+    ) -> List[Dict[str, Any]]:
+        """Filter raw changes to only those within the cadence window.
+
+        - ``cadence == 'daily'``: keep items whose ``last_modified`` is on or
+          after ``(now - 1 day).date()``. ``/api/releases`` exposes
+          ``last_modified`` as a date-only string (``YYYY-MM-DD``), so the
+          comparison is a date-based one rather than a full timestamp.
+        - Anything else (notably ``'weekly'`` or ``None``): pass through
+          unchanged. The 7-day window is already applied upstream by the
+          ``/api/releases`` query in ``_fetch_all_changes_unfiltered``.
+
+        Items with missing or malformed ``last_modified`` are dropped from
+        the daily path (and a warning is logged for the malformed case) so
+        a single bad row can't crash the whole digest run. Both ``ValueError``
+        (bad date format) and ``TypeError`` (non-string value, e.g. an int
+        slipping through a future schema change) are handled — slightly
+        wider than the original inline ``except ValueError`` for resilience.
+
+        ``now`` is injectable for deterministic tests; defaults to
+        ``datetime.utcnow()``.
+        """
+        if cadence != 'daily':
+            return list(items)
+
+        reference = now if now is not None else datetime.utcnow()
+        cutoff_date = (reference - timedelta(days=1)).date()
+
+        filtered: List[Dict[str, Any]] = []
+        for c in items:
+            last_modified = c.get('last_modified')
+            if not last_modified:
+                continue
+            try:
+                last_modified_date = datetime.strptime(last_modified, '%Y-%m-%d').date()
+            except (ValueError, TypeError):
+                logger.warning("Skipping item with invalid last_modified value: %s", last_modified)
+                continue
+            if last_modified_date >= cutoff_date:
+                filtered.append(c)
+        return filtered
+
     def _get_subscriber_content(self, subscription: EmailSubscriptionModel):
         """Return (changes, ai_summary) for a subscriber, using per-date per-filter DB cache.
 
@@ -149,23 +195,7 @@ class WeeklyEmailSender:
         # Cache miss: filter from raw data
         items = list(self._fetch_raw_changes())
 
-        if subscription.email_cadence == 'daily':
-            # `/api/releases` exposes `last_modified` as a date-only string (`YYYY-MM-DD`),
-            # so daily filtering must use a date-based cutoff rather than a timestamp.
-            cutoff_date = (datetime.utcnow() - timedelta(days=1)).date()
-            filtered_items = []
-            for c in items:
-                last_modified = c.get('last_modified')
-                if not last_modified:
-                    continue
-                try:
-                    last_modified_date = datetime.strptime(last_modified, '%Y-%m-%d').date()
-                except ValueError:
-                    logger.warning("Skipping item with invalid last_modified value: %s", last_modified)
-                    continue
-                if last_modified_date >= cutoff_date:
-                    filtered_items.append(c)
-            items = filtered_items
+        items = self._filter_by_cadence(items, subscription.email_cadence)
 
         if subscription.product_filter:
             products = {p.strip().lower() for p in subscription.product_filter.split(',') if p.strip()}

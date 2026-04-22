@@ -2,6 +2,15 @@
 
 Small Flask server that exposes an RSS 2.0 feed and basic REST API for the Fabric Roadmap
 
+## Tests
+
+Unit tests live in `tests/` and are run with pytest. They cover pure-Python helpers (no live SQL Server or network needed) — currently the Azure SQL retry decorator, the daily/weekly email-cadence filter, and the `ReleaseItem` parsing helpers.
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
 ## Email Subscriptions
 
 Subscribers can receive digest emails with customizable options:
