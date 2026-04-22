@@ -14,9 +14,9 @@ The ``sleep`` and ``monotonic`` callables are injectable so tests can
 drive the clock deterministically without ``time.sleep`` actually pausing.
 
 This is the generic primitive intended for reuse across the codebase.
-``lib/acs_rate_limit.py`` (introduced in PR #80) carries the same
-shape with ACS-specific defaults; once both PRs land it can be reduced
-to a thin adapter on top of this module.
+``lib/acs_rate_limit.py`` is a thin adapter on top of this module that
+carries ACS-specific defaults and the legacy
+``wait_for_capacity`` / ``record_send`` API used by the email job.
 """
 
 from __future__ import annotations

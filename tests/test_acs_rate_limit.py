@@ -98,11 +98,13 @@ class TestWindowQuota:
             lim.wait_for_capacity()
             lim.record_send()
             clock.advance(1.0)
-        # Window: started at 1000, three sends, last at 1002, now 1003.
-        # Next call: window_sent (3) >= max_per_window (3) -> sleep until 1010.
+        # Window: three sends at t=1000, 1001, 1002, now t=1003.
+        # Next call: window full -> sleep until oldest (t=1000) ages out
+        # at t=1010, i.e. 7s. After the sleep only the t=1000 call has
+        # expired; t=1001 and t=1002 are still inside the rolling window.
         clock.sleeps.clear()
         lim.wait_for_capacity()
-        assert lim.window_sent == 0
+        assert lim.window_sent == 2
         assert clock.sleeps == [pytest.approx(7.0)]
 
     def test_window_resets_naturally_when_window_seconds_elapse(self, fast_config, clock):
