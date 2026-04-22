@@ -19,14 +19,12 @@ should stay small enough to read top-to-bottom in a single pass.
 
 from __future__ import annotations
 
-import logging
 import os
 import sys
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
 from azure.communication.email import EmailClient
-from azure.monitor.opentelemetry import configure_azure_monitor
 
 # Add the project root to Python path so this script runs both as a
 # module and as ``python weekly_email_job.py``.
@@ -45,22 +43,12 @@ from db.db_sqlserver import (
 from lib.acs_rate_limit import SlidingWindowRateLimiter, acs_default_config
 from lib import email_template
 from lib.email_digest import DigestContentBuilder, filter_by_cadence
+from lib.telemetry import init_telemetry
 
-os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-email-job'
-
-logger_name = 'fabric-gps-email'
-opentelemetery_logger_name = f'{logger_name}.opentelemetry'
-
-if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING") and os.getenv("CURRENT_ENVIRONMENT") != "development":
-    configure_azure_monitor(
-        logger_name=opentelemetery_logger_name,
-        enable_live_metrics=True,
-    )
-
-logger = logging.getLogger(opentelemetery_logger_name)
-stream = logging.StreamHandler()
-logger.addHandler(stream)
-logger.setLevel(logging.INFO)
+logger = init_telemetry(
+    "fabric-gps-email-job",
+    logger_name="fabric-gps-email.opentelemetry",
+)
 logger.info('Fabric-GPS Email Batch Job started')
 
 

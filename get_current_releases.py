@@ -2,7 +2,6 @@ import requests
 import re
 import unicodedata
 import json
-import logging
 import os
 
 from unidecode import unidecode
@@ -10,26 +9,9 @@ from unidecode import unidecode
 from lib.release_item import ReleaseItem
 from db.db_sqlserver import make_engine, init_db, save_releases, deactivate_missing_releases
 from lib.indexnow import submit_urls
-# Import the `configure_azure_monitor()` function from the
-# `azure.monitor.opentelemetry` package.
-from azure.monitor.opentelemetry import configure_azure_monitor
+from lib.telemetry import init_telemetry
 
-os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-refresh'
-
-logger_name = 'fabric-gps-refresh'
-
-opentelemetery_logger_name = f'{logger_name}.opentelemetry'
-
-if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING") and os.getenv("CURRENT_ENVIRONMENT") != "development":
-    configure_azure_monitor(
-        logger_name=opentelemetery_logger_name,
-        enable_live_metrics=True 
-    )
-
-otelLogger= logging.getLogger(opentelemetery_logger_name)
-stream = logging.StreamHandler()
-otelLogger.addHandler(stream)
-otelLogger.setLevel(logging.INFO)
+otelLogger = init_telemetry("fabric-gps-refresh")
 otelLogger.info('Fabric-GPS Database Refresh started')
 
 def extract_product_families(js_text):
