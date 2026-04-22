@@ -6,10 +6,12 @@ Importing ``server`` requires ``CURRENT_ENVIRONMENT=development`` (which
 
 from datetime import date
 from types import SimpleNamespace
+from unittest.mock import patch
 import xml.etree.ElementTree as ET
 
 import pytest
 
+import server as server_module
 from server import _render_sitemap_xml, _STATIC_SITEMAP_PAGES
 
 
@@ -89,3 +91,49 @@ class TestRenderSitemapXml:
             assert url.find("sm:loc", ns) is not None
             assert url.find("sm:changefreq", ns) is not None
             assert url.find("sm:priority", ns) is not None
+
+
+# ---------------------------------------------------------------------------
+# Route-level tests for /sitemap.xml — M11 (escape) + M12 (Cache-Control TTL)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def client():
+    server_module.app.config.update(TESTING=True)
+    with server_module.app.test_client() as c:
+        yield c
+
+
+def test_sitemap_route_sets_one_hour_cache_control(client):
+    """M12: /sitemap.xml advertises a 1-hour TTL so Front Door + bots cache."""
+    rows = [SimpleNamespace(release_item_id="guid-1", last_modified=date(2026, 4, 22))]
+    with patch.object(server_module, "get_engine", return_value=object()), \
+         patch.object(server_module, "get_active_releases_for_sitemap", return_value=rows):
+        resp = client.get("/sitemap.xml")
+
+    assert resp.status_code == 200
+    cache_control = resp.headers.get("Cache-Control", "")
+    assert "public" in cache_control
+    assert "max-age=3600" in cache_control
+
+
+def test_sitemap_route_escapes_release_item_id(client):
+    """M11: defense-in-depth — XML-special chars in IDs round-trip safely."""
+    evil_id = 'a&b<c>d"e'
+    rows = [SimpleNamespace(release_item_id=evil_id, last_modified=date(2026, 4, 22))]
+    with patch.object(server_module, "get_engine", return_value=object()), \
+         patch.object(server_module, "get_active_releases_for_sitemap", return_value=rows):
+        resp = client.get("/sitemap.xml")
+
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+
+    # Body must parse as XML and contain the evil ID after parsing.
+    root = ET.fromstring(body)
+    ns = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
+    locs = [el.text for el in root.findall(".//sm:loc", ns)]
+    assert any(loc and loc.endswith(f"/release/{evil_id}") for loc in locs)
+
+    # Raw bytes must be escaped — no unescaped <c> or & sequence.
+    assert "<c>" not in body
