@@ -12,7 +12,6 @@ from html import escape
 from email.utils import format_datetime
 import hashlib
 
-import logging
 # Import the `configure_azure_monitor()` function from the
 # `azure.monitor.opentelemetry` package.
 from azure.monitor.opentelemetry import configure_azure_monitor
@@ -801,6 +800,34 @@ def _max_last_modified(items, attr: str = "last_modified"):
     return best
 
 
+def _clamp_int(value: int, lo: int, hi: int) -> int:
+    """Clamp ``value`` into the inclusive range ``[lo, hi]``."""
+    return max(lo, min(value, hi))
+
+
+_TRUTHY_STRINGS = ("1", "true", "yes", "on")
+_FALSY_STRINGS = ("0", "false", "no", "off")
+
+
+def _parse_bool(value, default: bool = False) -> bool:
+    """Parse a query-string / form value into a bool.
+
+    Accepts the common truthy strings ("1", "true", "yes", "on") and falsy
+    strings ("0", "false", "no", "off"), case-insensitive. Returns ``default``
+    for ``None`` or anything unrecognized.
+    """
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    s = str(value).strip().lower()
+    if s in _TRUTHY_STRINGS:
+        return True
+    if s in _FALSY_STRINGS:
+        return False
+    return default
+
+
 @app.get("/rss")
 @app.get("/rss.xml")
 def rss_feed():
@@ -811,7 +838,7 @@ def rss_feed():
         limit = int(request.args.get("limit", "25"))
     except ValueError:
         limit = 25
-    limit = max(1, min(limit, 25))
+    limit = _clamp_int(limit, 1, 25)
 
     rows = get_recently_modified_releases(
         get_engine(),
@@ -1433,8 +1460,11 @@ def api_changelog():
       product_name, release_type, release_status: filter by field
     """
     days = request.args.get("days", type=int) or 30
-    days = max(1, min(days, 90))
-    include_inactive = request.args.get("include_inactive", "true").lower() in ("1", "true", "yes")
+    days = _clamp_int(days, 1, 90)
+    # Preserve historical behavior: missing param defaults to True, but any
+    # unrecognized non-empty value (e.g. "maybe") falls through to False.
+    _inc_raw = request.args.get("include_inactive")
+    include_inactive = True if _inc_raw is None else _parse_bool(_inc_raw, default=False)
     product_name = request.args.get("product_name") or None
     release_type = request.args.get("release_type") or None
     release_status = request.args.get("release_status") or None
@@ -1643,7 +1673,6 @@ def inject_no_analytics():
 
 @app.context_processor
 def inject_nav():
-    from datetime import datetime
     nav_items = [
         {"label": "Home", "url": "/"},
         {"label": "Changelog", "url": "/changelog"},

@@ -230,6 +230,18 @@ def _get(obj: Any, *keys):
     return None
 
 
+def _rows_to_dicts(cursor) -> List[Dict[str, Any]]:
+    """Convert a pyodbc cursor's remaining rows into a list of dicts.
+
+    Reads ``cursor.description`` for column names and consumes
+    ``cursor.fetchall()``. Returns an empty list when there is no result set.
+    """
+    if cursor.description is None:
+        return []
+    columns = [col[0] for col in cursor.description]
+    return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
 def _to_date(v):
     if not v:
         return None
@@ -1642,11 +1654,9 @@ def fetch_history_rows(engine, release_item_id: str):
         cursor = conn.cursor()
         # Execute stored procedure. Adjust call pattern if needed.
         cursor.execute("EXEC [dbo].[GetReleaseItemHistoryById] @ReleaseItemId = ?", (release_item_id,))
-        columns = [col[0] for col in cursor.description]
         # Expect: VersionNum, release_item_id, ChangedColumns, last_modified
         out = []
-        for row in cursor.fetchall():
-            row_dict = dict(zip(columns, row))
+        for row_dict in _rows_to_dicts(cursor):
             changed_raw = row_dict.get("ChangedColumns") or ""
             # Convert comma separated to list (ignore empty) preserving order
             changed_list = [c.strip() for c in changed_raw.split(',') if c and c.strip()]
@@ -1748,8 +1758,7 @@ def vector_search_releases(
     try:
         cursor = conn.cursor()
         cursor.execute(sql, all_params)
-        columns = [col[0] for col in cursor.description]
-        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+        return _rows_to_dicts(cursor)
     finally:
         try:
             cursor.close()
