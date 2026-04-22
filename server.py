@@ -1562,10 +1562,11 @@ def _render_sitemap_xml(base_url: str, release_rows) -> str:
     """Render the sitemap XML body for the static pages plus per-release URLs.
 
     ``release_rows`` is any iterable of objects with ``release_item_id`` and
-    ``last_modified`` attributes (e.g. SQLAlchemy rows or test stubs). All
-    interpolated values are XML-escaped — today ``release_item_id`` is a
-    Fabric API GUID with no XML-special characters, so this is
-    defense-in-depth, not a bug fix.
+    ``last_modified`` attributes (e.g. SQLAlchemy rows or test stubs). Each
+    interpolated component (``base_url``, ``release_item_id``, ``lastmod``)
+    is XML-escaped individually — today ``release_item_id`` is a Fabric API
+    GUID with no XML-special characters, so this is defense-in-depth, not a
+    bug fix.
     """
     parts = []
     for p in _STATIC_SITEMAP_PAGES:
@@ -1582,7 +1583,7 @@ def _render_sitemap_xml(base_url: str, release_rows) -> str:
             lastmod = f"\n    <lastmod>{escape(r.last_modified.strftime('%Y-%m-%d'))}</lastmod>"
         parts.append(
             "  <url>\n"
-            f"    <loc>{escape(f'{base_url}/release/{r.release_item_id}')}</loc>{lastmod}\n"
+            f"    <loc>{escape(base_url)}/release/{escape(r.release_item_id)}</loc>{lastmod}\n"
             "    <changefreq>weekly</changefreq>\n"
             "    <priority>0.8</priority>\n"
             "  </url>\n"
