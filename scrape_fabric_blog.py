@@ -22,7 +22,25 @@ import xml.etree.ElementTree as ET
 import html
 
 from lib.db_retry import retry_on_transient_errors
+from lib.rate_limit import SlidingWindowLimiter
 from lib.telemetry import init_telemetry
+
+
+# Default rate-limit and backoff knobs. All overridable via env vars so
+# the refresh container can tune without a code change.
+DEFAULT_MAX_REQUESTS_PER_MINUTE = 30
+DEFAULT_MAX_RETRIES = 5
+DEFAULT_BACKOFF_BASE_SECONDS = 1.0
+DEFAULT_BACKOFF_MAX_SECONDS = 16.0
+
+
+def _build_default_limiter() -> SlidingWindowLimiter:
+    """Construct the limiter from env-var overrides."""
+    max_per_min = int(os.getenv(
+        'BLOG_SCRAPER_MAX_REQUESTS_PER_MINUTE',
+        str(DEFAULT_MAX_REQUESTS_PER_MINUTE),
+    ))
+    return SlidingWindowLimiter(max_calls=max_per_min, window_seconds=60.0)
 
 # Configure logging
 logging.basicConfig(
@@ -38,18 +56,81 @@ init_telemetry("fabric-gps-blog-scraper")
 class FabricBlogScraper:
     """Scrapes Microsoft Fabric blog posts and stores them in SQL Server"""
     
-    def __init__(self):
+    def __init__(self, rate_limiter: Optional[SlidingWindowLimiter] = None):
         self.base_url = "https://blog.fabric.microsoft.com/en-US/blog"
         self.rss_url = "https://blog.fabric.microsoft.com/en-us/blog/feed/"
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         })
-        
+
+        # In-process rate limiter shared across every outbound request
+        # this scraper makes (page list, RSS feed, individual articles).
+        self.rate_limiter = rate_limiter or _build_default_limiter()
+        self.max_retries = int(os.getenv(
+            'BLOG_SCRAPER_MAX_RETRIES', str(DEFAULT_MAX_RETRIES)
+        ))
+        self.backoff_base = float(os.getenv(
+            'BLOG_SCRAPER_BACKOFF_BASE', str(DEFAULT_BACKOFF_BASE_SECONDS)
+        ))
+        self.backoff_max = float(os.getenv(
+            'BLOG_SCRAPER_BACKOFF_MAX', str(DEFAULT_BACKOFF_MAX_SECONDS)
+        ))
+
         # Database connection from environment
         self.connection_string = os.getenv('SQLSERVER_CONN')
         if not self.connection_string:
             raise ValueError("SQLSERVER_CONN environment variable not set")
+
+    def _rate_limited_get(self, url: str, *, timeout: int = 30) -> requests.Response:
+        """GET ``url`` through the rate limiter with 429 exponential backoff.
+
+        Retries on HTTP 429 (and 503 — a similar back-off signal) with
+        exponential delays capped at ``self.backoff_max``. Honors
+        ``Retry-After`` if present. Other HTTPErrors fall through to the
+        caller via ``raise_for_status``.
+        """
+        attempt = 0
+        while True:
+            self.rate_limiter.wait_for_capacity()
+            response = self.session.get(url, timeout=timeout)
+
+            if response.status_code not in (429, 503):
+                # Only successful (or non-throttling-error) requests count
+                # against the local quota — otherwise repeated 429s would
+                # eat our budget and cascade into longer client-side waits
+                # on top of the server's backoff signal.
+                self.rate_limiter.record()
+                response.raise_for_status()
+                return response
+
+            if attempt >= self.max_retries:
+                logger.error(
+                    "Giving up on %s after %d retries (status=%s)",
+                    url, attempt, response.status_code,
+                )
+                self.rate_limiter.record()
+                response.raise_for_status()
+                return response
+
+            backoff = min(
+                self.backoff_max,
+                self.backoff_base * (2 ** attempt),
+            )
+            retry_after = response.headers.get('Retry-After')
+            if retry_after:
+                try:
+                    backoff = max(backoff, float(retry_after))
+                except ValueError:
+                    pass
+
+            logger.warning(
+                "HTTP %s on %s (attempt %d/%d) — sleeping %.1fs",
+                response.status_code, url, attempt + 1,
+                self.max_retries, backoff,
+            )
+            time.sleep(backoff)
+            attempt += 1
     
     def fetch_page(self, page_num: int) -> Optional[BeautifulSoup]:
         """
@@ -64,12 +145,7 @@ class FabricBlogScraper:
         url = f"{self.base_url}?page={page_num}"
         try:
             logger.info(f"Fetching page {page_num}: {url}")
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
-            
-            # Add small delay to be respectful to the server
-            time.sleep(1)
-            
+            response = self._rate_limited_get(url)
             return BeautifulSoup(response.content, 'html.parser')
         
         except requests.RequestException as e:
@@ -354,9 +430,8 @@ class FabricBlogScraper:
         """
         try:
             logger.info(f"Fetching RSS feed: {self.rss_url}")
-            response = self.session.get(self.rss_url, timeout=30)
-            response.raise_for_status()
-            
+            response = self._rate_limited_get(self.rss_url)
+
             root = ET.fromstring(response.content)
             return root
         
@@ -462,9 +537,8 @@ class FabricBlogScraper:
         """
         try:
             logger.info(f"Fetching article details from: {url}")
-            response = self.session.get(url, timeout=30)
-            response.raise_for_status()
-            
+            response = self._rate_limited_get(url)
+
             soup = BeautifulSoup(response.content, 'html.parser')
             
             details = {
@@ -492,10 +566,7 @@ class FabricBlogScraper:
                         details['author'] = html.unescape(author_link.get_text(strip=True))
             
             logger.info(f"Extracted details - Categories: {details['categories']}, Author: {details['author']}")
-            
-            # Add small delay to be respectful to the server
-            time.sleep(1)
-            
+
             return details
         
         except requests.RequestException as e:
