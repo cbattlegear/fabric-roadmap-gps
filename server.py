@@ -4,7 +4,6 @@ import urllib.parse
 import threading
 import logging
 from datetime import datetime, date, time, timezone
-from types import SimpleNamespace
 from typing import Optional, List
 
 from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory, url_for
@@ -31,7 +30,7 @@ except ImportError:
 
 from db.db_sqlserver import (
     make_engine, get_recently_modified_releases, init_db, ReleaseItemModel, get_distinct_values, fetch_history_rows,
-    EmailSubscriptionModel, EmailVerificationModel, create_email_subscription, 
+    create_email_subscription,
     verify_email_subscription, unsubscribe_email, fetch_history_rows, count_recently_modified_releases,
     vector_search_releases, count_vector_search_releases,
     record_bounce,
@@ -42,9 +41,10 @@ from db.db_sqlserver import (
     get_verified_subscription_by_email,
     add_feature_watch, remove_feature_watch, get_feature_watches_for_subscription,
     create_watch_verification, get_release_item_by_id,
+    get_latest_release_version, get_active_releases_for_sitemap,
+    get_verify_email_context,
     EmailRateLimitExceeded,
     rotate_unsubscribe_token,
-    session_scope,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 
@@ -248,6 +248,40 @@ def get_email_client():
     return EMAIL_CLIENT
 
 
+def _monitor_acs_send(poller, *, recipient: str, kind: str) -> None:
+    """Run on a background thread; logs the outcome of an async ACS send.
+
+    *kind* is the human-readable email type (``'verification'``,
+    ``'preferences link'``, ``'goodbye'``) used in the log messages. Status
+    extraction tries the most common ACS shapes in order:
+
+    1. ``result.status`` — ``SendStatusResult``-style attribute (most common
+       in current SDK versions). Checked first so successful sends aren't
+       logged as ``status=None``.
+    2. ``result['status']`` — dict-shaped result.
+    3. ``result.get('status')`` — mapping-like with a ``get`` method.
+
+    All three branches converge on the same success/warning/error logging
+    so the three call sites can no longer drift.
+    """
+    try:
+        result = poller.result()
+        status = getattr(result, 'status', None)
+        if status is None and isinstance(result, dict):
+            status = result.get('status')
+        if status is None:
+            getter = getattr(result, 'get', None)
+            if callable(getter):
+                status = getter('status')
+        kind_label = kind.capitalize()
+        if status == 'Succeeded':
+            otelLogger.info(f"{kind_label} email sent to {recipient}")
+        else:
+            otelLogger.warning(f"{kind_label} email status for {recipient}: {status}")
+    except Exception as monitor_exc:
+        otelLogger.error(f"Error monitoring {kind} email send to {recipient}: {monitor_exc}")
+
+
 def send_verification_email(email: str, verification_token: str,
                             cadence: str = 'weekly', watch_feature_name: Optional[str] = None) -> bool:
     """Send verification email using Azure Communication Services"""
@@ -395,16 +429,7 @@ Fabric GPS
                 return False
 
             def _monitor_send(poller_obj, target_email):
-                try:
-                    # Wait up to 3 minutes; adjust if needed
-                    result = poller_obj.result()
-                    status = result.get('status') if isinstance(result, dict) else getattr(result, 'get', lambda *_: None)('status')
-                    if status == 'Succeeded':
-                        otelLogger.info(f"Verification email sent to {target_email}")
-                    else:
-                        otelLogger.warning(f"Verification email status for {target_email}: {status}")
-                except Exception as monitor_exc:
-                    otelLogger.error(f"Error monitoring verification email send to {target_email}: {monitor_exc}")
+                _monitor_acs_send(poller_obj, recipient=target_email, kind='verification')
 
             threading.Thread(target=_monitor_send, args=(poller, email), daemon=True).start()
             return True
@@ -526,15 +551,7 @@ Fabric GPS
             return False
 
         def _monitor_send(poller_obj, target_email):
-            try:
-                result = poller_obj.result()
-                status = result.get('status') if isinstance(result, dict) else None
-                if status == 'Succeeded':
-                    otelLogger.info(f"Preferences link email sent to {target_email}")
-                else:
-                    otelLogger.warning(f"Preferences link email status for {target_email}: {status}")
-            except Exception as monitor_exc:
-                otelLogger.error(f"Error monitoring preferences link email to {target_email}: {monitor_exc}")
+            _monitor_acs_send(poller_obj, recipient=target_email, kind='preferences link')
 
         threading.Thread(target=_monitor_send, args=(poller, email), daemon=True).start()
         return True
@@ -630,15 +647,7 @@ Fabric GPS
         poller = email_client.begin_send(message)
 
         def _monitor_send(poller_obj, target_email):
-            try:
-                result = poller_obj.result()
-                status = result.get('status') if isinstance(result, dict) else getattr(result, 'get', lambda *_: None)('status')
-                if status == 'Succeeded':
-                    otelLogger.info(f"Goodbye email sent to {target_email}")
-                else:
-                    otelLogger.warning(f"Goodbye email status for {target_email}: {status}")
-            except Exception as monitor_exc:
-                otelLogger.error(f"Error monitoring goodbye email send to {target_email}: {monitor_exc}")
+            _monitor_acs_send(poller_obj, recipient=target_email, kind='goodbye')
 
         threading.Thread(target=_monitor_send, args=(poller, email), daemon=True).start()
         return True
@@ -967,13 +976,12 @@ def api_releases():
     # Single item path
     if release_item_id:
         engine = get_engine()
-        with session_scope(engine) as session:
-            row = session.get(ReleaseItemModel, release_item_id)
-            if not row:
-                return jsonify({"error": "release_item_id not found"}), 404
-            data = _row_to_dict(row)
-            json_item = json.dumps(data, sort_keys=True, separators=(",", ":"))
-            return _make_cached_response(json_item, last_modified=row.last_modified)
+        row = get_release_item_by_id(engine, release_item_id)
+        if not row:
+            return jsonify({"error": "release_item_id not found"}), 404
+        data = _row_to_dict(row)
+        json_item = json.dumps(data, sort_keys=True, separators=(",", ":"))
+        return _make_cached_response(json_item, last_modified=row.last_modified)
 
     # Generate embedding for vector search when q is provided
     query_embedding = None
@@ -1081,11 +1089,7 @@ def api_version():
     that can be appended to other API calls as a cache-buster.
     """
     engine = get_engine()
-    with session_scope(engine) as session:
-        row = session.query(ReleaseItemModel.release_item_id).order_by(
-            ReleaseItemModel.last_modified.desc()
-        ).first()
-        version = row.release_item_id if row else ""
+    version = get_latest_release_version(engine)
     resp = jsonify({"version": version})
     resp.headers['Cache-Control'] = 'no-store'
     return resp
@@ -1227,21 +1231,10 @@ def verify_email_page():
     watch_feature_name = None
     try:
         engine = get_engine()
-        from sqlalchemy import select as sa_select
-        with session_scope(engine) as session:
-            verification = session.scalar(
-                sa_select(EmailVerificationModel).where(EmailVerificationModel.token == token)
-            )
-            if verification:
-                sub = session.scalar(
-                    sa_select(EmailSubscriptionModel).where(EmailSubscriptionModel.email == verification.email)
-                )
-                if sub:
-                    cadence = sub.email_cadence or 'weekly'
-                if verification.pending_watch_release_id:
-                    release = session.get(ReleaseItemModel, verification.pending_watch_release_id)
-                    if release:
-                        watch_feature_name = release.feature_name
+        ctx = get_verify_email_context(engine, token)
+        if ctx is not None:
+            cadence = ctx.cadence
+            watch_feature_name = ctx.watch_feature_name
     except Exception as e:
         # Surface, but don't fail the page — the GET is purely informational
         # (cadence + watch-feature label). The user can still POST the form
@@ -1459,12 +1452,11 @@ def about_page():
 def release_detail(release_item_id):
     """Server-rendered release detail page for SEO."""
     engine = get_engine()
-    with session_scope(engine) as session:
-        row = session.get(ReleaseItemModel, release_item_id)
-        if not row:
-            return render_template('release.html', release=None, history=None), 404
-        history = fetch_history_rows(engine, release_item_id)
-        return render_template('release.html', release=row, history=history)
+    row = get_release_item_by_id(engine, release_item_id)
+    if not row:
+        return render_template('release.html', release=None, history=None), 404
+    history = fetch_history_rows(engine, release_item_id)
+    return render_template('release.html', release=row, history=history)
 
 
 @app.route("/watch/<release_item_id>", methods=["GET", "POST"])
@@ -1472,12 +1464,11 @@ def release_detail(release_item_id):
 def watch_feature_page(release_item_id):
     """Page to subscribe to watch alerts for a specific release item."""
     engine = get_engine()
-    with session_scope(engine) as session:
-        release = session.get(ReleaseItemModel, release_item_id)
-        if not release:
-            return render_template('watch.html', release=None, error="Release not found"), 404
-        feature_name = release.feature_name
-        product_name = release.product_name
+    release = get_release_item_by_id(engine, release_item_id)
+    if not release:
+        return render_template('watch.html', release=None, error="Release not found"), 404
+    feature_name = release.feature_name
+    product_name = release.product_name
 
     if request.method == 'POST':
         email = (request.form.get('email') or '').strip().lower()
@@ -1698,22 +1689,8 @@ def sitemap_xml():
     job, so a one-hour TTL aligns with the freshness window.
     """
     engine = get_engine()
-    with session_scope(engine) as session:
-        releases = session.query(
-            ReleaseItemModel.release_item_id,
-            ReleaseItemModel.last_modified,
-        ).filter(ReleaseItemModel.active == True).all()
-        # Materialize plain rows + grab last-modified before the session
-        # closes so the cache helper can set a data-derived Last-Modified
-        # header (and so we don't pass detached ORM rows around).
-        release_rows = [
-            SimpleNamespace(
-                release_item_id=r.release_item_id,
-                last_modified=r.last_modified,
-            )
-            for r in releases
-        ]
-        last_modified = _max_last_modified(release_rows)
+    release_rows = get_active_releases_for_sitemap(engine)
+    last_modified = _max_last_modified(release_rows)
 
     body = _render_sitemap_xml(EMAIL_BASE_URL, release_rows)
     return _make_cached_response(
