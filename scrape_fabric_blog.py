@@ -21,6 +21,8 @@ from urllib.parse import urljoin
 import xml.etree.ElementTree as ET
 import html
 
+from lib.db_retry import retry_on_transient_errors
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -197,7 +199,7 @@ class FabricBlogScraper:
     def insert_or_update_article(self, cursor, article: Dict):
         """
         Insert article into database or update if URL already exists
-        
+
         Args:
             cursor: Database cursor
             article: Dictionary containing article data
@@ -237,61 +239,104 @@ class FabricBlogScraper:
             article['views'],
             article['summary']
         ))
+
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+    def upsert_article_with_retry(self, article: Dict):
+        """Open a fresh connection, upsert the article, commit, and close.
+
+        Per-article connection management is heavier than batching, but the
+        MERGE upsert is idempotent on URL so retries after a transient failure
+        are safe, and per-call commit means a mid-loop crash never loses a
+        previously-processed article.
+        """
+        conn = None
+        cursor = None
+        try:
+            conn = pyodbc.connect(self.connection_string)
+            cursor = conn.cursor()
+            self.insert_or_update_article(cursor, article)
+            conn.commit()
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
+
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+    def article_exists(self, url: str) -> bool:
+        """Check whether an article with this URL is already in the database."""
+        conn = None
+        cursor = None
+        try:
+            conn = pyodbc.connect(self.connection_string)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT COUNT(*) FROM fabric_blog_posts WHERE url = ?",
+                (url,),
+            )
+            return cursor.fetchone()[0] > 0
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
     
     def scrape_all_pages(self, start_page: int = 1, end_page: int = 169):
         """
         Scrape all blog pages and store in database
-        
+
         Args:
             start_page: First page to scrape (default: 1)
             end_page: Last page to scrape (default: 169)
         """
         try:
-            conn = pyodbc.connect(self.connection_string)
-            cursor = conn.cursor()
-            
-            # Ensure table exists
-            #self.create_table_if_not_exists(cursor)
-            #conn.commit()
-            
             total_articles = 0
             failed_pages = []
-            
+
             for page_num in range(start_page, end_page + 1):
                 logger.info(f"Processing page {page_num}/{end_page}")
-                
+
                 soup = self.fetch_page(page_num)
                 if not soup:
                     failed_pages.append(page_num)
                     continue
-                
+
                 articles = self.extract_articles(soup)
                 logger.info(f"Found {len(articles)} articles on page {page_num}")
-                
-                # Insert articles into database
+
+                # Insert articles into database (per-article connection + retry).
+                page_success = 0
                 for article in articles:
                     try:
-                        self.insert_or_update_article(cursor, article)
+                        self.upsert_article_with_retry(article)
                         total_articles += 1
+                        page_success += 1
                     except Exception as e:
                         logger.error(f"Failed to insert article '{article.get('title')}': {e}")
-                
-                # Commit after each page
-                conn.commit()
-                logger.info(f"Committed {len(articles)} articles from page {page_num}")
-            
+
+                logger.info(f"Committed {page_success}/{len(articles)} articles from page {page_num}")
+
             # Final summary
             logger.info("=" * 60)
             logger.info(f"Scraping complete!")
             logger.info(f"Total articles processed: {total_articles}")
             logger.info(f"Pages scraped: {end_page - start_page + 1 - len(failed_pages)}/{end_page - start_page + 1}")
-            
+
             if failed_pages:
                 logger.warning(f"Failed pages: {failed_pages}")
-            
-            cursor.close()
-            conn.close()
-            
+
         except Exception as e:
             logger.error(f"Fatal error during scraping: {e}")
             raise
@@ -461,72 +506,56 @@ class FabricBlogScraper:
         Scrape articles from RSS feed and store in database (delta load)
         """
         try:
-            conn = pyodbc.connect(self.connection_string)
-            cursor = conn.cursor()
-            
-            # Ensure table exists
-            # self.create_table_if_not_exists(cursor)
-            # conn.commit()
-            
             # Fetch RSS feed
             root = self.fetch_rss_feed()
             if not root:
                 logger.error("Failed to fetch RSS feed")
                 return
-            
+
             # Extract articles from RSS
             articles = self.extract_articles_from_rss(root)
             logger.info(f"Extracted {len(articles)} articles from RSS feed")
-            
+
             new_count = 0
             updated_count = 0
-            
-            # Insert articles into database
+
+            # Insert articles into database. Each article gets its own
+            # connection + commit + retry, so a transient SQL error or a
+            # mid-loop crash never loses already-processed articles.
             for article in articles:
                 try:
                     trimmed_url = article['url'].rstrip('/')
-                    # Check if article already exists
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM fabric_blog_posts WHERE url = ?",
-                        (trimmed_url,)
-                    )
-                    exists = cursor.fetchone()[0] > 0
-                    
+                    exists = self.article_exists(trimmed_url)
+
                     # For new articles, fetch additional details from the article page
                     if not exists:
                         logger.info(f"New article found: {article['title']}")
                         article_details = self.fetch_article_details(article['url'])
-                        
+
                         if article_details:
                             # Update article with fetched details if not already present in RSS
                             if not article.get('categories') and article_details.get('categories'):
                                 article['categories'] = article_details['categories']
                             if not article.get('author') and article_details.get('author'):
                                 article['author'] = article_details['author']
-                    
-                    self.insert_or_update_article(cursor, article)
-                    
+
+                    self.upsert_article_with_retry(article)
+
                     if exists:
                         updated_count += 1
                     else:
                         new_count += 1
-                    
+
                 except Exception as e:
                     logger.error(f"Failed to insert article '{article.get('title')}': {e}")
-            
-            # Commit all changes
-            conn.commit()
-            
+
             # Final summary
             logger.info("=" * 60)
             logger.info(f"RSS feed scraping complete!")
             logger.info(f"New articles: {new_count}")
             logger.info(f"Updated articles: {updated_count}")
             logger.info(f"Total processed: {len(articles)}")
-            
-            cursor.close()
-            conn.close()
-            
+
         except Exception as e:
             logger.error(f"Fatal error during RSS scraping: {e}")
             raise
