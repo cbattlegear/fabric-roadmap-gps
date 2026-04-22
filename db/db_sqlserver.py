@@ -3,8 +3,10 @@ import json
 import uuid
 import hashlib
 from collections import defaultdict
+from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, date, timedelta
-from typing import Iterable, Any, Tuple, Dict
+from typing import Iterable, Any, Tuple, Dict, Callable, Iterator
 import urllib.parse
 import secrets
 import logging
@@ -14,7 +16,7 @@ from sqlalchemy import (
     create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete, update, text
 )
 from typing import Iterable, Any, Tuple, Dict, Optional, List
-from sqlalchemy.orm import declarative_base, sessionmaker
+from sqlalchemy.orm import declarative_base, sessionmaker, Session
 
 # Retry decorator lives in lib/db_retry.py so raw-pyodbc pipeline scripts
 # can share the same Azure-SQL transient-error detection.
@@ -175,6 +177,45 @@ def make_engine(conn_str: str | None = None):
     return create_engine(sanitized_conn, fast_executemany=True, future=True, pool_pre_ping=True, pool_recycle=3600)
 
 
+# ---------------------------------------------------------------------------
+# Session lifecycle
+#
+# Historical state: every public function in this module (plus ~6 sites in
+# server.py and 3 in weekly_email_job.py) constructed its own ``SessionLocal
+# = sessionmaker(bind=engine, future=True)`` line before opening a session.
+# That meant any future change to session config (``expire_on_commit``,
+# ``autoflush``, etc.) had to be made in 30+ places, and the duplicated
+# noise made it harder to see what each function actually did.
+#
+# ``session_scope(engine)`` is a *lifecycle-only* context manager: it opens
+# a Session bound to ``engine`` and closes it on exit. It deliberately does
+# **not** begin/commit a transaction — call sites that want one still wrap
+# their work in ``with session.begin():`` exactly as before.
+#
+# Detached-row convention: any function in this module that returns ORM
+# model instances (``ReleaseItemModel``, ``EmailSubscriptionModel``,
+# ``FeatureWatchModel``, ``EmailVerificationModel``) MUST call
+# ``session.expunge_all()`` (or ``session.expunge(obj)``) before the
+# session closes. Otherwise the caller can hit ``DetachedInstanceError``
+# the first time it touches an unloaded relationship. Functions that
+# return plain dicts or scalars don't need to expunge.
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def session_scope(engine) -> Iterator[Session]:
+    """Open a Session bound to *engine*, yield it, and close on exit.
+
+    Construction of ``sessionmaker`` is intentionally not memoized: it's a
+    cheap, hash-table-shaped object, and caching it by engine identity
+    introduced more correctness concerns (test engines retained forever,
+    id-reuse bugs) than it solved.
+    """
+    factory = sessionmaker(bind=engine, future=True)
+    with factory() as session:
+        yield session
+
+
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=30.0)
 def init_db(engine):
     Base.metadata.create_all(engine)
@@ -234,45 +275,110 @@ def _compute_row_hash(payload: Dict[str, Any]) -> str:
     return hashlib.sha256(j.encode("utf-8")).hexdigest()
 
 
+# ---------------------------------------------------------------------------
+# Release-field source of truth
+#
+# Both ``_normalize_for_hash`` and ``_map_to_model_kwargs`` need to look up
+# the same field on each incoming Fabric API item, but the API uses
+# PascalCase (``FeatureName``) while the SQLAlchemy model uses snake_case
+# (``feature_name``). Previously the two helpers each carried their own
+# parallel list of pairs — a renaming refactor that touched only one of
+# them would silently invalidate every row hash, causing every roadmap
+# item to re-vectorize on the next run.
+#
+# The transforms differ slightly between the two contexts (the hash
+# stringifies dates and treats ``None`` as ``""`` for free-text fields so
+# that "blank → blank" doesn't churn the hash; the model preserves real
+# types and ``None``s). Encoding both transforms on a single spec keeps
+# the pair-of-names canonical while letting each side stay honest about
+# its needs.
+#
+# ``release_item_id`` is intentionally NOT in this list: it identifies the
+# row but is not part of the row's *content*, so it must never enter the
+# hash. ``_map_to_model_kwargs`` adds it explicitly.
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _ReleaseFieldSpec:
+    api_name: str        # PascalCase, the key used both in the Fabric API and in the hash payload
+    model_attr: str      # snake_case, the ReleaseItemModel attribute name
+    hash_transform: Callable[[Any], Any] = field(default=lambda v: v)
+    model_transform: Callable[[Any], Any] = field(default=lambda v: v)
+
+
+def _hash_date(v):
+    d = _to_date(v)
+    return d.isoformat() if d else None
+
+
+def _str_or_none(v):
+    return str(v) if v else None
+
+
+_RELEASE_FIELDS: List[_ReleaseFieldSpec] = [
+    # Free-text fields: hash treats None as "" so a NULL→"" UI cleanup
+    # doesn't churn the hash. Model preserves real None.
+    _ReleaseFieldSpec("FeatureName", "feature_name",
+                      hash_transform=lambda v: v or ""),
+    _ReleaseFieldSpec("FeatureDescription", "feature_description",
+                      hash_transform=lambda v: v or ""),
+
+    # Date: hash uses ISO string for stable JSON; model uses real date.
+    _ReleaseFieldSpec("ReleaseDate", "release_date",
+                      hash_transform=_hash_date,
+                      model_transform=_to_date),
+
+    # Pass-through string fields.
+    _ReleaseFieldSpec("ReleaseType", "release_type"),
+    _ReleaseFieldSpec("ReleaseStatus", "release_status"),
+    _ReleaseFieldSpec("ReleaseSemester", "release_semester"),
+    _ReleaseFieldSpec("VSOItem", "vso_item"),
+    _ReleaseFieldSpec("ProductName", "product_name"),
+
+    # Numeric fields share the same transform on both sides.
+    _ReleaseFieldSpec("ReleaseTypeValue", "release_type_value",
+                      hash_transform=_to_int, model_transform=_to_int),
+    _ReleaseFieldSpec("ReleaseStatusValue", "release_status_value",
+                      hash_transform=_to_int, model_transform=_to_int),
+
+    # Mixed: ProductID arrives as int but persists as str.
+    _ReleaseFieldSpec("ProductID", "product_id",
+                      hash_transform=_str_or_none, model_transform=_str_or_none),
+
+    # Bool with multiple truthy spellings.
+    _ReleaseFieldSpec("isPublishExternally", "is_publish_externally",
+                      hash_transform=_to_bool, model_transform=_to_bool),
+]
+
+
 def _normalize_for_hash(item: Any) -> Dict[str, Any]:
+    """Build a stable dict of content fields used to compute ``row_hash``.
+
+    Excludes ``release_item_id``, ``last_modified``, and ``row_hash`` itself.
+    Field names are intentionally PascalCase so the on-disk hash stays
+    backward-compatible with rows hashed before this refactor.
     """
-    Build a stable dict of fields that indicate content for the row.
-    Excludes last_modified and row_hash.
-    """
-    rd = _to_date(_get(item, "ReleaseDate", "release_date"))
     return {
-        "FeatureName": _get(item, "FeatureName", "feature_name") or "",
-        "ReleaseDate": rd.isoformat() if rd else None,
-        "ReleaseType": _get(item, "ReleaseType", "release_type"),
-        "ReleaseTypeValue": _to_int(_get(item, "ReleaseTypeValue", "release_type_value")),
-        "VSOItem": _get(item, "VSOItem", "vso_item"),
-        "ReleaseStatus": _get(item, "ReleaseStatus", "release_status"),
-        "ReleaseStatusValue": _to_int(_get(item, "ReleaseStatusValue", "release_status_value")),
-        "ReleaseSemester": _get(item, "ReleaseSemester", "release_semester"),
-        "ProductID": str(_get(item, "ProductID", "product_id")) if _get(item, "ProductID", "product_id") else None,
-        "ProductName": _get(item, "ProductName", "product_name"),
-        "isPublishExternally": _to_bool(_get(item, "isPublishExternally", "is_publish_externally")),
-        "FeatureDescription": _get(item, "FeatureDescription", "feature_description") or "",
+        spec.api_name: spec.hash_transform(_get(item, spec.api_name, spec.model_attr))
+        for spec in _RELEASE_FIELDS
     }
 
 
 def _map_to_model_kwargs(item: Any) -> Dict[str, Any]:
-    rd = _to_date(_get(item, "ReleaseDate", "release_date"))
-    return {
-        "release_item_id": str(_get(item, "ReleaseItemID", "release_item_id") or uuid.uuid4()),
-        "feature_name": _get(item, "FeatureName", "feature_name"),
-        "release_date": rd,
-        "release_type": _get(item, "ReleaseType", "release_type"),
-        "release_type_value": _to_int(_get(item, "ReleaseTypeValue", "release_type_value")),
-        "vso_item": _get(item, "VSOItem", "vso_item"),
-        "release_status": _get(item, "ReleaseStatus", "release_status"),
-        "release_status_value": _to_int(_get(item, "ReleaseStatusValue", "release_status_value")),
-        "release_semester": _get(item, "ReleaseSemester", "release_semester"),
-        "product_id": str(_get(item, "ProductID", "product_id")) if _get(item, "ProductID", "product_id") else None,
-        "product_name": _get(item, "ProductName", "product_name"),
-        "is_publish_externally": _to_bool(_get(item, "isPublishExternally", "is_publish_externally")),
-        "feature_description": _get(item, "FeatureDescription", "feature_description"),
+    """Build kwargs for ``ReleaseItemModel(**...)``.
+
+    Adds ``release_item_id`` (which is intentionally absent from
+    ``_RELEASE_FIELDS`` so it can't accidentally enter the hash).
+    """
+    kwargs = {
+        spec.model_attr: spec.model_transform(_get(item, spec.api_name, spec.model_attr))
+        for spec in _RELEASE_FIELDS
     }
+    kwargs["release_item_id"] = str(
+        _get(item, "ReleaseItemID", "release_item_id") or uuid.uuid4()
+    )
+    return kwargs
 
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
@@ -283,11 +389,10 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
     Returns counts: {'inserted': n, 'updated': m, 'unchanged': k, 'changed_ids': [...]}
     This function is retried on transient SQL/Azure connection errors.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
     inserted = updated = unchanged = 0
     changed_ids = []
 
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             for item in items:
                 row_values = _map_to_model_kwargs(item)
@@ -348,11 +453,10 @@ def deactivate_missing_releases(engine, current_ids: set) -> Dict[str, int]:
 
     Returns counts: ``{'deactivated': n, 'already_inactive': m, 'deactivated_ids': [...]}``.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
     deactivated = already_inactive = 0
     deactivated_ids = []
 
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             # Determine if this is the first run by checking for any inactive rows
             has_inactive = session.scalar(
@@ -421,7 +525,6 @@ def get_recently_modified_releases(
     ``sort`` must be one of ``VALID_SORT_OPTIONS`` (default ``"last_modified"``).
     Only active releases are returned unless *include_inactive* is True.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
 
     stmt = select(ReleaseItemModel)
     filters = []
@@ -460,8 +563,11 @@ def get_recently_modified_releases(
         stmt = stmt.offset(offset)
     if limit is not None:
         stmt = stmt.limit(limit)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         rows = session.scalars(stmt).all()
+        # Detach so callers can safely use the rows after the session closes
+        # (matches the convention in get_active_subscriptions et al.).
+        session.expunge_all()
     return rows
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
@@ -475,7 +581,6 @@ def count_recently_modified_releases(
     include_inactive: bool = False,
 ) -> int:
     """Return total count of releases matching filters/search."""
-    SessionLocal = sessionmaker(bind=engine, future=True)
     stmt = select(func.count()).select_from(ReleaseItemModel)
     filters = []
     if not include_inactive:
@@ -503,7 +608,7 @@ def count_recently_modified_releases(
             )
     if filters:
         stmt = stmt.where(*filters)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         total = session.scalar(stmt) or 0
     return int(total)
 
@@ -515,7 +620,6 @@ def get_distinct_values(engine, column_name: str, limit: Optional[int] = None) -
     Normalization groups values case-insensitively and trims whitespace.
     Returns a representative original value per group (MIN for stable display).
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
 
     # Validate requested column exists on the model
     if not hasattr(ReleaseItemModel, column_name):
@@ -536,7 +640,7 @@ def get_distinct_values(engine, column_name: str, limit: Optional[int] = None) -
     if limit is not None:
         stmt = stmt.limit(limit)
 
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         values = session.scalars(stmt).all()
 
     # Coerce to trimmed strings and drop empties
@@ -818,11 +922,10 @@ def rotate_unsubscribe_token(engine, current_token: str) -> Optional[str]:
     Callers should not rotate when resolution went via the history table —
     that's already a stale link being reused via the grace window.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
     now = datetime.utcnow()
     grace_expires = now + timedelta(days=_UNSUBSCRIBE_TOKEN_GRACE_DAYS)
 
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             sub = session.scalar(
                 select(EmailSubscriptionModel)
@@ -916,9 +1019,7 @@ def create_email_subscription(engine, email: str, filters: Optional[Dict[str, st
     """
     if cadence not in ('daily', 'weekly'):
         cadence = 'weekly'
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             # Check if subscription already exists
             existing = session.scalar(
@@ -986,9 +1087,7 @@ def create_watch_verification(engine, email: str, release_item_id: str) -> Tuple
 
     Raises EmailRateLimitExceeded if the email has hit the hourly verification cap.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
-
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             _enforce_email_verification_quota(session, email)
 
@@ -1034,12 +1133,11 @@ def verify_email_subscription(engine, token: str) -> bool:
     If the verification record has a pending_watch_release_id, the watch
     is automatically added after successful verification.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
     
     pending_release_id = None
     subscription_id = None
 
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             # Find verification record
             verification = session.scalar(
@@ -1089,9 +1187,7 @@ def unsubscribe_email(engine, token: str) -> Optional[str]:
     the rotation grace window). Returns the email address that was removed,
     or None if the token was invalid.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
-
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             subscription = session.scalar(_unsubscribe_token_select(token))
 
@@ -1116,10 +1212,9 @@ def record_bounce(engine, email: str) -> Optional[Dict[str, Any]]:
     Returns a dict with the outcome, or None if no matching subscriber.
     Only counts one bounce per calendar day to prevent rapid deactivation.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
     now = datetime.utcnow()
 
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             sub = session.scalar(
                 select(EmailSubscriptionModel)
@@ -1149,9 +1244,7 @@ def record_bounce(engine, email: str) -> Optional[Dict[str, Any]]:
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def get_active_subscriptions(engine) -> List[EmailSubscriptionModel]:
     """Get all active and verified email subscriptions"""
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         subscriptions = session.scalars(
             select(EmailSubscriptionModel)
             .where(EmailSubscriptionModel.is_active == True)
@@ -1168,8 +1261,7 @@ def get_unsent_active_subscriptions(engine, time_frame: int, cadence: Optional[s
 
     If *cadence* is provided, only subscriptions matching that cadence are returned.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         query = (
             select(EmailSubscriptionModel)
             .where(EmailSubscriptionModel.is_active == True)
@@ -1214,8 +1306,7 @@ def get_digest_eligible_subscriptions(engine) -> List[EmailSubscriptionModel]:
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def get_release_item_by_id(engine, release_item_id: str) -> Optional[ReleaseItemModel]:
     """Return a ReleaseItemModel by primary key, or None if not found."""
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         item = session.get(ReleaseItemModel, release_item_id)
         if item:
             session.expunge(item)
@@ -1225,8 +1316,7 @@ def get_release_item_by_id(engine, release_item_id: str) -> Optional[ReleaseItem
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def add_feature_watch(engine, subscription_id: str, release_item_id: str) -> bool:
     """Add a feature watch. Returns True if created, False if already exists."""
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             existing = session.scalar(
                 select(FeatureWatchModel).where(
@@ -1254,8 +1344,7 @@ def add_feature_watch(engine, subscription_id: str, release_item_id: str) -> boo
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def remove_feature_watch(engine, subscription_id: str, release_item_id: str) -> bool:
     """Remove a feature watch. Returns True if deleted, False if not found."""
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             result = session.execute(
                 delete(FeatureWatchModel).where(
@@ -1269,8 +1358,7 @@ def remove_feature_watch(engine, subscription_id: str, release_item_id: str) -> 
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def get_watched_changes(engine, subscription_id: str) -> List[Dict[str, Any]]:
     """Return watched releases whose row_hash differs from last_notified_hash."""
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         rows = session.execute(
             select(FeatureWatchModel, ReleaseItemModel)
             .join(ReleaseItemModel, FeatureWatchModel.release_item_id == ReleaseItemModel.release_item_id)
@@ -1304,8 +1392,7 @@ def update_watch_hashes(engine, hash_updates: List[Tuple[str, str]]):
     """Update last_notified_hash for a list of (watch_id, new_hash) tuples."""
     if not hash_updates:
         return
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             # Bulk update — single roundtrip instead of one session.get() per id.
             session.bulk_update_mappings(
@@ -1322,8 +1409,7 @@ def get_subscription_by_unsubscribe_token(engine, token: str) -> Optional[EmailS
     Accepts either the current unsubscribe_token or the previous one (within
     the rotation grace window).
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         sub = session.scalar(_unsubscribe_token_select(token))
         if sub:
             session.expunge(sub)
@@ -1333,8 +1419,7 @@ def get_subscription_by_unsubscribe_token(engine, token: str) -> Optional[EmailS
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def get_verified_subscription_by_email(engine, email: str) -> Optional[EmailSubscriptionModel]:
     """Look up a verified, active subscription by email address."""
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         sub = session.scalar(
             select(EmailSubscriptionModel)
             .where(EmailSubscriptionModel.email == email.strip().lower())
@@ -1354,9 +1439,8 @@ def update_subscription_preferences(engine, token: str, preferences: Dict[str, A
     Accepts either the current unsubscribe_token or the previous one (within
     the rotation grace window). Returns True if subscription found and updated.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
     allowed_keys = {'email_cadence', 'product_filter', 'release_type_filter', 'release_status_filter'}
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         with session.begin():
             sub = session.scalar(_unsubscribe_token_select(token))
             if not sub:
@@ -1370,8 +1454,7 @@ def update_subscription_preferences(engine, token: str, preferences: Dict[str, A
 @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
 def get_feature_watches_for_subscription(engine, subscription_id: str) -> List[Dict[str, Any]]:
     """Return all feature watches for a subscription with release details."""
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         rows = session.execute(
             select(FeatureWatchModel, ReleaseItemModel.feature_name, ReleaseItemModel.product_name)
             .join(ReleaseItemModel, FeatureWatchModel.release_item_id == ReleaseItemModel.release_item_id)
@@ -1399,8 +1482,7 @@ def get_subscriptions_with_changed_watches(engine) -> List[Tuple[EmailSubscripti
 
     Uses a single joined query to avoid N+1 DB round-trips.
     """
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         rows = session.execute(
             select(EmailSubscriptionModel, FeatureWatchModel, ReleaseItemModel)
             .join(FeatureWatchModel, EmailSubscriptionModel.id == FeatureWatchModel.subscription_id)
@@ -1476,6 +1558,49 @@ def fetch_history_rows(engine, release_item_id: str):
             pass
         conn.close()
 
+
+def _build_vector_search_where(
+    *,
+    product_name: Optional[str] = None,
+    release_type: Optional[str] = None,
+    release_status: Optional[str] = None,
+    modified_within_days: Optional[int] = None,
+    include_inactive: bool = False,
+    now: Optional[datetime] = None,
+) -> Tuple[str, List[Any]]:
+    """Build the shared WHERE-clause + positional params for the vector
+    search and its companion COUNT query.
+
+    Both call sites previously assembled identical filter logic by hand,
+    which made adding/removing a filter a two-edit chore and risked drift.
+    Centralizing here keeps the two queries provably consistent.
+
+    The ``now`` argument is injected for tests so ``modified_within_days``
+    cutoff comparisons aren't tied to wall-clock time.
+    """
+    conditions = ["release_vector IS NOT NULL"]
+    params: List[Any] = []
+
+    if not include_inactive:
+        conditions.append("active = 1")
+    if product_name is not None:
+        conditions.append("product_name = ?")
+        params.append(product_name)
+    if release_type is not None:
+        conditions.append("release_type = ?")
+        params.append(release_type)
+    if release_status is not None:
+        conditions.append("release_status = ?")
+        params.append(release_status)
+    if modified_within_days is not None:
+        anchor = now or datetime.utcnow()
+        cutoff = (anchor - timedelta(days=modified_within_days)).date()
+        conditions.append("last_modified >= ?")
+        params.append(cutoff)
+
+    return " AND ".join(conditions), params
+
+
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
 def vector_search_releases(
     engine,
@@ -1491,26 +1616,13 @@ def vector_search_releases(
     """Search releases ordered by cosine similarity to query_vector."""
     vector_json = json.dumps(query_vector)
 
-    conditions = ["release_vector IS NOT NULL"]
-    filter_params: List[Any] = []
-
-    if not include_inactive:
-        conditions.append("active = 1")
-    if product_name is not None:
-        conditions.append("product_name = ?")
-        filter_params.append(product_name)
-    if release_type is not None:
-        conditions.append("release_type = ?")
-        filter_params.append(release_type)
-    if release_status is not None:
-        conditions.append("release_status = ?")
-        filter_params.append(release_status)
-    if modified_within_days is not None:
-        cutoff = (datetime.utcnow() - timedelta(days=modified_within_days)).date()
-        conditions.append("last_modified >= ?")
-        filter_params.append(cutoff)
-
-    where_sql = " AND ".join(conditions)
+    where_sql, filter_params = _build_vector_search_where(
+        product_name=product_name,
+        release_type=release_type,
+        release_status=release_status,
+        modified_within_days=modified_within_days,
+        include_inactive=include_inactive,
+    )
 
     sql = f"""
     SELECT release_item_id, feature_name, release_date, release_type,
@@ -1550,26 +1662,13 @@ def count_vector_search_releases(
     include_inactive: bool = False,
 ) -> int:
     """Count vectorized releases matching the given filters."""
-    conditions = ["release_vector IS NOT NULL"]
-    params: List[Any] = []
-
-    if not include_inactive:
-        conditions.append("active = 1")
-    if product_name is not None:
-        conditions.append("product_name = ?")
-        params.append(product_name)
-    if release_type is not None:
-        conditions.append("release_type = ?")
-        params.append(release_type)
-    if release_status is not None:
-        conditions.append("release_status = ?")
-        params.append(release_status)
-    if modified_within_days is not None:
-        cutoff = (datetime.utcnow() - timedelta(days=modified_within_days)).date()
-        conditions.append("last_modified >= ?")
-        params.append(cutoff)
-
-    where_sql = " AND ".join(conditions)
+    where_sql, params = _build_vector_search_where(
+        product_name=product_name,
+        release_type=release_type,
+        release_status=release_status,
+        modified_within_days=modified_within_days,
+        include_inactive=include_inactive,
+    )
     sql = f"SELECT COUNT(*) FROM release_items WHERE {where_sql}"
 
     conn = engine.raw_connection()
