@@ -12,7 +12,6 @@ from flask_limiter import Limiter
 from html import escape
 from email.utils import format_datetime
 import hashlib
-from sqlalchemy.orm import sessionmaker
 
 import logging
 # Import the `configure_azure_monitor()` function from the
@@ -45,6 +44,7 @@ from db.db_sqlserver import (
     create_watch_verification, get_release_item_by_id,
     EmailRateLimitExceeded,
     rotate_unsubscribe_token,
+    session_scope,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 
@@ -967,8 +967,7 @@ def api_releases():
     # Single item path
     if release_item_id:
         engine = get_engine()
-        SessionLocal = sessionmaker(bind=engine, future=True)
-        with SessionLocal() as session:
+        with session_scope(engine) as session:
             row = session.get(ReleaseItemModel, release_item_id)
             if not row:
                 return jsonify({"error": "release_item_id not found"}), 404
@@ -1082,8 +1081,7 @@ def api_version():
     that can be appended to other API calls as a cache-buster.
     """
     engine = get_engine()
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         row = session.query(ReleaseItemModel.release_item_id).order_by(
             ReleaseItemModel.last_modified.desc()
         ).first()
@@ -1229,10 +1227,8 @@ def verify_email_page():
     watch_feature_name = None
     try:
         engine = get_engine()
-        from sqlalchemy.orm import sessionmaker
         from sqlalchemy import select as sa_select
-        SessionLocal = sessionmaker(bind=engine, future=True)
-        with SessionLocal() as session:
+        with session_scope(engine) as session:
             verification = session.scalar(
                 sa_select(EmailVerificationModel).where(EmailVerificationModel.token == token)
             )
@@ -1463,8 +1459,7 @@ def about_page():
 def release_detail(release_item_id):
     """Server-rendered release detail page for SEO."""
     engine = get_engine()
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         row = session.get(ReleaseItemModel, release_item_id)
         if not row:
             return render_template('release.html', release=None, history=None), 404
@@ -1477,8 +1472,7 @@ def release_detail(release_item_id):
 def watch_feature_page(release_item_id):
     """Page to subscribe to watch alerts for a specific release item."""
     engine = get_engine()
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         release = session.get(ReleaseItemModel, release_item_id)
         if not release:
             return render_template('watch.html', release=None, error="Release not found"), 404
@@ -1704,8 +1698,7 @@ def sitemap_xml():
     job, so a one-hour TTL aligns with the freshness window.
     """
     engine = get_engine()
-    SessionLocal = sessionmaker(bind=engine, future=True)
-    with SessionLocal() as session:
+    with session_scope(engine) as session:
         releases = session.query(
             ReleaseItemModel.release_item_id,
             ReleaseItemModel.last_modified,

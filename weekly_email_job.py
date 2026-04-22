@@ -29,7 +29,7 @@ from db.db_sqlserver import (
     make_engine, get_unsent_active_subscriptions, EmailSubscriptionModel,
     EmailVerificationModel, EmailContentCacheModel,
     get_digest_eligible_subscriptions, get_subscriptions_with_changed_watches,
-    update_watch_hashes,
+    update_watch_hashes, session_scope,
 )
 
 try:
@@ -168,18 +168,16 @@ class WeeklyEmailSender:
         on the same date reuse the cached content so every subscriber
         with identical settings gets the exact same email.
         """
-        from sqlalchemy.orm import sessionmaker
         from sqlalchemy import select as sa_select
 
         cache_key = self._build_cache_key(subscription)
         cache_date = datetime.utcnow().strftime('%Y-%m-%d')
 
         engine = self._engine or make_engine()
-        SessionLocal = sessionmaker(bind=engine, future=True)
 
         # Try DB cache
         try:
-            with SessionLocal() as session:
+            with session_scope(engine) as session:
                 row = session.scalar(
                     sa_select(EmailContentCacheModel)
                     .where(EmailContentCacheModel.cache_date == cache_date)
@@ -222,7 +220,7 @@ class WeeklyEmailSender:
         try:
             content = json.dumps({'changes': items, 'ai_summary': ai_summary},
                                  separators=(',', ':'))
-            with SessionLocal() as session:
+            with session_scope(engine) as session:
                 with session.begin():
                     session.add(EmailContentCacheModel(
                         cache_date=cache_date,
@@ -507,9 +505,7 @@ class WeeklyEmailSender:
         """Update the last_email_sent timestamp for a subscription"""
         try:
             engine = self._engine or make_engine()
-            from sqlalchemy.orm import sessionmaker
-            SessionLocal = sessionmaker(bind=engine, future=True)
-            with SessionLocal() as session:
+            with session_scope(engine) as session:
                 subscription = session.get(EmailSubscriptionModel, subscription_id)
                 if subscription:
                     subscription.last_email_sent = datetime.utcnow()
@@ -871,13 +867,11 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
         - Old email content cache entries (older than 2 days)
         Returns dict of counts removed.
         """
-        from sqlalchemy.orm import sessionmaker
         from sqlalchemy import delete, or_, and_
-        SessionLocal = sessionmaker(bind=engine, future=True)
         now = datetime.utcnow()
         threshold = now - timedelta(hours=24)
         counts = {"expired_or_used_verifications": 0, "stale_unverified": 0, "old_cache_entries": 0}
-        with SessionLocal() as session:
+        with session_scope(engine) as session:
             # Expired or used verifications
             expired_stmt = delete(EmailVerificationModel).where(
                 or_(EmailVerificationModel.expires_at < now, EmailVerificationModel.is_used == True)
