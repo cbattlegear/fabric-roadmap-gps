@@ -13,6 +13,7 @@ from openai import AzureOpenAI
 import json
 
 from lib.db_retry import retry_on_transient_errors, is_transient_sql_azure_error
+from lib.telemetry import init_telemetry
 
 # Configure logging
 logging.basicConfig(
@@ -20,6 +21,9 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Wire Azure Monitor for the pipeline run (no-op in development).
+init_telemetry("fabric-gps-match")
 
 
 class ReleaseBlogMatcher:

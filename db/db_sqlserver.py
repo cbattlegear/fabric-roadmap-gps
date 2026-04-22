@@ -1588,18 +1588,21 @@ def count_vector_search_releases(
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
 def healthcheck(engine):
     conn = engine.raw_connection()
+    cursor = None
     try:
-        # Assuming SQL Server; call the stored proc with one parameter
         cursor = conn.cursor()
         cursor.execute("SELECT 1")
         return True
-    except:
+    except Exception:
+        # Bare except previously caught KeyboardInterrupt / SystemExit too,
+        # which could mask SIGTERM during a healthcheck poll.
         return False
     finally:
-        try:
-            cursor.close()
-        except Exception:
-            pass
+        if cursor is not None:
+            try:
+                cursor.close()
+            except Exception:
+                pass
         conn.close()
     
     
