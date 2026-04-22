@@ -4,6 +4,7 @@ import urllib.parse
 import threading
 import logging
 from datetime import datetime, date, time, timezone
+from types import SimpleNamespace
 from typing import Optional, List
 
 from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory, url_for
@@ -1245,8 +1246,11 @@ def verify_email_page():
                     release = session.get(ReleaseItemModel, verification.pending_watch_release_id)
                     if release:
                         watch_feature_name = release.feature_name
-    except Exception:
-        pass
+    except Exception as e:
+        # Surface, but don't fail the page — the GET is purely informational
+        # (cadence + watch-feature label). The user can still POST the form
+        # to actually verify. Logging means a regression doesn't go silent.
+        otelLogger.warning("verify-email context lookup failed: %s", e)
     return render_template('verify_email.html', pending=True, token=token,
                            cadence=cadence, watch_feature_name=watch_feature_name)
 
@@ -1643,49 +1647,87 @@ def indexnow_key_file(key):
     return Response(INDEXNOW_API_KEY, mimetype="text/plain")
 
 
+_STATIC_SITEMAP_PAGES = (
+    {"loc": "/",          "priority": "1.0", "changefreq": "hourly"},
+    {"loc": "/changelog", "priority": "0.9", "changefreq": "hourly"},
+    {"loc": "/about",     "priority": "0.7", "changefreq": "monthly"},
+    {"loc": "/endpoints", "priority": "0.6", "changefreq": "monthly"},
+    {"loc": "/subscribe", "priority": "0.6", "changefreq": "monthly"},
+    {"loc": "/rss",       "priority": "0.5", "changefreq": "hourly"},
+)
+
+
+def _render_sitemap_xml(base_url: str, release_rows) -> str:
+    """Render the sitemap XML body for the static pages plus per-release URLs.
+
+    ``release_rows`` is any iterable of objects with ``release_item_id`` and
+    ``last_modified`` attributes (e.g. SQLAlchemy rows or test stubs). All
+    interpolated values are XML-escaped — today ``release_item_id`` is a
+    Fabric API GUID with no XML-special characters, so this is
+    defense-in-depth, not a bug fix.
+    """
+    parts = []
+    for p in _STATIC_SITEMAP_PAGES:
+        parts.append(
+            "  <url>\n"
+            f"    <loc>{escape(base_url + p['loc'])}</loc>\n"
+            f"    <changefreq>{escape(p['changefreq'])}</changefreq>\n"
+            f"    <priority>{escape(p['priority'])}</priority>\n"
+            "  </url>\n"
+        )
+    for r in release_rows:
+        lastmod = ""
+        if r.last_modified and hasattr(r.last_modified, 'strftime'):
+            lastmod = f"\n    <lastmod>{escape(r.last_modified.strftime('%Y-%m-%d'))}</lastmod>"
+        parts.append(
+            "  <url>\n"
+            f"    <loc>{escape(f'{base_url}/release/{r.release_item_id}')}</loc>{lastmod}\n"
+            "    <changefreq>weekly</changefreq>\n"
+            "    <priority>0.8</priority>\n"
+            "  </url>\n"
+        )
+    return (
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+        + ''.join(parts)
+        + '</urlset>\n'
+    )
+
+
 @app.get("/sitemap.xml")
 def sitemap_xml():
-    """Serve a dynamic XML sitemap for search engines."""
-    base = EMAIL_BASE_URL
-    pages = [
-        {"loc": "/",          "priority": "1.0", "changefreq": "hourly"},
-        {"loc": "/changelog", "priority": "0.9", "changefreq": "hourly"},
-        {"loc": "/about",     "priority": "0.7", "changefreq": "monthly"},
-        {"loc": "/endpoints", "priority": "0.6", "changefreq": "monthly"},
-        {"loc": "/subscribe", "priority": "0.6", "changefreq": "monthly"},
-        {"loc": "/rss",       "priority": "0.5", "changefreq": "hourly"},
-    ]
-    urls = ""
-    for p in pages:
-        urls += f"""  <url>
-    <loc>{base}{p["loc"]}</loc>
-    <changefreq>{p["changefreq"]}</changefreq>
-    <priority>{p["priority"]}</priority>
-  </url>
-"""
-    # Add individual release pages
+    """Serve a dynamic XML sitemap for search engines.
+
+    Uses ``_make_cached_response`` so Front Door (and well-behaved bots) can
+    cache for an hour rather than re-rendering the full release list on
+    every Bing/Google miss. The data only changes hourly via the refresh
+    job, so a one-hour TTL aligns with the freshness window.
+    """
     engine = get_engine()
     SessionLocal = sessionmaker(bind=engine, future=True)
     with SessionLocal() as session:
         releases = session.query(
             ReleaseItemModel.release_item_id,
-            ReleaseItemModel.last_modified
+            ReleaseItemModel.last_modified,
         ).filter(ReleaseItemModel.active == True).all()
-        for r in releases:
-            lastmod = ""
-            if r.last_modified and hasattr(r.last_modified, 'strftime'):
-                lastmod = f"\n    <lastmod>{r.last_modified.strftime('%Y-%m-%d')}</lastmod>"
-            urls += f"""  <url>
-    <loc>{base}/release/{r.release_item_id}</loc>{lastmod}
-    <changefreq>weekly</changefreq>
-    <priority>0.8</priority>
-  </url>
-"""
-    body = f"""<?xml version="1.0" encoding="UTF-8"?>
-<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-{urls}</urlset>
-"""
-    return Response(body, mimetype="application/xml")
+        # Materialize plain rows + grab last-modified before the session
+        # closes so the cache helper can set a data-derived Last-Modified
+        # header (and so we don't pass detached ORM rows around).
+        release_rows = [
+            SimpleNamespace(
+                release_item_id=r.release_item_id,
+                last_modified=r.last_modified,
+            )
+            for r in releases
+        ]
+        last_modified = _max_last_modified(release_rows)
+
+    body = _render_sitemap_xml(EMAIL_BASE_URL, release_rows)
+    return _make_cached_response(
+        body,
+        mimetype="application/xml; charset=utf-8",
+        last_modified=last_modified,
+    )
 
 
 @app.get("/healthcheck")

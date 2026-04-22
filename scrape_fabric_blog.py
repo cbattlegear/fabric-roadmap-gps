@@ -22,6 +22,7 @@ import xml.etree.ElementTree as ET
 import html
 
 from lib.db_retry import retry_on_transient_errors
+from lib.telemetry import init_telemetry
 
 # Configure logging
 logging.basicConfig(
@@ -29,6 +30,9 @@ logging.basicConfig(
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+# Wire Azure Monitor for the pipeline run (no-op in development).
+init_telemetry("fabric-gps-blog-scraper")
 
 
 class FabricBlogScraper:

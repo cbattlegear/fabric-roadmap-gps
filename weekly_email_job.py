@@ -699,14 +699,14 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
             if change.get('release_date'):
                 try:
                     release_date = datetime.strptime(change['release_date'], '%Y-%m-%d').strftime('%B %d, %Y')
-                except:
+                except Exception:
                     release_date = change['release_date']
             
             modified_date = 'Unknown'
             if change.get('last_modified'):
                 try:
                     modified_date = datetime.strptime(change['last_modified'], '%Y-%m-%d').strftime('%B %d, %Y')
-                except:
+                except Exception:
                     modified_date = change['last_modified']
             
             text_parts.extend([
