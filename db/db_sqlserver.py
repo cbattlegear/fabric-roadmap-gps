@@ -311,6 +311,7 @@ class _ReleaseFieldSpec:
     model_attr: str      # snake_case, the ReleaseItemModel attribute name
     hash_transform: Callable[[Any], Any] = field(default=lambda v: v)
     model_transform: Callable[[Any], Any] = field(default=lambda v: v)
+    include_in_hash: bool = True  # set False for fields that should never trigger row_hash churn
 
 
 def _hash_date(v):
@@ -339,7 +340,12 @@ _RELEASE_FIELDS: List[_ReleaseFieldSpec] = [
     _ReleaseFieldSpec("ReleaseType", "release_type"),
     _ReleaseFieldSpec("ReleaseStatus", "release_status"),
     _ReleaseFieldSpec("ReleaseSemester", "release_semester"),
-    _ReleaseFieldSpec("VSOItem", "vso_item"),
+    # ``VSOItem`` is excluded from the row_hash: the Fabric source flaps
+    # it on/off intermittently for the same item, which previously bumped
+    # last_modified and re-vectorized the entire roadmap on every flap.
+    # We still persist whatever the source sends (subject to the
+    # stickiness rule in ``save_releases``) but it can't trigger churn.
+    _ReleaseFieldSpec("VSOItem", "vso_item", include_in_hash=False),
     _ReleaseFieldSpec("ProductName", "product_name"),
 
     # Numeric fields share the same transform on both sides.
@@ -368,6 +374,7 @@ def _normalize_for_hash(item: Any) -> Dict[str, Any]:
     return {
         spec.api_name: spec.hash_transform(_get(item, spec.api_name, spec.model_attr))
         for spec in _RELEASE_FIELDS
+        if spec.include_in_hash
     }
 
 
@@ -428,15 +435,14 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
 
                 # Stickiness for ``vso_item``: the Fabric source intermittently
                 # drops ``VSOItem`` from the payload for items that previously
-                # had it, then includes it again on the next refresh. Without
-                # stickiness, every flap toggles ``row_hash`` and re-vectorizes
-                # the whole roadmap. If the incoming value is empty/whitespace
-                # and we already have a populated value, keep ours.
+                # had it, then includes it again on the next refresh. Even
+                # though VSOItem no longer participates in row_hash (so it
+                # can't churn last_modified by itself), we still want to
+                # preserve the URL so we don't lose useful tracking data.
                 if existing is not None and existing.vso_item:
                     incoming_vso = row_values.get("vso_item")
                     if not (isinstance(incoming_vso, str) and incoming_vso.strip()):
                         row_values["vso_item"] = existing.vso_item
-                        content_payload["VSOItem"] = existing.vso_item
 
                 new_hash = _compute_row_hash(content_payload)
 
@@ -460,6 +466,14 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
 
                     if (existing.row_hash or "") == new_hash:
                         unchanged += 1
+                        # Silently sync ``vso_item`` even when the row is
+                        # otherwise unchanged: VSOItem is excluded from the
+                        # hash, so its updates wouldn't reach this branch
+                        # otherwise. Doesn't bump last_modified / row_hash and
+                        # doesn't trigger re-vectorization.
+                        new_vso = row_values.get("vso_item")
+                        if existing.vso_item != new_vso:
+                            existing.vso_item = new_vso
                     else:
                         # update only when changed
                         for k, v in row_values.items():
