@@ -426,6 +426,18 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
                         row_values["release_date"] = existing.release_date
                         content_payload["ReleaseDate"] = _hash_date(existing.release_date)
 
+                # Stickiness for ``vso_item``: the Fabric source intermittently
+                # drops ``VSOItem`` from the payload for items that previously
+                # had it, then includes it again on the next refresh. Without
+                # stickiness, every flap toggles ``row_hash`` and re-vectorizes
+                # the whole roadmap. If the incoming value is empty/whitespace
+                # and we already have a populated value, keep ours.
+                if existing is not None and existing.vso_item:
+                    incoming_vso = row_values.get("vso_item")
+                    if not (isinstance(incoming_vso, str) and incoming_vso.strip()):
+                        row_values["vso_item"] = existing.vso_item
+                        content_payload["VSOItem"] = existing.vso_item
+
                 new_hash = _compute_row_hash(content_payload)
 
                 if existing is None:
