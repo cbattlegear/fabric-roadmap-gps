@@ -88,9 +88,6 @@ class TestReleaseFieldsRegistry:
 class TestNormalizeForHash:
     def test_pascalcase_input(self):
         out = _normalize_for_hash(_API_ITEM)
-        # VSOItem is intentionally excluded from the hash payload — the
-        # source flaps it on/off and we don't want it to churn row_hash.
-        assert "VSOItem" not in out
         assert out == {
             "FeatureName": "Feature X",
             "FeatureDescription": "Feature X description",
@@ -100,21 +97,11 @@ class TestNormalizeForHash:
             "ReleaseSemester": "2026 H1",
             "ReleaseTypeValue": 1,
             "ReleaseStatusValue": 2,
+            "VSOItem": "VSO-9999",
             "ProductID": "12345",
             "ProductName": "Fabric",
             "isPublishExternally": True,
         }
-
-    def test_vsoitem_changes_do_not_change_hash(self):
-        """VSOItem flapping in the source must not bump row_hash."""
-        item_with = {**_API_ITEM, "VSOItem": "VSO-1111"}
-        item_without = {**_API_ITEM}
-        item_without.pop("VSOItem", None)
-        item_blank = {**_API_ITEM, "VSOItem": ""}
-        h_with = _compute_row_hash(_normalize_for_hash(item_with))
-        h_without = _compute_row_hash(_normalize_for_hash(item_without))
-        h_blank = _compute_row_hash(_normalize_for_hash(item_blank))
-        assert h_with == h_without == h_blank
 
     def test_snakecase_input_produces_same_hash(self):
         """Both helpers fall through to ``_get(item, api_name, model_attr)``

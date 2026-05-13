@@ -122,22 +122,15 @@ class TestVsoItemStickiness:
         assert row.row_hash == seeded_hash
         assert stats["unchanged"] == 1
 
-    def test_new_vso_silently_overwrites_existing(self, engine):
-        # VSOItem is excluded from the hash, so the row is "unchanged" from
-        # a content-tracking perspective, but we still sync the persisted
-        # value so the column reflects source reality.
-        seeded_hash = _seed(engine, vso_item=_VSO_URL)
+    def test_new_vso_overwrites_existing(self, engine):
+        _seed(engine, vso_item=_VSO_URL)
         new_url = "https://dev.azure.com/powerbi/_workitems/edit/9999999/"
 
         stats = save_releases(engine, [_api_item(VSOItem=new_url)])
 
         row = _fetch(engine)
         assert row.vso_item == new_url
-        # Hash unchanged, last_modified unchanged, counted as unchanged.
-        assert row.row_hash == seeded_hash
-        assert row.last_modified == date(2024, 1, 1)
-        assert stats["unchanged"] == 1
-        assert stats["updated"] == 0
+        assert stats["updated"] == 1
 
     def test_empty_source_inserts_null_for_new_row(self, engine):
         # No existing row; nothing to be sticky about.
@@ -150,15 +143,12 @@ class TestVsoItemStickiness:
         assert stats["inserted"] == 1
 
     def test_empty_existing_takes_new_value(self, engine):
-        seeded_hash = _seed(engine, vso_item=None)
+        _seed(engine, vso_item=None)
         stats = save_releases(engine, [_api_item(VSOItem=_VSO_URL)])
 
         row = _fetch(engine)
-        # Silently synced even though hash didn't change.
         assert row.vso_item == _VSO_URL
-        assert row.row_hash == seeded_hash
-        assert stats["unchanged"] == 1
-        assert stats["updated"] == 0
+        assert stats["updated"] == 1
 
     def test_releaseitem_dataclass_path_preserves_existing_vso(self, engine):
         # Regression: the production code path runs items through
