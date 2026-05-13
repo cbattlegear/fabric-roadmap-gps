@@ -64,7 +64,8 @@ def _parse_rss_pub_date(date_str: Optional[str]) -> Optional[datetime]:
     if dt is None:
         return None
     if dt.tzinfo is not None:
-        # SQL Server column is naive; collapse to UTC-naive.
+        # SQL Server column is naive; strip tzinfo keeping wall-clock time
+        # (preserves prior strptime behavior; feeds in practice publish GMT/UTC).
         dt = dt.replace(tzinfo=None)
     return dt
 
