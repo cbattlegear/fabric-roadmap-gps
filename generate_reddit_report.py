@@ -17,6 +17,8 @@ import urllib.request
 from collections import defaultdict
 from datetime import date, datetime
 
+from lib.quarter_date import format_as_quarter
+
 
 def _fetch_json(url: str):
     """Fetch JSON from a URL using only stdlib."""
@@ -123,11 +125,8 @@ def _format_item(item, base_url: str) -> str:
     if item.get("release_status"):
         parts.append(item["release_status"])
     if item.get("release_date"):
-        try:
-            d = datetime.strptime(item["release_date"], "%Y-%m-%d")
-            parts.append(d.strftime("%b %Y"))
-        except ValueError:
-            parts.append(item["release_date"])
+        quarter = format_as_quarter(item["release_date"])
+        parts.append(quarter or item["release_date"])
 
     suffix = f" ({', '.join(parts)})" if parts else ""
     return f"- [{name}]({link}){suffix}"

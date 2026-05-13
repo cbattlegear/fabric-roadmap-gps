@@ -4,6 +4,8 @@ from datetime import datetime, date
 import uuid
 import json
 
+from lib.quarter_date import parse_release_date_value
+
 @dataclass
 class ReleaseItem:
     release_item_id: Optional[uuid.UUID] = None
@@ -35,19 +37,10 @@ class ReleaseItem:
 
     @staticmethod
     def _parse_date(value):
-        if not value:
-            return None
-        if isinstance(value, date):
-            return value
-        for fmt in ('%m/%d/%Y', '%Y-%m-%d'):
-            try:
-                return datetime.strptime(value, fmt).date()
-            except Exception:
-                pass
-        try:
-            return datetime.fromisoformat(value).date()
-        except Exception:
-            return None
+        # Delegates to lib.quarter_date so legacy date formats AND the new
+        # "Q# YYYY" quarter tokens (mid-2026 source change) both resolve to
+        # a real ``date`` (quarter -> last day of quarter).
+        return parse_release_date_value(value)
 
     @staticmethod
     def _parse_bool(value):

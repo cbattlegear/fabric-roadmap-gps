@@ -13,6 +13,7 @@ import time
 import logging
 import argparse
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from typing import List, Dict, Optional
 import requests
 from bs4 import BeautifulSoup
@@ -41,6 +42,33 @@ def _build_default_limiter() -> SlidingWindowLimiter:
         str(DEFAULT_MAX_REQUESTS_PER_MINUTE),
     ))
     return SlidingWindowLimiter(max_calls=max_per_min, window_seconds=60.0)
+
+def _parse_rss_pub_date(date_str: Optional[str]) -> Optional[datetime]:
+    """Parse an RSS ``<pubDate>`` value into a naive ``datetime``.
+
+    RSS pubDate uses the RFC 2822 grammar, which permits both numeric
+    offsets (``"+0000"``) and named zones (``"GMT"``, ``"UTC"``,
+    ``"EST"``, ...). ``datetime.strptime("%z")`` only handles the
+    numeric form, so feeds that publish ``"... GMT"`` would warn and
+    drop the date. ``email.utils.parsedate_to_datetime`` handles the
+    full grammar.
+
+    Returns ``None`` for empty / unparseable input.
+    """
+    if not date_str:
+        return None
+    try:
+        dt = parsedate_to_datetime(date_str)
+    except (TypeError, ValueError):
+        return None
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        # SQL Server column is naive; strip tzinfo keeping wall-clock time
+        # (preserves prior strptime behavior; feeds in practice publish GMT/UTC).
+        dt = dt.replace(tzinfo=None)
+    return dt
+
 
 # Configure logging
 logging.basicConfig(
@@ -484,15 +512,11 @@ class FabricBlogScraper:
                 # Extract publish date
                 pub_date_elem = item.find('pubDate')
                 post_date = None
-                if pub_date_elem is not None:
-                    try:
-                        # RSS pubDate format: "Mon, 16 Dec 2024 14:30:00 +0000"
-                        date_str = pub_date_elem.text
-                        post_date = datetime.strptime(date_str, '%a, %d %b %Y %H:%M:%S %z')
-                        # Remove timezone info for SQL Server
-                        post_date = post_date.replace(tzinfo=None)
-                    except ValueError as e:
-                        logger.warning(f"Could not parse date '{pub_date_elem.text}': {e}")
+                if pub_date_elem is not None and pub_date_elem.text:
+                    date_str = pub_date_elem.text
+                    post_date = _parse_rss_pub_date(date_str)
+                    if post_date is None:
+                        logger.warning(f"Could not parse date '{date_str}'")
                 
                 # Extract author (dc:creator or author tag)
                 author = None

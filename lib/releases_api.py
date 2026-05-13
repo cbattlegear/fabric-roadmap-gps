@@ -12,6 +12,7 @@ from typing import Any, Mapping, Optional
 from urllib.parse import urlencode
 
 from db.db_sqlserver import VALID_SORT_OPTIONS
+from lib.quarter_date import format_as_quarter
 
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
@@ -140,7 +141,7 @@ def _format_release_row(row: Any, *, distance: Optional[float] = None) -> dict:
     formatted = {
         "release_item_id": _get(row, "release_item_id"),
         "feature_name": _get(row, "feature_name"),
-        "release_date": _iso_or_none(_get(row, "release_date")),
+        "release_date": format_as_quarter(_get(row, "release_date")),
         "release_type": _get(row, "release_type"),
         "release_status": _get(row, "release_status"),
         "product_id": _get(row, "product_id"),

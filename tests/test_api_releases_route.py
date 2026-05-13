@@ -72,7 +72,7 @@ def test_api_releases_list_envelope_shape(client, server_module):
     assert body["links"]["prev"] is not None
     # Row shape — distance must be absent for regular (non-vector) rows
     assert "distance" not in body["data"][0]
-    assert body["data"][0]["release_date"] == "2024-06-15"
+    assert body["data"][0]["release_date"] == "Q2 2024"
 
     # Cache + Link headers
     assert "Cache-Control" in resp.headers
@@ -93,7 +93,7 @@ def test_api_releases_single_item_path(client, server_module):
     assert "data" not in body
     assert "pagination" not in body
     assert body["release_item_id"] == "abc-123"
-    assert body["release_date"] == "2024-06-15"
+    assert body["release_date"] == "Q2 2024"
 
 
 def test_api_releases_single_item_not_found_returns_404(client, server_module):
@@ -146,7 +146,7 @@ def test_api_releases_vector_search_path_includes_distance(client, server_module
     assert resp.status_code == 200
     body = json.loads(resp.data)
     assert body["data"][0]["distance"] == 0.1235
-    assert body["data"][0]["release_date"] == "2025-01-01"
+    assert body["data"][0]["release_date"] == "Q1 2025"
 
 
 def test_api_releases_q_skipped_when_embeddings_unavailable(client, server_module):
