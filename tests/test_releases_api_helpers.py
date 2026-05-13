@@ -156,7 +156,7 @@ def test_format_orm_row_regular():
     out = _format_release_row(row)
     assert out["release_item_id"] == "r1"
     assert out["feature_name"] == "Feature One"
-    assert out["release_date"] == "2024-06-15"
+    assert out["release_date"] == "Q2 2024"
     assert out["last_modified"] == "2024-06-16T12:30:45"
     assert out["active"] is True
     assert "distance" not in out
@@ -180,7 +180,7 @@ def test_format_dict_row_vector_includes_distance_rounded():
     }
     out = _format_release_row(row)
     assert out["distance"] == 0.1235
-    assert out["release_date"] == "2025-01-01"
+    assert out["release_date"] == "Q1 2025"
     assert out["last_modified"] == "2025-01-02T09:00:00"
 
 
@@ -205,9 +205,9 @@ def test_format_distance_kwarg_zero_is_kept():
     assert out["distance"] == 0.0
 
 
-def test_format_release_date_uses_yyyy_mm_dd():
+def test_format_release_date_uses_quarter_format():
     row = _make_orm_row(release_date=date(2024, 12, 31))
-    assert _format_release_row(row)["release_date"] == "2024-12-31"
+    assert _format_release_row(row)["release_date"] == "Q4 2024"
 
 
 def test_format_dict_row_missing_keys_yields_none():

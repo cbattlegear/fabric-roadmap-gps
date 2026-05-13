@@ -45,6 +45,7 @@ from db.db_sqlserver import (
     rotate_unsubscribe_token,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
+from lib.quarter_date import format_as_quarter
 from lib.releases_api import (
     ReleasesQuery,
     _build_pagination_links,
@@ -56,6 +57,13 @@ from lib.releases_api import (
 os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
 app = Flask(__name__)
+
+
+@app.template_filter('release_date_quarter')
+def _release_date_quarter_filter(value):
+    """Render a release_date date/string as ``"Q# YYYY"`` for templates."""
+    return format_as_quarter(value)
+
 
 FlaskInstrumentor().instrument_app(app, excluded_urls="healthcheck")
 
@@ -688,7 +696,8 @@ def _item_link(row: ReleaseItemModel) -> str:
 def _description(row: ReleaseItemModel) -> str:
     desc = ""
     if row.release_date:
-        desc += f"<p><strong>{row.release_status} {row.release_type} Date:</strong> {escape(row.release_date.isoformat())}</p>"
+        quarter = format_as_quarter(row.release_date) or row.release_date.isoformat()
+        desc += f"<p><strong>{row.release_status} {row.release_type} Date:</strong> {escape(quarter)}</p>"
     if row.feature_description:
         desc += f"<p>{escape(row.feature_description)}</p>"
     return desc or "(no description)"
@@ -1475,11 +1484,13 @@ def api_changelog():
         release_status=release_status,
     )
 
-    # Serialize dates for JSON output
+    # Serialize dates for JSON output. release_date is rendered as
+    # "Q# YYYY" to match the post-2026 source format and the public API
+    # representation; last_modified stays as an ISO date.
     for item in items:
         rd = item.get("release_date")
         lm = item.get("last_modified")
-        item["release_date"] = rd.isoformat() if hasattr(rd, 'isoformat') else rd
+        item["release_date"] = format_as_quarter(rd) if rd is not None else None
         item["last_modified"] = lm.isoformat() if hasattr(lm, 'isoformat') else lm
 
     grouped: dict[str, list] = {}

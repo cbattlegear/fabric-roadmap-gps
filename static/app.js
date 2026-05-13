@@ -220,11 +220,9 @@ class RecentChanges {
             day: 'numeric'
         });
 
-        const releaseDate = item.release_date ? new Date(item.release_date).toLocaleDateString('en-US', {
-            year: 'numeric',
-            month: 'short',
-            day: 'numeric'
-        }) : 'TBD';
+        // release_date is delivered as a "Q# YYYY" quarter token from the
+        // API (post-2026 source change). Display it verbatim.
+        const releaseDate = item.release_date || 'TBD';
 
         const releaseTypeClass = item.release_type == 'General availability' ? 'badge-success' : 'badge-warning';
         const releaseStatusClass = item.release_status == 'Shipped' ? 'badge-success' : 'badge-warning';

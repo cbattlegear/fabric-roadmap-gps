@@ -35,7 +35,7 @@
                     <span class="change-date">Last Modified: {{ release.last_modified.strftime('%B %d, %Y') if release.last_modified else 'Unknown' }}</span>
                     {% endif %}
                     {% if release.release_date %}
-                    <span class="release-date">Release Date: {{ release.release_date.strftime('%B %d, %Y') if release.release_date else 'TBD' }}</span>
+                    <span class="release-date">Release Date: {{ release.release_date | release_date_quarter or 'TBD' }}</span>
                     {% endif %}
                 </div>
             </div>

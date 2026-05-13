@@ -21,6 +21,8 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
+from lib.quarter_date import format_as_quarter
+
 
 # ---------------------------------------------------------------------------
 # Style tokens shared across all email templates
@@ -106,8 +108,16 @@ def _fmt_date(dt_str: Optional[str], fallback: str = "TBD", out_fmt: str = "%b %
         return fallback
     try:
         return datetime.fromisoformat(dt_str.replace('Z', '+00:00')).strftime(out_fmt)
-    except (ValueError, TypeError):
+    except (ValueError, TypeError, AttributeError):
         return dt_str
+
+
+def _fmt_release_date(value: Any, fallback: str = "TBD") -> str:
+    """Render a release date value as ``"Q# YYYY"`` for emails."""
+    if value is None or value == "":
+        return fallback
+    quarter = format_as_quarter(value)
+    return quarter if quarter else str(value)
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +130,7 @@ def _render_change_card(change: Dict[str, Any], base_url: str, utm_campaign: str
     release_status = change.get('release_status') or 'Unknown'
     description = change.get('feature_description') or 'No description available.'
     rel_id = change.get('release_item_id')
-    release_date = _fmt_date(change.get('release_date'))
+    release_date = _fmt_release_date(change.get('release_date'))
     modified_date = _fmt_date(change.get('last_modified'), fallback="Unknown")
     release_type_variant = "success" if release_type == "General availability" else "warning"
     release_status_variant = "success" if release_status == "Shipped" else "warning"
@@ -349,12 +359,7 @@ def render_digest_text(
     ])
 
     for i, change in enumerate(changes, 1):
-        release_date = 'TBD'
-        if change.get('release_date'):
-            try:
-                release_date = datetime.strptime(change['release_date'], '%Y-%m-%d').strftime('%B %d, %Y')
-            except Exception:
-                release_date = change['release_date']
+        release_date = _fmt_release_date(change.get('release_date'))
 
         modified_date = 'Unknown'
         if change.get('last_modified'):

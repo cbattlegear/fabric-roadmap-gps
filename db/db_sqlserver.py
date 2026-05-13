@@ -24,6 +24,10 @@ from lib.db_retry import (
     retry_on_transient_errors,
     is_transient_sql_azure_error as _retry_is_transient,
 )
+from lib.quarter_date import (
+    parse_release_date_value as _parse_release_date_value,
+    quarter_bounds as _quarter_bounds,
+)
 
 naming_convention = {
     "ix": "ix_%(column_0_label)s",
@@ -243,20 +247,10 @@ def _rows_to_dicts(cursor) -> List[Dict[str, Any]]:
 
 
 def _to_date(v):
-    if not v:
-        return None
-    if isinstance(v, date):
-        return v
-    s = str(v).strip()
-    for fmt in ("%m/%d/%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(s, fmt).date()
-        except Exception:
-            pass
-    try:
-        return datetime.fromisoformat(s).date()
-    except Exception:
-        return None
+    # Delegates to lib.quarter_date so the post-2026 "Q# YYYY" source
+    # tokens (mapped to the last day of the quarter) parse the same way
+    # as the legacy ``%m/%d/%Y`` / ISO date strings.
+    return _parse_release_date_value(v)
 
 
 def _to_int(v):
@@ -409,12 +403,26 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
             for item in items:
                 row_values = _map_to_model_kwargs(item)
                 content_payload = _normalize_for_hash(item)
-                new_hash = _compute_row_hash(content_payload)
                 pk = row_values["release_item_id"]
 
                 existing = session.get(ReleaseItemModel, pk)
                 # use date only to avoid time-related sorting issues
                 now = date.today()
+
+                # Stickiness for the new "Q# YYYY" source format: if the
+                # incoming value is a quarter token AND the row already has
+                # a release_date that falls inside that quarter, keep the
+                # existing date. This prevents every previously-stored exact
+                # date from being overwritten with the quarter-end date and
+                # churning row_hash / last_modified / re-vectorization.
+                if existing is not None and existing.release_date is not None:
+                    raw_release_date = _get(item, "ReleaseDate", "release_date")
+                    bounds = _quarter_bounds(raw_release_date)
+                    if bounds and bounds[0] <= existing.release_date <= bounds[1]:
+                        row_values["release_date"] = existing.release_date
+                        content_payload["ReleaseDate"] = _hash_date(existing.release_date)
+
+                new_hash = _compute_row_hash(content_payload)
 
                 if existing is None:
                     # insert
