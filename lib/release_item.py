@@ -21,6 +21,10 @@ class ReleaseItem:
     product_name: Optional[str] = None
     is_publish_externally: Optional[bool] = None
     feature_description: Optional[str] = None
+    # Preserves the unparsed source ``ReleaseDate`` (e.g. ``"Q4 2024"``) so
+    # downstream code can still detect a quarter token after ``release_date``
+    # has been resolved to a ``date``. Not part of the persisted schema.
+    release_date_raw: Optional[str] = None
 
     @staticmethod
     def _parse_uuid(value):
@@ -80,6 +84,7 @@ class ReleaseItem:
             product_name = d.get('ProductName'),
             is_publish_externally = cls._parse_bool(d.get('isPublishExternally')),
             feature_description = d.get('FeatureDescription'),
+            release_date_raw = d.get('ReleaseDate') if isinstance(d.get('ReleaseDate'), str) else None,
         )
 
     def to_dict(self) -> Dict[str, Any]:
