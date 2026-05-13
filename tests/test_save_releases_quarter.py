@@ -45,7 +45,7 @@ def _api_item(**overrides):
         "ReleaseTypeValue": "1",
         "ReleaseStatusValue": "2",
         "VSOItem": "VSO-1",
-        "ProductID": 100,
+        "ProductID": "00000000-0000-0000-0000-000000000aaa",
         "ProductName": "Power BI",
         "isPublishExternally": "true",
     }
@@ -75,7 +75,7 @@ def _seed(engine, *, release_date, last_modified=date(2024, 1, 1)):
                     release_type_value=1,
                     release_status_value=2,
                     vso_item="VSO-1",
-                    product_id="100",
+                    product_id="00000000-0000-0000-0000-000000000aaa",
                     product_name="Power BI",
                     is_publish_externally=True,
                     row_hash=seeded_hash,
@@ -141,3 +141,89 @@ class TestQuarterStickiness:
         save_releases(engine, [_api_item(ReleaseDate="2025-02-15")])
         row = _fetch(engine)
         assert row.release_date == date(2025, 2, 15)
+
+    def test_releaseitem_dataclass_path_preserves_existing_in_quarter(self, engine):
+        # Regression: production runs items through ReleaseItem.from_dict,
+        # which parses ReleaseDate -> date BEFORE save_releases sees it.
+        # Without preserving the raw source string, stickiness silently
+        # broke and every row got re-stamped to the quarter-end date.
+        from lib.release_item import ReleaseItem
+
+        rid = "00000000-0000-0000-0000-000000000001"
+        existing = date(2024, 11, 7)
+        # Re-seed under a uuid id so ReleaseItem (which parses the id as a
+        # uuid) collides with the existing row.
+        with session_scope(engine) as session:
+            with session.begin():
+                payload = _normalize_for_hash(_api_item(ReleaseItemID=rid))
+                payload["ReleaseDate"] = existing.isoformat()
+                seeded_hash = _compute_row_hash(payload)
+                session.add(
+                    ReleaseItemModel(
+                        release_item_id=rid,
+                        feature_name="Feature One",
+                        feature_description="Description",
+                        release_date=existing,
+                        release_type="GA",
+                        release_status="Shipped",
+                        release_semester="2024 Wave 1",
+                        release_type_value=1,
+                        release_status_value=2,
+                        vso_item="VSO-1",
+                        product_id="00000000-0000-0000-0000-000000000aaa",
+                        product_name="Power BI",
+                        is_publish_externally=True,
+                        row_hash=seeded_hash,
+                        last_modified=date(2024, 1, 1),
+                        active=True,
+                    )
+                )
+
+        items = [ReleaseItem.from_dict(_api_item(ReleaseItemID=rid, ReleaseDate="Q4 2024"))]
+        stats = save_releases(engine, items)
+
+        with session_scope(engine) as session:
+            row = session.get(ReleaseItemModel, rid)
+            assert row.release_date == existing
+            assert row.last_modified == date(2024, 1, 1)
+            assert row.row_hash == seeded_hash
+        assert stats["unchanged"] == 1
+        assert stats["updated"] == 0
+
+    def test_releaseitem_dataclass_path_overwrites_when_outside_quarter(self, engine):
+        from lib.release_item import ReleaseItem
+
+        rid = "00000000-0000-0000-0000-000000000002"
+        with session_scope(engine) as session:
+            with session.begin():
+                payload = _normalize_for_hash(_api_item(ReleaseItemID=rid))
+                payload["ReleaseDate"] = date(2024, 6, 30).isoformat()
+                seeded_hash = _compute_row_hash(payload)
+                session.add(
+                    ReleaseItemModel(
+                        release_item_id=rid,
+                        feature_name="Feature One",
+                        feature_description="Description",
+                        release_date=date(2024, 6, 30),
+                        release_type="GA",
+                        release_status="Shipped",
+                        release_semester="2024 Wave 1",
+                        release_type_value=1,
+                        release_status_value=2,
+                        vso_item="VSO-1",
+                        product_id="00000000-0000-0000-0000-000000000aaa",
+                        product_name="Power BI",
+                        is_publish_externally=True,
+                        row_hash=seeded_hash,
+                        last_modified=date(2024, 1, 1),
+                        active=True,
+                    )
+                )
+
+        items = [ReleaseItem.from_dict(_api_item(ReleaseItemID=rid, ReleaseDate="Q4 2024"))]
+        stats = save_releases(engine, items)
+
+        with session_scope(engine) as session:
+            row = session.get(ReleaseItemModel, rid)
+            assert row.release_date == date(2024, 12, 31)
+        assert stats["updated"] == 1

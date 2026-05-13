@@ -416,7 +416,11 @@ def save_releases(engine, items: Iterable[Any]) -> Dict[str, int]:
                 # date from being overwritten with the quarter-end date and
                 # churning row_hash / last_modified / re-vectorization.
                 if existing is not None and existing.release_date is not None:
-                    raw_release_date = _get(item, "ReleaseDate", "release_date")
+                    # Look up the *raw* source value so quarter-token detection
+                    # works for both dict items (key ``ReleaseDate``) and
+                    # ``ReleaseItem`` instances (attr ``release_date_raw``,
+                    # since ``release_date`` is already a parsed ``date``).
+                    raw_release_date = _get(item, "ReleaseDate", "release_date_raw")
                     bounds = _quarter_bounds(raw_release_date)
                     if bounds and bounds[0] <= existing.release_date <= bounds[1]:
                         row_values["release_date"] = existing.release_date
