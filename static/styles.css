@@ -899,6 +899,47 @@ a:focus-visible {
   color: var(--fabric-neutral-grey-90);
 }
 
+.changelog-date-link {
+  text-decoration: none;
+  color: inherit;
+}
+
+.changelog-date-link:hover .changelog-date,
+.changelog-date-link:focus .changelog-date {
+  color: var(--fabric-brand-40);
+  text-decoration: underline;
+}
+
+.changelog-copy-link {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+  color: var(--fabric-brand-40);
+  background: transparent;
+  border: 1px solid var(--fabric-brand-40);
+  border-radius: 4px;
+  padding: var(--spacing-xs) var(--spacing-s);
+  cursor: pointer;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.changelog-copy-link:hover,
+.changelog-copy-link:focus {
+  background: var(--fabric-brand-40);
+  color: white;
+}
+
+.changelog-copy-link-done {
+  background: var(--fabric-brand-40);
+  color: white;
+}
+
+.changelog-day-nav {
+  margin-bottom: var(--spacing-l);
+}
+
 .changelog-workload {
   margin-bottom: var(--spacing-m);
   margin-top: var(--spacing-l);

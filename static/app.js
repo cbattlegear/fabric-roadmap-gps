@@ -6,6 +6,20 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+// Parse a stored roadmap date for display. `last_modified` is a UTC calendar
+// date with no time component (e.g. "2026-06-03"). Passing that straight to
+// `new Date()` parses it as UTC midnight, which `toLocaleDateString` then
+// shifts into the viewer's timezone — showing the previous day for anyone west
+// of UTC. Constructing the Date from explicit components yields local midnight
+// of the exact stored day, so the displayed date always matches what's stored.
+function parseRoadmapDate(value) {
+    if (typeof value === 'string') {
+        const m = value.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+        if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    }
+    return new Date(value);
+}
+
 function descriptionPrepareHtml(text) {
     if (!text) return 'No description available.';
     let escaped = escapeHtml(text);
@@ -214,7 +228,7 @@ class RecentChanges {
     }
 
     createChangeItem(item) {
-        const date = new Date(item.last_modified).toLocaleDateString('en-US', {
+        const date = parseRoadmapDate(item.last_modified).toLocaleDateString('en-US', {
             year: 'numeric',
             month: 'short',
             day: 'numeric'
