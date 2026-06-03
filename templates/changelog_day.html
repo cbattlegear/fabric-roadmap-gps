@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+{% block title %}Microsoft Fabric Changes on {{ display_date }} | Fabric GPS{% endblock %}
+{% block meta_description %}Every Microsoft Fabric roadmap change recorded on {{ display_date }} — features added, updated, or removed that day, grouped by product.{% endblock %}
+{% block og_title %}Microsoft Fabric Changes on {{ display_date }} | Fabric GPS{% endblock %}
+{% block og_description %}Every Microsoft Fabric roadmap change recorded on {{ display_date }} — features added, updated, or removed that day, grouped by product.{% endblock %}
+{% block twitter_title %}Microsoft Fabric Changes on {{ display_date }} | Fabric GPS{% endblock %}
+{% block twitter_description %}Every Microsoft Fabric roadmap change recorded on {{ display_date }} — features added, updated, or removed that day, grouped by product.{% endblock %}
+
+{% block herotitle %}Changes on {{ display_date }}{% endblock %}
+{% block herosubtitle %}A permanent snapshot of the Microsoft Fabric roadmap changes recorded on this day{% endblock %}
+
+{% block content %}
+<div class="container">
+    <section class="recent-changes-section">
+        <div class="changelog-day-nav">
+            <a href="/changelog" class="button button-secondary">&larr; Back to full changelog</a>
+        </div>
+
+        <div id="changelog-content" data-date="{{ date_iso }}">
+            <div class="loading-indicator"><div class="spinner"></div><span>Loading changes for {{ display_date }}...</span></div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/changelog-render.js"></script>
+<script src="/static/changelog-day.js"></script>
+{% endblock %}

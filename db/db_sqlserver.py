@@ -698,12 +698,24 @@ def get_changelog_with_changes(
     product_name: Optional[str] = None,
     release_type: Optional[str] = None,
     release_status: Optional[str] = None,
+    on_date: Optional[date] = None,
 ) -> List[Dict]:
     """Return changelog items with changed-column annotations in a single temporal-table query.
 
     Uses the same LAG-based diff logic as GetReleaseItemHistoryById but runs
     across ALL items modified within the window, returning one row per item
     with its most-recent change summary.
+
+    Two modes:
+      * Window mode (default): items whose *current* ``last_modified`` falls
+        within the trailing ``days`` window. The change summary describes each
+        item's most recent content change.
+      * Exact-date mode (``on_date`` set): a **permanent, historical** view of
+        every content change that happened on that specific calendar day. This
+        queries the temporal history (``FOR SYSTEM_TIME ALL``) for versions
+        whose ``last_modified`` equals ``on_date``, so a given day's link keeps
+        showing that day's changes even after the same items change again on a
+        later day. When ``on_date`` is supplied, ``days`` is ignored.
 
     Defense-in-depth: every value supplied by the caller (including HTTP
     request args via /api/changelog) flows into the query exclusively as a
@@ -721,7 +733,7 @@ def get_changelog_with_changes(
         ("release_status", "AND release_status = :release_status"),
     )
 
-    bind_values: Dict[str, Any] = {"days": int(days)}
+    bind_values: Dict[str, Any] = {}
     filter_fragments: List[str] = []
     if not include_inactive:
         filter_fragments.append("AND active = 1")
@@ -739,21 +751,35 @@ def get_changelog_with_changes(
 
     filter_clause = " ".join(filter_fragments)
 
-    sql = text(f"""
-    WITH Hist AS (
-        SELECT
-            release_item_id, release_date, release_type, release_status,
-            feature_description, feature_name, product_name, last_modified, active,
-            release_semester, vso_item, row_hash,
-            ROW_NUMBER() OVER (PARTITION BY release_item_id ORDER BY ValidFrom) AS VersionNum
-        FROM dbo.release_items FOR SYSTEM_TIME ALL
-        WHERE release_item_id IN (
-            SELECT release_item_id FROM release_items
-            WHERE last_modified >= DATEADD(day, -:days, CAST(GETUTCDATE() AS DATE))
-            {filter_clause}
-        )
-    ),
-    Latest AS (
+    # Mode-dependent fragments. Both branches use only literal SQL plus named
+    # bind params (never spliced caller values), preserving the parameterized
+    # contract documented above.
+    if on_date is not None:
+        # Exact-date / historical mode: select the item set from temporal
+        # history so items that later change again still appear for this day,
+        # and pick each item's content-change version *for that day*.
+        bind_values["on_date"] = on_date
+        item_source = "dbo.release_items FOR SYSTEM_TIME ALL"
+        date_predicate = "last_modified = :on_date"
+        selection_cte = """
+    Selected AS (
+        -- First temporal version whose last_modified equals the requested day
+        -- is that day's content-change version; later same-day versions are
+        -- post-processing (vectorization, blog matching).
+        SELECT h.release_item_id, MIN(h.VersionNum) AS ContentVer
+        FROM Hist h
+        WHERE h.last_modified = :on_date
+        GROUP BY h.release_item_id
+    ),"""
+    else:
+        # Window mode: select the item set from the current rows within the
+        # trailing window and pick the version matching each item's current
+        # last_modified.
+        bind_values["days"] = int(days)
+        item_source = "release_items"
+        date_predicate = "last_modified >= DATEADD(day, -:days, CAST(GETUTCDATE() AS DATE))"
+        selection_cte = """
+    Selected AS (
         -- Find the first temporal version where last_modified matches the current value.
         -- That's the content-change version; later versions are post-processing
         -- (vectorization, blog matching) that don't touch tracked content fields.
@@ -763,7 +789,22 @@ def get_changelog_with_changes(
             ON h.release_item_id = ri.release_item_id
            AND h.last_modified = ri.last_modified
         GROUP BY h.release_item_id
-    ),
+    ),"""
+
+    sql = text(f"""
+    WITH Hist AS (
+        SELECT
+            release_item_id, release_date, release_type, release_status,
+            feature_description, feature_name, product_name, last_modified, active,
+            release_semester, vso_item, row_hash,
+            ROW_NUMBER() OVER (PARTITION BY release_item_id ORDER BY ValidFrom) AS VersionNum
+        FROM dbo.release_items FOR SYSTEM_TIME ALL
+        WHERE release_item_id IN (
+            SELECT release_item_id FROM {item_source}
+            WHERE {date_predicate}
+            {filter_clause}
+        )
+    ),{selection_cte}
     Diffs AS (
         SELECT h.*,
             LAG(release_date)        OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_release_date,
@@ -875,7 +916,7 @@ def get_changelog_with_changes(
             )
         END
     FROM Diffs d
-    INNER JOIN Latest l ON d.release_item_id = l.release_item_id AND d.VersionNum = l.ContentVer
+    INNER JOIN Selected l ON d.release_item_id = l.release_item_id AND d.VersionNum = l.ContentVer
     ORDER BY d.last_modified DESC, d.product_name, d.feature_name
     """)
 

@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, date, time, timezone
 from typing import Optional, List
 
-from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory, url_for
+from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory, url_for, abort
 from flask_limiter import Limiter
 from html import escape
 from email.utils import format_datetime
@@ -1459,11 +1459,48 @@ def changelog_page():
     return render_template('changelog.html')
 
 
+def _parse_iso_date(date_str):
+    """Strictly parse a canonical ``YYYY-MM-DD`` string into a ``date``.
+
+    Returns ``None`` for any value that is missing or not a valid calendar
+    date in exactly that zero-padded format. ``strptime`` itself is lenient
+    about zero-padding (it accepts ``2026-6-3``), so we additionally require
+    the input to equal the canonical ISO representation. This keeps a single
+    permanent URL per day rather than several aliases for the same content.
+    """
+    if not date_str:
+        return None
+    try:
+        parsed = datetime.strptime(date_str, "%Y-%m-%d").date()
+    except (ValueError, TypeError):
+        return None
+    return parsed if parsed.isoformat() == date_str else None
+
+
+@app.get("/changelog/<date_str>")
+def changelog_day_page(date_str):
+    """Permanent, shareable page for a single day's roadmap changes.
+
+    Content loads client-side via ``/api/changelog?date=<date_str>``; only the
+    date-specific title/meta is server-rendered (good enough for human-shared
+    link previews). Invalid dates 404 rather than rendering an empty shell.
+    """
+    day = _parse_iso_date(date_str)
+    if day is None:
+        abort(404)
+    # Cross-platform long date (avoid %-d / %#d portability differences).
+    display_date = f"{day:%B} {day.day}, {day:%Y}"
+    return render_template(
+        'changelog_day.html', date_iso=day.isoformat(), display_date=display_date)
+
+
 @app.get("/api/changelog")
 def api_changelog():
     """Return releases grouped by last_modified date for changelog display.
 
     Query Params:
+      date: YYYY-MM-DD — return only that single day's changes (historical,
+            permanent view). When supplied, ``days`` is ignored.
       days: look-back window (default 30, max 90)
       include_inactive: include removed items (default true)
       product_name, release_type, release_status: filter by field
@@ -1478,10 +1515,21 @@ def api_changelog():
     release_type = request.args.get("release_type") or None
     release_status = request.args.get("release_status") or None
 
+    # Optional exact-date mode. A present-but-invalid date is a client error.
+    _date_raw = request.args.get("date")
+    on_date = None
+    if _date_raw is not None:
+        on_date = _parse_iso_date(_date_raw)
+        if on_date is None:
+            return jsonify({"error": "Invalid date; expected YYYY-MM-DD"}), 400
+
+    # Pass on_date only when set so default callers keep the window-mode
+    # signature (and the existing query plan) unchanged.
+    extra = {"on_date": on_date} if on_date is not None else {}
     items = get_changelog_with_changes(
         get_engine(), days=days, include_inactive=include_inactive,
         product_name=product_name, release_type=release_type,
-        release_status=release_status,
+        release_status=release_status, **extra,
     )
 
     # Serialize dates for JSON output. release_date is rendered as

@@ -1,22 +1,3 @@
-function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-}
-
-function parseChangeColumn(col) {
-    if (col.startsWith('Release Date ')) return { change: 'Date Changed', detail: col.slice(13).replace(' -> ', ' → ') };
-    if (col.startsWith('Release Type ')) return { change: 'Type Changed', detail: col.slice(13).replace(' -> ', ' → ') };
-    if (col.startsWith('Release Status ')) return { change: 'Status Changed', detail: col.slice(15).replace(' -> ', ' → ') };
-    if (col.startsWith('Name ')) return { change: 'Name Changed', detail: col.slice(5).replace(' -> ', ' → ') };
-    if (col.startsWith('Semester ')) return { change: 'Semester Changed', detail: col.slice(9).replace(' -> ', ' → ') };
-    if (col.startsWith('Workload ')) return { change: 'Workload Changed', detail: col.slice(9).replace(' -> ', ' → ') };
-    if (col === 'Removed from Roadmap') return { change: 'Removed', detail: 'Removed from Roadmap', removed: true };
-    if (col === 'Restored to Roadmap') return { change: 'Restored', detail: 'Restored to Roadmap' };
-    if (col === 'Added to roadmap') return { change: 'Added', detail: 'Added to roadmap' };
-    return { change: col, detail: '' };
-}
-
 class Changelog {
     constructor() {
         this.dataVersion = '';
@@ -155,59 +136,8 @@ class Changelog {
             return;
         }
 
-        let html = '';
-        for (const day of days) {
-            const dateObj = new Date(day.date);
-            const dateStr = dateObj.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-
-            html += `<div class="changelog-day">
-                <div class="changelog-day-header">
-                    <h2 class="changelog-date">${escapeHtml(dateStr)}</h2>
-                    <span class="changelog-count">· ${day.count} change${day.count !== 1 ? 's' : ''}</span>
-                </div>`;
-
-            // Group by workload
-            const workloads = {};
-            for (const item of day.items) {
-                const wl = item.product_name || 'Unknown';
-                if (!workloads[wl]) workloads[wl] = [];
-                workloads[wl].push(item);
-            }
-
-            for (const [workload, items] of Object.entries(workloads).sort((a, b) => a[0].localeCompare(b[0]))) {
-                html += `<div class="changelog-workload">
-                    <h3 class="changelog-workload-name">${escapeHtml(workload)}</h3>`;
-
-                for (const item of items) {
-                    const inactiveClass = item.active === false ? ' changelog-item-inactive' : '';
-                    const cols = item.changed_columns && item.changed_columns.length ? item.changed_columns : null;
-
-                    if (cols) {
-                        for (const col of cols) {
-                            const parsed = parseChangeColumn(col);
-                            const removedClass = parsed.removed ? ' changelog-cell-removed' : '';
-                            html += `<a href="/release/${escapeHtml(item.release_item_id)}" class="changelog-row${inactiveClass}">
-                                <div class="changelog-cell-name">${escapeHtml(item.feature_name)}</div>
-                                <div class="changelog-cell-change${removedClass}">${escapeHtml(parsed.change)}</div>
-                                <div class="changelog-cell-detail">${escapeHtml(parsed.detail)}</div>
-                            </a>`;
-                        }
-                    } else {
-                        html += `<a href="/release/${escapeHtml(item.release_item_id)}" class="changelog-row${inactiveClass}">
-                            <div class="changelog-cell-name">${escapeHtml(item.feature_name)}</div>
-                            <div class="changelog-cell-change">Updated</div>
-                            <div class="changelog-cell-detail"></div>
-                        </a>`;
-                    }
-                }
-
-                html += '</div>';
-            }
-
-            html += '</div>';
-        }
-
-        container.innerHTML = html;
+        container.innerHTML = renderChangelogDays(days, { dayLinks: true });
+        attachCopyHandlers(container);
     }
 }
 
