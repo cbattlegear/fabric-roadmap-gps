@@ -1,3 +1,14 @@
 .venv/
 __pycache__/
 .github/
+
+# Secrets: the app reads configuration from real environment variables, so a
+# local .env must never be copied into an image layer.
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+*.pyc
+.pytest_cache/
