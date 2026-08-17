@@ -3,15 +3,19 @@
 One-shot migration: rewrite legacy blog.fabric.microsoft.com URLs to their
 canonical community.fabric.microsoft.com equivalents.
 
-The Fabric Updates Blog moved to the Microsoft Fabric Community site. Old
-blog URLs (and the old RSS feed URL) redirect to the community equivalents,
-but rows already stored in ``fabric_blog_posts`` — and the ``blog_url``
-values copied into ``release_items`` — still point at the old domain.
+The Fabric Updates Blog moved to the Microsoft Fabric Community site, but rows
+already stored in ``fabric_blog_posts`` — and the ``blog_url`` values copied
+into ``release_items`` — still point at the old domain.
+
+The old URLs are supposed to redirect. They don't: the legacy domain answers
+HTTP 403 to automated clients, so redirect-following resolves nothing. Both URL
+forms are derived from the article title, so this script instead enumerates the
+community board through its public API once and matches on a normalized title
+slug, falling back to redirects for anything the index misses.
 
 For every stored URL that is not already a community URL, this script:
 
-1. fetches the old URL and follows the redirect chain to the canonical
-   community article URL;
+1. resolves the canonical community article URL (title index, then redirect);
 2. re-points ``release_items.blog_url`` from the old URL to the canonical
    URL;
 3. if a ``fabric_blog_posts`` row already exists for the canonical URL (e.g.
@@ -43,7 +47,9 @@ from typing import Dict, List, Optional, Tuple
 import pyodbc
 import requests
 
+from lib.community_index import CommunityBlogIndex
 from lib.community_urls import extract_message_id, message_id_like_pattern
+from lib.khoros_api import KhorosClient
 from lib.rate_limit import SlidingWindowLimiter
 from lib.telemetry import init_telemetry
 
@@ -141,6 +147,7 @@ class BlogUrlMigration:
         limit: Optional[int] = None,
         session: Optional[requests.Session] = None,
         rate_limiter: Optional[SlidingWindowLimiter] = None,
+        blog_index: Optional[CommunityBlogIndex] = None,
     ):
         self.connection_string = connection_string
         self.dry_run = dry_run
@@ -156,14 +163,36 @@ class BlogUrlMigration:
             )),
             window_seconds=60.0,
         )
+        # Title matching against the community API is the primary resolver:
+        # the legacy domain answers 403 to automated clients, so redirects
+        # resolve nothing and survive only as a fallback.
+        self.blog_index = blog_index or CommunityBlogIndex(KhorosClient())
+        self.resolved_by = {'index': 0, 'redirect': 0}
 
     # ------------------------------------------------------------------
     # Database helpers (each opens its own connection so a transient
     # Azure SQL failure only loses the current row, not the run)
     # ------------------------------------------------------------------
 
-    def _fetch_pending_rows(self) -> List[Tuple[int, str, bool]]:
-        """Old-domain rows still needing migration: (id, url, has_vector)."""
+    def _resolve_url(self, old_url: str, title: Optional[str] = None) -> Optional[str]:
+        """Resolve a legacy URL to its community equivalent.
+
+        Tries the community title index first and only falls back to following
+        redirects, which the legacy domain currently refuses (HTTP 403) for
+        automated clients.
+        """
+        resolved = self.blog_index.resolve(url=old_url, title=title)
+        if resolved:
+            self.resolved_by['index'] += 1
+            return resolved.rstrip('/')
+
+        resolved = fetch_final_url(self.session, old_url, limiter=self.limiter)
+        if resolved:
+            self.resolved_by['redirect'] += 1
+        return resolved
+
+    def _fetch_pending_rows(self) -> List[Tuple[int, str, bool, Optional[str]]]:
+        """Old-domain rows still needing migration: (id, url, has_vector, title)."""
         conn = None
         cursor = None
         try:
@@ -176,7 +205,8 @@ class BlogUrlMigration:
             if self.limit is not None:
                 cursor.execute(
                     "SELECT TOP (?) id, url, "
-                    "CASE WHEN blog_vector IS NOT NULL THEN 1 ELSE 0 END AS has_vector "
+                    "CASE WHEN blog_vector IS NOT NULL THEN 1 ELSE 0 END AS has_vector, "
+                    "title "
                     "FROM fabric_blog_posts "
                     "WHERE url NOT LIKE ? "
                     "ORDER BY id",
@@ -185,36 +215,40 @@ class BlogUrlMigration:
             else:
                 cursor.execute(
                     "SELECT id, url, "
-                    "CASE WHEN blog_vector IS NOT NULL THEN 1 ELSE 0 END AS has_vector "
+                    "CASE WHEN blog_vector IS NOT NULL THEN 1 ELSE 0 END AS has_vector, "
+                    "title "
                     "FROM fabric_blog_posts "
                     "WHERE url NOT LIKE ? "
                     "ORDER BY id",
                     params,
                 )
-            return [(row[0], row[1], bool(row[2])) for row in cursor.fetchall()]
+            return [
+                (row[0], row[1], bool(row[2]), row[3]) for row in cursor.fetchall()
+            ]
         finally:
             if cursor is not None:
                 cursor.close()
             if conn is not None:
                 conn.close()
 
-    def _fetch_orphaned_release_urls(self) -> List[str]:
-        """Distinct old-domain ``release_items.blog_url`` values that no
-        longer match a pending ``fabric_blog_posts`` row."""
+    def _fetch_orphaned_release_urls(self) -> List[Tuple[str, Optional[str]]]:
+        """Old-domain ``release_items.blog_url`` values that no longer match a
+        pending ``fabric_blog_posts`` row, paired with a stored blog title."""
         conn = None
         cursor = None
         try:
             conn = pyodbc.connect(self.connection_string)
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT DISTINCT blog_url FROM release_items "
+                "SELECT blog_url, MAX(blog_title) FROM release_items "
                 "WHERE blog_url IS NOT NULL "
                 "AND blog_url NOT LIKE ? "
                 "AND blog_url NOT IN (SELECT url FROM fabric_blog_posts) "
+                "GROUP BY blog_url "
                 "ORDER BY blog_url",
                 (f"{COMMUNITY_URL_PREFIX}%",),
             )
-            return [row[0] for row in cursor.fetchall() if row[0]]
+            return [(row[0], row[1]) for row in cursor.fetchall() if row[0]]
         finally:
             if cursor is not None:
                 cursor.close()
@@ -400,13 +434,9 @@ class BlogUrlMigration:
         stats['pending_rows'] = len(pending)
         logger.info(f"Found {len(pending)} blog rows with old-domain URLs")
 
-        for old_id, old_url, has_vector in pending:
+        for old_id, old_url, has_vector, title in pending:
             try:
-                final_url = fetch_final_url(
-                    self.session,
-                    old_url,
-                    limiter=self.limiter,
-                )
+                final_url = self._resolve_url(old_url, title)
             except Exception as e:
                 logger.error(f"Failed to resolve {old_url}: {e}")
                 stats['failed'] += 1
@@ -417,7 +447,7 @@ class BlogUrlMigration:
                 continue
             if not final_url.startswith(COMMUNITY_URL_PREFIX):
                 logger.warning(
-                    f"Redirect for {old_url} landed outside the community site "
+                    f"Resolved {old_url} outside the community site "
                     f"({final_url}) — skipping"
                 )
                 stats['skipped'] += 1
@@ -437,15 +467,16 @@ class BlogUrlMigration:
         # Second pass: releases whose blog_url references an old URL that has
         # no (or no longer has a) matching fabric_blog_posts row.
         orphaned = self._fetch_orphaned_release_urls()
-        for old_url in orphaned:
+        for old_url, blog_title in orphaned:
             try:
-                final_url = fetch_final_url(self.session, old_url, limiter=self.limiter)
+                final_url = self._resolve_url(old_url, blog_title)
             except Exception as e:
                 logger.error(f"Failed to resolve orphaned release URL {old_url}: {e}")
                 continue
             if final_url is None or not final_url.startswith(COMMUNITY_URL_PREFIX):
                 logger.warning(
-                    f"Skipping orphaned release URL with no community redirect: {old_url}"
+                    f"Skipping orphaned release URL that did not resolve to a "
+                    f"community post: {old_url}"
                 )
                 continue
             try:
@@ -463,13 +494,18 @@ class BlogUrlMigration:
         logger.info("Migration complete!")
         for key, value in stats.items():
             logger.info(f"  {key}: {value}")
+        logger.info(
+            f"  resolved via title index: {self.resolved_by['index']}, "
+            f"via redirect: {self.resolved_by['redirect']}"
+        )
 
         if stats['skipped'] and not (stats['updated'] or stats['deleted']):
             logger.warning(
-                "Every row was skipped because no redirect could be resolved. "
-                "The legacy blog domain may be unreachable from this host, or "
-                "the community site may be rejecting automated requests — "
-                "nothing was migrated, so it is safe to re-run once resolved."
+                "Every row was skipped because no URL could be resolved. The "
+                "community API may be unreachable from this host (the legacy "
+                "domain refuses automated requests, so the redirect fallback "
+                "rarely helps) — nothing was migrated, so it is safe to re-run "
+                "once resolved."
             )
         return stats
 

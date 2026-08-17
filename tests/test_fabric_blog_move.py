@@ -330,11 +330,22 @@ def test_fetch_final_url_429_retries_then_succeeds(migrate_module, monkeypatch):
     assert session.get.call_count == 2
 
 
-def _migration(migrate_module, *, dry_run: bool = False) -> "migrate_module.BlogUrlMigration":
+def _migration(
+    migrate_module,
+    *,
+    dry_run: bool = False,
+    blog_index=None,
+) -> "migrate_module.BlogUrlMigration":
+    if blog_index is None:
+        # Resolve nothing by default so these tests exercise the redirect
+        # fallback; tests that care about the index pass their own.
+        blog_index = MagicMock()
+        blog_index.resolve.return_value = None
     return migrate_module.BlogUrlMigration(
         "Driver={Test};Server=test;",
         dry_run=dry_run,
         session=MagicMock(),
+        blog_index=blog_index,
     )
 
 
@@ -382,10 +393,16 @@ def test_sql_has_no_boolean_predicate_in_select_list(migrate_module):
 
 def test_fetch_pending_rows_binds_limit_and_skips_community_urls(migrate_module):
     migration = migrate_module.BlogUrlMigration(
-        "Driver={Test};Server=test;", limit=5, session=MagicMock()
+        "Driver={Test};Server=test;",
+        limit=5,
+        session=MagicMock(),
+        blog_index=MagicMock(),
     )
     mock_cursor = MagicMock()
-    mock_cursor.fetchall.return_value = [(1, OLD_URL, 1), (2, OLD_URL + "b", 0)]
+    mock_cursor.fetchall.return_value = [
+        (1, OLD_URL, 1, "First post"),
+        (2, OLD_URL + "b", 0, "Second post"),
+    ]
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
 
@@ -395,8 +412,12 @@ def test_fetch_pending_rows_binds_limit_and_skips_community_urls(migrate_module)
     sql, params = mock_cursor.execute.call_args.args
     assert "SELECT TOP (?)" in sql
     assert params == (5, "https://community.fabric.microsoft.com%")
-    # has_vector is normalized to a bool for the caller.
-    assert rows == [(1, OLD_URL, True), (2, OLD_URL + "b", False)]
+    # has_vector is normalized to a bool for the caller; the title rides along
+    # so the community title index has something to match on.
+    assert rows == [
+        (1, OLD_URL, True, "First post"),
+        (2, OLD_URL + "b", False, "Second post"),
+    ]
 
 
 def test_migrate_row_updates_in_place_when_no_survivor(migrate_module):
@@ -519,7 +540,7 @@ def test_migrate_row_dry_run_performs_no_writes(migrate_module):
 
 def test_run_skips_redirect_landing_outside_community(migrate_module):
     migration = _migration(migrate_module)
-    migration._fetch_pending_rows = MagicMock(return_value=[(7, OLD_URL, True)])
+    migration._fetch_pending_rows = MagicMock(return_value=[(7, OLD_URL, True, "A post")])
     migration._fetch_orphaned_release_urls = MagicMock(return_value=[])
     migration._migrate_row = MagicMock(return_value="updated")
 
@@ -535,8 +556,10 @@ def test_run_skips_redirect_landing_outside_community(migrate_module):
 
 def test_run_migrates_rows_and_orphaned_release_urls(migrate_module):
     migration = _migration(migrate_module)
-    migration._fetch_pending_rows = MagicMock(return_value=[(7, OLD_URL, True)])
-    migration._fetch_orphaned_release_urls = MagicMock(return_value=[OLD_URL + "orphan/"])
+    migration._fetch_pending_rows = MagicMock(return_value=[(7, OLD_URL, True, "A post")])
+    migration._fetch_orphaned_release_urls = MagicMock(
+        return_value=[(OLD_URL + "orphan/", "Orphan post")]
+    )
     migration._migrate_row = MagicMock(return_value="updated")
     migration._repoint_release_url = MagicMock(return_value=3)
 

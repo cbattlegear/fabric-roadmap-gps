@@ -34,6 +34,13 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_API_BASE = 'https://community.fabric.microsoft.com/api/2.0'
 
+# The Fabric Updates Blog board. Articles live here; `depth = 0` excludes the
+# `blog_reply_message` comments that otherwise come back mixed in.
+DEFAULT_BOARD_ID = 'fbc_fabricupdatesblogs'
+
+# Khoros caps a single LiQL page at 1000 rows.
+_MAX_PAGE_SIZE = 1000
+
 # Khoros message ids are numeric. Anything else is rejected rather than
 # escaped: these values are interpolated into LiQL, so a strict allow-list is
 # the safe way to keep a crafted id from altering the query.
@@ -166,3 +173,55 @@ class KhorosClient:
             if name and name not in names:
                 names.append(name)
         return names
+
+    def fetch_board_messages(
+        self,
+        board_id: Optional[str] = None,
+        *,
+        page_size: int = _MAX_PAGE_SIZE,
+        max_messages: int = 20000,
+    ) -> Optional[List[Dict]]:
+        """Enumerate every article on a board.
+
+        Pages through the board with LIMIT/OFFSET and returns one dict per
+        article with ``id``, ``subject`` and ``url``. Returns ``None`` if the
+        very first page fails, so callers can tell "board unreadable" apart
+        from "board is empty"; a mid-run failure returns what was collected so
+        far rather than discarding it.
+        """
+        board = board_id or os.getenv(
+            'FABRIC_COMMUNITY_BOARD_ID', DEFAULT_BOARD_ID
+        )
+        page_size = max(1, min(page_size, _MAX_PAGE_SIZE))
+
+        messages: List[Dict] = []
+        offset = 0
+        while len(messages) < max_messages:
+            items = self._liql(
+                f"SELECT id, subject, view_href FROM messages "
+                f"WHERE board.id = '{board}' AND depth = 0 "
+                f"ORDER BY post_time DESC "
+                f"LIMIT {page_size} OFFSET {offset}"
+            )
+            if items is None:
+                if not messages:
+                    return None
+                logger.warning(
+                    f"Board enumeration failed at offset {offset}; "
+                    f"continuing with the {len(messages)} message(s) already read"
+                )
+                break
+
+            messages.extend(
+                {
+                    'id': item.get('id'),
+                    'subject': item.get('subject'),
+                    'url': item.get('view_href'),
+                }
+                for item in items
+            )
+            if len(items) < page_size:
+                break
+            offset += page_size
+
+        return messages
