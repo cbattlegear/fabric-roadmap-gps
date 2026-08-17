@@ -43,6 +43,7 @@ from typing import Dict, List, Optional, Tuple
 import pyodbc
 import requests
 
+from lib.community_urls import extract_message_id, message_id_like_pattern
 from lib.rate_limit import SlidingWindowLimiter
 from lib.telemetry import init_telemetry
 
@@ -231,14 +232,31 @@ class BlogUrlMigration:
             conn = pyodbc.connect(self.connection_string)
             cursor = conn.cursor()
 
-            # Does the canonical URL already have a row (e.g. from the new RSS feed)?
-            cursor.execute(
-                "SELECT id, CASE WHEN blog_vector IS NULL THEN 1 ELSE 0 END "
-                "AS vector_is_null "
-                "FROM fabric_blog_posts WHERE url = ?",
-                (final_url,),
-            )
+            # Does this post already have a row? The scraper stores the RSS
+            # permalink while a redirect resolves to the canonical form, so
+            # compare community message ids rather than URL strings —
+            # otherwise the two forms survive as duplicate rows.
+            message_id = extract_message_id(final_url)
+            if message_id:
+                cursor.execute(
+                    "SELECT TOP 1 id, url, "
+                    "CASE WHEN blog_vector IS NULL THEN 1 ELSE 0 END AS vector_is_null "
+                    "FROM fabric_blog_posts WHERE url LIKE ? AND id <> ? ORDER BY id",
+                    (message_id_like_pattern(message_id), old_id),
+                )
+            else:
+                cursor.execute(
+                    "SELECT id, url, CASE WHEN blog_vector IS NULL THEN 1 ELSE 0 END "
+                    "AS vector_is_null "
+                    "FROM fabric_blog_posts WHERE url = ? AND id <> ?",
+                    (final_url, old_id),
+                )
             survivor = cursor.fetchone()
+
+            # Releases should link to the URL a row actually holds: the
+            # surviving row's own URL when we are merging into one, otherwise
+            # the resolved URL this row is about to take.
+            target_url = survivor[1] if survivor is not None else final_url
 
             # Re-point any releases that reference the old URL. Done before
             # the row change so releases never point at a URL that disappears.
@@ -251,12 +269,12 @@ class BlogUrlMigration:
             else:
                 cursor.execute(
                     "UPDATE release_items SET blog_url = ? WHERE blog_url = ?",
-                    (final_url, old_url),
+                    (target_url, old_url),
                 )
                 repointed = cursor.rowcount
 
             if survivor is not None:
-                survivor_id, survivor_vector_null = survivor[0], bool(survivor[1])
+                survivor_id, survivor_vector_null = survivor[0], bool(survivor[2])
                 if not self.dry_run:
                     # The legacy row is usually richer than a survivor created
                     # from the new RSS feed (which carries no categories and
@@ -292,7 +310,7 @@ class BlogUrlMigration:
                 conn.commit()
                 logger.info(
                     f"[{'DRY-RUN ' if self.dry_run else ''}DELETE] row {old_id}: "
-                    f"{old_url} -> duplicate of {survivor_id} ({final_url}), "
+                    f"{old_url} -> duplicate of {survivor_id} ({target_url}), "
                     f"{repointed} release(s) re-pointed"
                 )
                 return 'deleted'
@@ -445,6 +463,14 @@ class BlogUrlMigration:
         logger.info("Migration complete!")
         for key, value in stats.items():
             logger.info(f"  {key}: {value}")
+
+        if stats['skipped'] and not (stats['updated'] or stats['deleted']):
+            logger.warning(
+                "Every row was skipped because no redirect could be resolved. "
+                "The legacy blog domain may be unreachable from this host, or "
+                "the community site may be rejecting automated requests — "
+                "nothing was migrated, so it is safe to re-run once resolved."
+            )
         return stats
 
 

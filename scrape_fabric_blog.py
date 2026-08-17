@@ -27,6 +27,7 @@ from urllib.parse import urljoin
 import xml.etree.ElementTree as ET
 import html
 
+from lib.community_urls import extract_message_id, message_id_like_pattern
 from lib.db_retry import retry_on_transient_errors
 from lib.rate_limit import SlidingWindowLimiter
 from lib.telemetry import init_telemetry
@@ -87,6 +88,11 @@ def _strip_html_to_text(html_text: Optional[str]) -> str:
         return ''
     text = BeautifulSoup(html_text, 'html.parser').get_text(' ')
     return ' '.join(text.split())
+
+
+# Community article URLs end with the numeric message id in both of the
+# forms the site serves, so identity comes from that id rather than the URL
+# string — see lib/community_urls.py.
 
 
 # Configure logging
@@ -340,6 +346,12 @@ class FabricBlogScraper:
         """
         Insert article into database or update if URL already exists
 
+        Values already stored are only replaced when the incoming record
+        actually carries a value. The community RSS feed supplies no
+        categories and no view count, so a plain assignment would blank out
+        details gathered from the article page (or preserved by the URL
+        migration) on the next delta load.
+
         Args:
             cursor: Database cursor
             article: Dictionary containing article data
@@ -351,11 +363,11 @@ class FabricBlogScraper:
         WHEN MATCHED THEN
             UPDATE SET 
                 title = ?,
-                categories = ?,
-                post_date = ?,
-                author = ?,
-                views = ?,
-                summary = ?,
+                categories = COALESCE(?, target.categories),
+                post_date = COALESCE(?, target.post_date),
+                author = COALESCE(?, target.author),
+                views = COALESCE(?, target.views),
+                summary = COALESCE(?, target.summary),
                 updated_at = GETUTCDATE()
         WHEN NOT MATCHED THEN
             INSERT (title, url, categories, post_date, author, views, summary)
@@ -433,6 +445,40 @@ class FabricBlogScraper:
                 except Exception:  # noqa: BLE001 — best-effort cleanup
                     pass
     
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+    def find_article_url_by_message_id(self, message_id: str) -> Optional[str]:
+        """Return the stored URL of the article with this community message id.
+
+        The same post is reachable under two URL forms (the RSS permalink
+        ``.../<slug>/ba-p/<id>`` and the canonical ``.../<slug>/<id>``), and
+        rows migrated off the legacy domain may hold either. Matching on the
+        trailing id recognises the post whichever form was stored, which keeps
+        the RSS delta load from inserting a second row for it.
+        """
+        conn = None
+        cursor = None
+        try:
+            conn = pyodbc.connect(self.connection_string)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT TOP 1 url FROM fabric_blog_posts "
+                "WHERE url LIKE ? ORDER BY id",
+                (message_id_like_pattern(message_id),),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
+
     def scrape_all_pages(self, start_page: int = 1, end_page: int = 169):
         """
         Legacy full-load mode — no longer supported.
@@ -551,17 +597,18 @@ class FabricBlogScraper:
         
         return articles
     
-    def fetch_article_details(self, url: str) -> Dict:
-        """
-        Fetch individual article page to extract additional details
+    def fetch_article_details(self, url: str) -> Optional[Dict]:
+        """Best-effort enrichment for a single article page.
 
-        Args:
-            url: Article URL to fetch
+        The community RSS feed carries no categories and only a username for
+        the author, so we try the article page for better values. The page is
+        behind bot protection that may reject automated requests, so this is
+        strictly optional: any failure returns ``None`` and the article is
+        still ingested from the feed alone.
 
         Returns:
-            Dictionary containing categories, author, and ``final_url`` (the
-            URL after redirects — the community site redirects feed links to
-            the canonical article URL), or None if fetch fails
+            Dictionary with ``categories`` and ``author`` (either may be
+            ``None``), or ``None`` if the page could not be fetched or parsed.
         """
         try:
             logger.info(f"Fetching article details from: {url}")
@@ -570,40 +617,75 @@ class FabricBlogScraper:
             soup = BeautifulSoup(response.content, 'html.parser')
 
             details = {
-                'categories': None,
-                'author': None,
-                'final_url': response.url.rstrip('/') if getattr(response, 'url', None) else url
+                'categories': self._extract_categories(soup),
+                'author': self._extract_author(soup),
             }
-            
-            # Extract categories
-            categories = []
-            category_links = soup.find_all('a', class_='blog-post-tag')
-            for cat_link in category_links:
-                category_text = cat_link.get_text(strip=True)
-                if category_text:
-                    categories.append(category_text)
-            details['categories'] = ', '.join(categories) if categories else None
-            
-            # Extract author - look in post-bio section
-            post_bio = soup.find('div', class_='post-bio')
-            if post_bio:
-                # Find the author link (usually has pattern "post by [Author Name]")
-                author_span = post_bio.find('span', class_='font-semibold')
-                if author_span:
-                    author_link = author_span.find('a')
-                    if author_link:
-                        details['author'] = html.unescape(author_link.get_text(strip=True))
-            
-            logger.info(f"Extracted details - Categories: {details['categories']}, Author: {details['author']}")
 
+            logger.info(
+                f"Extracted details - Categories: {details['categories']}, "
+                f"Author: {details['author']}"
+            )
             return details
-        
+
         except requests.RequestException as e:
-            logger.error(f"Failed to fetch article details from {url}: {e}")
+            # Expected when the community site's bot protection rejects us —
+            # the article still gets stored with its feed metadata.
+            logger.warning(f"Could not fetch article details from {url}: {e}")
             return None
         except Exception as e:
-            logger.error(f"Error extracting article details from {url}: {e}")
+            logger.warning(f"Error extracting article details from {url}: {e}")
             return None
+
+    @staticmethod
+    def _extract_categories(soup: BeautifulSoup) -> Optional[str]:
+        """Pull post labels/tags out of an article page.
+
+        Tries standard article metadata first (``article:tag`` / ``keywords``)
+        and falls back to the community platform's label links. Returns
+        ``None`` when the page exposes nothing usable.
+        """
+        categories: List[str] = []
+
+        for meta in soup.find_all('meta', attrs={'property': 'article:tag'}):
+            value = (meta.get('content') or '').strip()
+            if value:
+                categories.append(value)
+
+        if not categories:
+            keywords = soup.find('meta', attrs={'name': 'keywords'})
+            if keywords and keywords.get('content'):
+                categories = [
+                    part.strip()
+                    for part in keywords['content'].split(',')
+                    if part.strip()
+                ]
+
+        if not categories:
+            # Community (Khoros) label links, e.g. /t5/.../label-name/label-id/...
+            for link in soup.select('a[href*="label-id/"], .lia-message-labels a'):
+                value = link.get_text(strip=True)
+                if value:
+                    categories.append(value)
+
+        # Preserve order while dropping duplicates.
+        unique = list(dict.fromkeys(categories))
+        return ', '.join(unique) if unique else None
+
+    @staticmethod
+    def _extract_author(soup: BeautifulSoup) -> Optional[str]:
+        """Pull the author's display name out of an article page."""
+        for attrs in ({'name': 'author'}, {'property': 'article:author'}):
+            meta = soup.find('meta', attrs=attrs)
+            if meta and (meta.get('content') or '').strip():
+                return html.unescape(meta['content'].strip())
+
+        author_link = soup.select_one('.lia-user-name-link, .UserName')
+        if author_link:
+            value = author_link.get_text(strip=True)
+            if value:
+                return html.unescape(value)
+
+        return None
     
     def scrape_from_rss(self):
         """
@@ -622,6 +704,7 @@ class FabricBlogScraper:
 
             new_count = 0
             updated_count = 0
+            enrichment_failures = 0
 
             # Insert articles into database. Each article gets its own
             # connection + commit + retry, so a transient SQL error or a
@@ -629,29 +712,41 @@ class FabricBlogScraper:
             for article in articles:
                 try:
                     trimmed_url = article['url'].rstrip('/')
-                    exists = self.article_exists(trimmed_url)
 
-                    # For new articles, fetch additional details from the article page.
-                    # The fetch also resolves the community site's redirect chain
-                    # (feed link -> canonical article URL), which is what we store.
-                    if not exists:
+                    # Identify the post by its community message id so we
+                    # recognise it whichever URL form we already store (the
+                    # feed permalink, or the canonical form a migrated row
+                    # may hold). Falls back to exact-URL matching when the
+                    # URL carries no id.
+                    message_id = extract_message_id(trimmed_url)
+                    stored_url = None
+                    if message_id:
+                        stored_url = self.find_article_url_by_message_id(message_id)
+                    if stored_url is None and self.article_exists(trimmed_url):
+                        stored_url = trimmed_url
+
+                    if stored_url is not None:
+                        # Reuse the URL already on the row so the MERGE updates
+                        # it instead of inserting a duplicate under a second
+                        # URL form — and so stored links stay stable.
+                        article['url'] = stored_url
+                        exists = True
+                    else:
+                        exists = False
                         logger.info(f"New article found: {article['title']}")
-                        article_details = self.fetch_article_details(article['url'])
+                        # Optional enrichment only: the feed has no categories
+                        # and only a username for the author. A failure here
+                        # must not stop the article being ingested, and never
+                        # affects the URL we store.
+                        article_details = self.fetch_article_details(trimmed_url)
 
                         if article_details:
-                            # Canonicalize: store the final (post-redirect) URL so
-                            # each article has exactly one row and links in the
-                            # UI/API don't bounce through redirects.
-                            final_url = (article_details.get('final_url') or trimmed_url).rstrip('/')
-                            if final_url != trimmed_url:
-                                article['url'] = final_url
-                                exists = self.article_exists(final_url)
-
-                            # Update article with fetched details if not already present in RSS
                             if not article.get('categories') and article_details.get('categories'):
                                 article['categories'] = article_details['categories']
                             if not article.get('author') and article_details.get('author'):
                                 article['author'] = article_details['author']
+                        else:
+                            enrichment_failures += 1
 
                     self.upsert_article_with_retry(article)
 
@@ -669,6 +764,12 @@ class FabricBlogScraper:
             logger.info(f"New articles: {new_count}")
             logger.info(f"Updated articles: {updated_count}")
             logger.info(f"Total processed: {len(articles)}")
+            if enrichment_failures:
+                logger.warning(
+                    f"{enrichment_failures} new article(s) stored without page "
+                    f"enrichment (categories/author may be missing) — the "
+                    f"community site may be rejecting automated page requests"
+                )
 
         except Exception as e:
             logger.error(f"Fatal error during RSS scraping: {e}")
