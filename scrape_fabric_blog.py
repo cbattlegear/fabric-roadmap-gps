@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
 Fabric Blog Scraper
-Scrapes blog posts from https://blog.fabric.microsoft.com and stores them in SQL Server
-Supports two modes:
-- Full load: Scrapes all pages from the blog
-- Delta load: Checks RSS feed for new articles only
+Scrapes blog posts from the Microsoft Fabric Community "Fabric Updates Blog"
+(https://community.fabric.microsoft.com) and stores them in SQL Server.
+
+The blog moved from https://blog.fabric.microsoft.com to the community site;
+old blog URLs (and the old RSS feed URL) redirect to the community equivalents.
+
+Supports delta load: Checks the community RSS feed for new articles only.
+The legacy full-load (page scan) mode targeted the old WordPress site and is
+no longer supported.
 """
 
 import os
@@ -22,7 +27,9 @@ from urllib.parse import urljoin
 import xml.etree.ElementTree as ET
 import html
 
+from lib.community_urls import extract_message_id, message_id_like_pattern
 from lib.db_retry import retry_on_transient_errors
+from lib.khoros_api import KhorosClient
 from lib.rate_limit import SlidingWindowLimiter
 from lib.telemetry import init_telemetry
 
@@ -70,6 +77,25 @@ def _parse_rss_pub_date(date_str: Optional[str]) -> Optional[datetime]:
     return dt
 
 
+def _strip_html_to_text(html_text: Optional[str]) -> str:
+    """Convert an HTML fragment (e.g. an RSS ``<description>``) to plain text.
+
+    The community RSS feed wraps descriptions in full HTML markup (``<P>``,
+    ``<SPAN>``, ...). Storing raw markup would pollute summaries and
+    embeddings, so strip the tags, unescape entities and collapse runs of
+    whitespace into single spaces.
+    """
+    if not html_text:
+        return ''
+    text = BeautifulSoup(html_text, 'html.parser').get_text(' ')
+    return ' '.join(text.split())
+
+
+# Community article URLs end with the numeric message id in both of the
+# forms the site serves, so identity comes from that id rather than the URL
+# string — see lib/community_urls.py.
+
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -84,9 +110,26 @@ init_telemetry("fabric-gps-blog-scraper")
 class FabricBlogScraper:
     """Scrapes Microsoft Fabric blog posts and stores them in SQL Server"""
     
-    def __init__(self, rate_limiter: Optional[SlidingWindowLimiter] = None):
-        self.base_url = "https://blog.fabric.microsoft.com/en-US/blog"
-        self.rss_url = "https://blog.fabric.microsoft.com/en-us/blog/feed/"
+    # The Fabric Updates Blog now lives on the Microsoft Fabric Community
+    # site. The old blog.fabric.microsoft.com URLs (including the old RSS
+    # feed path) redirect here, so we point straight at the community
+    # equivalents to avoid the redirect hop.
+    COMMUNITY_BOARD_URL = (
+        "https://community.fabric.microsoft.com"
+        "/t5/Fabric-Updates-Blog/bg-p/fbc_fabricupdatesblogs"
+    )
+    COMMUNITY_RSS_URL = (
+        "https://community.fabric.microsoft.com/t5/s/rss/board"
+        "?board.id=fbc_fabricupdatesblogs"
+    )
+
+    def __init__(
+        self,
+        rate_limiter: Optional[SlidingWindowLimiter] = None,
+        khoros_client: Optional[KhorosClient] = None,
+    ):
+        self.base_url = self.COMMUNITY_BOARD_URL
+        self.rss_url = self.COMMUNITY_RSS_URL
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -109,6 +152,11 @@ class FabricBlogScraper:
         self.connection_string = os.getenv('SQLSERVER_CONN')
         if not self.connection_string:
             raise ValueError("SQLSERVER_CONN environment variable not set")
+
+        # Content comes from the community API rather than the rendered page
+        # — see lib/khoros_api.py for why. Shares this scraper's rate limiter
+        # so all outbound traffic stays under one budget.
+        self.khoros = khoros_client or KhorosClient(rate_limiter=self.rate_limiter)
 
     def _rate_limited_get(self, url: str, *, timeout: int = 30) -> requests.Response:
         """GET ``url`` through the rate limiter with 429 exponential backoff.
@@ -308,6 +356,12 @@ class FabricBlogScraper:
         """
         Insert article into database or update if URL already exists
 
+        Values already stored are only replaced when the incoming record
+        actually carries a value. The community RSS feed supplies no
+        categories and no view count, so a plain assignment would blank out
+        details gathered from the article page (or preserved by the URL
+        migration) on the next delta load.
+
         Args:
             cursor: Database cursor
             article: Dictionary containing article data
@@ -319,17 +373,31 @@ class FabricBlogScraper:
         WHEN MATCHED THEN
             UPDATE SET 
                 title = ?,
-                categories = ?,
-                post_date = ?,
-                author = ?,
-                views = ?,
-                summary = ?,
+                categories = COALESCE(?, target.categories),
+                post_date = COALESCE(?, target.post_date),
+                author = COALESCE(?, target.author),
+                views = COALESCE(?, target.views),
+                summary = COALESCE(?, target.summary),
                 updated_at = GETUTCDATE()
         WHEN NOT MATCHED THEN
             INSERT (title, url, categories, post_date, author, views, summary)
             VALUES (?, ?, ?, ?, ?, ?, ?);
         """
         
+        # A changed body invalidates the stored embedding. Done as its own
+        # statement before the MERGE (while `summary` still holds the previous
+        # value) and as a plain NULL assignment, because the VECTOR type has
+        # limited expression support and won't take a CASE expression.
+        # The parameter is CAST because pyodbc binds long strings as `ntext`,
+        # which SQL Server refuses to compare against `nvarchar(max)`.
+        if article.get('summary'):
+            cursor.execute(
+                "UPDATE fabric_blog_posts SET blog_vector = NULL "
+                "WHERE url = ? AND blog_vector IS NOT NULL "
+                "AND (summary IS NULL OR summary <> CAST(? AS NVARCHAR(MAX)))",
+                (article['url'].rstrip('/'), article['summary']),
+            )
+
         cursor.execute(upsert_sql, (
             article['url'].rstrip('/'),  # for USING clause
             article['title'],
@@ -401,54 +469,57 @@ class FabricBlogScraper:
                 except Exception:  # noqa: BLE001 — best-effort cleanup
                     pass
     
+    @retry_on_transient_errors(max_attempts=3, initial_delay=0.5, backoff=2.0, max_delay=10.0)
+    def find_article_url_by_message_id(self, message_id: str) -> Optional[str]:
+        """Return the stored URL of the article with this community message id.
+
+        The same post is reachable under two URL forms (the RSS permalink
+        ``.../<slug>/ba-p/<id>`` and the canonical ``.../<slug>/<id>``), and
+        rows migrated off the legacy domain may hold either. Matching on the
+        trailing id recognises the post whichever form was stored, which keeps
+        the RSS delta load from inserting a second row for it.
+        """
+        conn = None
+        cursor = None
+        try:
+            conn = pyodbc.connect(self.connection_string)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT TOP 1 url FROM fabric_blog_posts "
+                "WHERE url LIKE ? ORDER BY id",
+                (message_id_like_pattern(message_id),),
+            )
+            row = cursor.fetchone()
+            return row[0] if row else None
+        finally:
+            if cursor is not None:
+                try:
+                    cursor.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:  # noqa: BLE001 — best-effort cleanup
+                    pass
+
     def scrape_all_pages(self, start_page: int = 1, end_page: int = 169):
         """
-        Scrape all blog pages and store in database
+        Legacy full-load mode — no longer supported.
 
-        Args:
-            start_page: First page to scrape (default: 1)
-            end_page: Last page to scrape (default: 169)
+        The blog moved from blog.fabric.microsoft.com (WordPress) to the
+        Microsoft Fabric Community site, where the article list is rendered
+        client-side and the old ``article.post`` selectors / ``?page=N``
+        pagination no longer apply. The historical full load already ran
+        against the old site; new articles arrive via the RSS delta load.
         """
-        try:
-            total_articles = 0
-            failed_pages = []
+        raise RuntimeError(
+            "Full-load scraping is no longer supported: the Fabric blog moved "
+            "to https://community.fabric.microsoft.com (client-rendered board). "
+            "Historical posts were already loaded from the old site; use "
+            "`python scrape_fabric_blog.py --rss` for the delta load."
+        )
 
-            for page_num in range(start_page, end_page + 1):
-                logger.info(f"Processing page {page_num}/{end_page}")
-
-                soup = self.fetch_page(page_num)
-                if not soup:
-                    failed_pages.append(page_num)
-                    continue
-
-                articles = self.extract_articles(soup)
-                logger.info(f"Found {len(articles)} articles on page {page_num}")
-
-                # Insert articles into database (per-article connection + retry).
-                page_success = 0
-                for article in articles:
-                    try:
-                        self.upsert_article_with_retry(article)
-                        total_articles += 1
-                        page_success += 1
-                    except Exception as e:
-                        logger.error(f"Failed to insert article '{article.get('title')}': {e}")
-
-                logger.info(f"Committed {page_success}/{len(articles)} articles from page {page_num}")
-
-            # Final summary
-            logger.info("=" * 60)
-            logger.info(f"Scraping complete!")
-            logger.info(f"Total articles processed: {total_articles}")
-            logger.info(f"Pages scraped: {end_page - start_page + 1 - len(failed_pages)}/{end_page - start_page + 1}")
-
-            if failed_pages:
-                logger.warning(f"Failed pages: {failed_pages}")
-
-        except Exception as e:
-            logger.error(f"Fatal error during scraping: {e}")
-            raise
-    
     def fetch_rss_feed(self) -> Optional[ET.Element]:
         """
         Fetch and parse the RSS feed
@@ -505,9 +576,10 @@ class FabricBlogScraper:
                     logger.warning("Skipping item with missing title or URL")
                     continue
                 
-                # Extract description/summary
+                # Extract description/summary (strip HTML — the community
+                # feed embeds full markup in <description>)
                 description_elem = item.find('description')
-                summary = html.unescape(description_elem.text) if description_elem is not None and description_elem.text else None
+                summary = _strip_html_to_text(description_elem.text) or None if description_elem is not None and description_elem.text else None
                 
                 # Extract publish date
                 pub_date_elem = item.find('pubDate')
@@ -549,55 +621,55 @@ class FabricBlogScraper:
         
         return articles
     
-    def fetch_article_details(self, url: str) -> Dict:
-        """
-        Fetch individual article page to extract additional details
-        
-        Args:
-            url: Article URL to fetch
-            
-        Returns:
-            Dictionary containing categories and author, or None if fetch fails
+    # Categories column is nvarchar(500); keep joined labels inside it.
+    MAX_CATEGORIES_LEN = 500
+
+    def fetch_article_details(self, message_id: str) -> Optional[Dict]:
+        """Fetch an article's full content and metadata from the community API.
+
+        The RSS feed only carries a teaser (a few hundred characters, and
+        empty for some posts), no categories and no view counts. The API
+        returns the whole post body plus labels, which is what makes the
+        stored summary worth embedding.
+
+        Returns a dict with ``summary``, ``categories``, ``author`` and
+        ``views`` — any of which may be ``None`` — or ``None`` if the article
+        could not be read at all. Callers must treat this as optional: a
+        failure here must never stop the article being ingested from the feed.
         """
         try:
-            logger.info(f"Fetching article details from: {url}")
-            response = self._rate_limited_get(url)
+            article = self.khoros.fetch_article(message_id)
+            if article is None:
+                logger.warning(
+                    f"Community API returned no content for message {message_id}"
+                )
+                return None
 
-            soup = BeautifulSoup(response.content, 'html.parser')
-            
+            # Labels are a separate lookup. A failure there is not a reason to
+            # discard the body we just fetched, so `None` simply means
+            # "unknown" and leaves any stored categories untouched.
+            labels = self.khoros.fetch_labels(message_id)
+            categories = None
+            if labels:
+                categories = ', '.join(labels)[:self.MAX_CATEGORIES_LEN]
+
+            body_text = _strip_html_to_text(article.get('body'))
             details = {
-                'categories': None,
-                'author': None
+                'summary': body_text or None,
+                'categories': categories,
+                'author': article.get('author'),
+                'views': article.get('views'),
             }
-            
-            # Extract categories
-            categories = []
-            category_links = soup.find_all('a', class_='blog-post-tag')
-            for cat_link in category_links:
-                category_text = cat_link.get_text(strip=True)
-                if category_text:
-                    categories.append(category_text)
-            details['categories'] = ', '.join(categories) if categories else None
-            
-            # Extract author - look in post-bio section
-            post_bio = soup.find('div', class_='post-bio')
-            if post_bio:
-                # Find the author link (usually has pattern "post by [Author Name]")
-                author_span = post_bio.find('span', class_='font-semibold')
-                if author_span:
-                    author_link = author_span.find('a')
-                    if author_link:
-                        details['author'] = html.unescape(author_link.get_text(strip=True))
-            
-            logger.info(f"Extracted details - Categories: {details['categories']}, Author: {details['author']}")
-
+            logger.info(
+                f"Fetched article {message_id} from API - "
+                f"{len(body_text)} chars, categories: {categories}"
+            )
             return details
-        
-        except requests.RequestException as e:
-            logger.error(f"Failed to fetch article details from {url}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Error extracting article details from {url}: {e}")
+
+        except Exception as e:  # noqa: BLE001 — enrichment is best-effort
+            logger.warning(
+                f"Could not fetch article {message_id} from community API: {e}"
+            )
             return None
     
     def scrape_from_rss(self):
@@ -617,6 +689,7 @@ class FabricBlogScraper:
 
             new_count = 0
             updated_count = 0
+            enrichment_failures = 0
 
             # Insert articles into database. Each article gets its own
             # connection + commit + retry, so a transient SQL error or a
@@ -624,19 +697,54 @@ class FabricBlogScraper:
             for article in articles:
                 try:
                     trimmed_url = article['url'].rstrip('/')
-                    exists = self.article_exists(trimmed_url)
 
-                    # For new articles, fetch additional details from the article page
-                    if not exists:
+                    # Identify the post by its community message id so we
+                    # recognise it whichever URL form we already store (the
+                    # feed permalink, or the canonical form a migrated row
+                    # may hold). Falls back to exact-URL matching when the
+                    # URL carries no id.
+                    message_id = extract_message_id(trimmed_url)
+                    stored_url = None
+                    if message_id:
+                        stored_url = self.find_article_url_by_message_id(message_id)
+                    if stored_url is None and self.article_exists(trimmed_url):
+                        stored_url = trimmed_url
+
+                    if stored_url is not None:
+                        # Reuse the URL already on the row so the MERGE updates
+                        # it instead of inserting a duplicate under a second
+                        # URL form — and so stored links stay stable.
+                        article['url'] = stored_url
+                        exists = True
+                    else:
+                        exists = False
                         logger.info(f"New article found: {article['title']}")
-                        article_details = self.fetch_article_details(article['url'])
 
-                        if article_details:
-                            # Update article with fetched details if not already present in RSS
-                            if not article.get('categories') and article_details.get('categories'):
-                                article['categories'] = article_details['categories']
-                            if not article.get('author') and article_details.get('author'):
-                                article['author'] = article_details['author']
+                    # Pull the real content from the community API. This runs
+                    # for known articles too, so edits to a post are picked up
+                    # and so the stored summary is the full body rather than
+                    # the feed's teaser. Failure is not fatal — the article is
+                    # still ingested from the feed alone.
+                    article_details = (
+                        self.fetch_article_details(message_id) if message_id else None
+                    )
+
+                    if article_details:
+                        if article_details.get('summary'):
+                            article['summary'] = article_details['summary']
+                        if article_details.get('categories'):
+                            article['categories'] = article_details['categories']
+                        if article_details.get('author'):
+                            article['author'] = article_details['author']
+                        if article_details.get('views') is not None:
+                            article['views'] = article_details['views']
+                    else:
+                        enrichment_failures += 1
+                        if exists:
+                            # Never downgrade a stored full body back to the
+                            # feed's teaser. Sending NULL leaves the stored
+                            # summary in place (the upsert COALESCEs it).
+                            article['summary'] = None
 
                     self.upsert_article_with_retry(article)
 
@@ -654,6 +762,12 @@ class FabricBlogScraper:
             logger.info(f"New articles: {new_count}")
             logger.info(f"Updated articles: {updated_count}")
             logger.info(f"Total processed: {len(articles)}")
+            if enrichment_failures:
+                logger.warning(
+                    f"{enrichment_failures} article(s) stored from feed data "
+                    f"only (full body/categories unavailable) — the community "
+                    f"API may be unreachable"
+                )
 
         except Exception as e:
             logger.error(f"Fatal error during RSS scraping: {e}")
@@ -663,39 +777,38 @@ class FabricBlogScraper:
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description='Fabric Blog Scraper - Scrape Microsoft Fabric blog posts',
+        description='Fabric Blog Scraper - Scrape Microsoft Fabric blog posts '
+                    '(community.fabric.microsoft.com)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full load - scrape all pages (default)
-  python scrape_fabric_blog.py
-  
-  # Full load - scrape specific page range
-  python scrape_fabric_blog.py --start-page 1 --end-page 10
-  
-  # Delta load - check RSS feed for new articles
+  # Delta load - check RSS feed for new articles (supported mode)
   python scrape_fabric_blog.py --rss
+
+The blog moved from blog.fabric.microsoft.com to the Microsoft Fabric
+Community site. The RSS feed is the supported load mode; the old full
+page-load (running without --rss) is no longer available.
         """
     )
     
     parser.add_argument(
         '--rss',
         action='store_true',
-        help='Delta load: Check RSS feed for new articles instead of full site scan'
+        help='Delta load: Check RSS feed for new articles (supported load mode)'
     )
     
     parser.add_argument(
         '--start-page',
         type=int,
         default=1,
-        help='Start page for full load (default: 1)'
+        help='Start page (kept for compatibility; full load is no longer supported)'
     )
     
     parser.add_argument(
         '--end-page',
         type=int,
         default=169,
-        help='End page for full load (default: 169)'
+        help='End page (kept for compatibility; full load is no longer supported)'
     )
     
     args = parser.parse_args()
