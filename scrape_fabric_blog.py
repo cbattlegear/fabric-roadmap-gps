@@ -1,10 +1,15 @@
 #!/usr/bin/env python3
 """
 Fabric Blog Scraper
-Scrapes blog posts from https://blog.fabric.microsoft.com and stores them in SQL Server
-Supports two modes:
-- Full load: Scrapes all pages from the blog
-- Delta load: Checks RSS feed for new articles only
+Scrapes blog posts from the Microsoft Fabric Community "Fabric Updates Blog"
+(https://community.fabric.microsoft.com) and stores them in SQL Server.
+
+The blog moved from https://blog.fabric.microsoft.com to the community site;
+old blog URLs (and the old RSS feed URL) redirect to the community equivalents.
+
+Supports delta load: Checks the community RSS feed for new articles only.
+The legacy full-load (page scan) mode targeted the old WordPress site and is
+no longer supported.
 """
 
 import os
@@ -70,6 +75,20 @@ def _parse_rss_pub_date(date_str: Optional[str]) -> Optional[datetime]:
     return dt
 
 
+def _strip_html_to_text(html_text: Optional[str]) -> str:
+    """Convert an HTML fragment (e.g. an RSS ``<description>``) to plain text.
+
+    The community RSS feed wraps descriptions in full HTML markup (``<P>``,
+    ``<SPAN>``, ...). Storing raw markup would pollute summaries and
+    embeddings, so strip the tags, unescape entities and collapse runs of
+    whitespace into single spaces.
+    """
+    if not html_text:
+        return ''
+    text = BeautifulSoup(html_text, 'html.parser').get_text(' ')
+    return ' '.join(text.split())
+
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -84,9 +103,22 @@ init_telemetry("fabric-gps-blog-scraper")
 class FabricBlogScraper:
     """Scrapes Microsoft Fabric blog posts and stores them in SQL Server"""
     
+    # The Fabric Updates Blog now lives on the Microsoft Fabric Community
+    # site. The old blog.fabric.microsoft.com URLs (including the old RSS
+    # feed path) redirect here, so we point straight at the community
+    # equivalents to avoid the redirect hop.
+    COMMUNITY_BOARD_URL = (
+        "https://community.fabric.microsoft.com"
+        "/t5/Fabric-Updates-Blog/bg-p/fbc_fabricupdatesblogs"
+    )
+    COMMUNITY_RSS_URL = (
+        "https://community.fabric.microsoft.com/t5/s/rss/board"
+        "?board.id=fbc_fabricupdatesblogs"
+    )
+
     def __init__(self, rate_limiter: Optional[SlidingWindowLimiter] = None):
-        self.base_url = "https://blog.fabric.microsoft.com/en-US/blog"
-        self.rss_url = "https://blog.fabric.microsoft.com/en-us/blog/feed/"
+        self.base_url = self.COMMUNITY_BOARD_URL
+        self.rss_url = self.COMMUNITY_RSS_URL
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
@@ -403,52 +435,21 @@ class FabricBlogScraper:
     
     def scrape_all_pages(self, start_page: int = 1, end_page: int = 169):
         """
-        Scrape all blog pages and store in database
+        Legacy full-load mode — no longer supported.
 
-        Args:
-            start_page: First page to scrape (default: 1)
-            end_page: Last page to scrape (default: 169)
+        The blog moved from blog.fabric.microsoft.com (WordPress) to the
+        Microsoft Fabric Community site, where the article list is rendered
+        client-side and the old ``article.post`` selectors / ``?page=N``
+        pagination no longer apply. The historical full load already ran
+        against the old site; new articles arrive via the RSS delta load.
         """
-        try:
-            total_articles = 0
-            failed_pages = []
+        raise RuntimeError(
+            "Full-load scraping is no longer supported: the Fabric blog moved "
+            "to https://community.fabric.microsoft.com (client-rendered board). "
+            "Historical posts were already loaded from the old site; use "
+            "`python scrape_fabric_blog.py --rss` for the delta load."
+        )
 
-            for page_num in range(start_page, end_page + 1):
-                logger.info(f"Processing page {page_num}/{end_page}")
-
-                soup = self.fetch_page(page_num)
-                if not soup:
-                    failed_pages.append(page_num)
-                    continue
-
-                articles = self.extract_articles(soup)
-                logger.info(f"Found {len(articles)} articles on page {page_num}")
-
-                # Insert articles into database (per-article connection + retry).
-                page_success = 0
-                for article in articles:
-                    try:
-                        self.upsert_article_with_retry(article)
-                        total_articles += 1
-                        page_success += 1
-                    except Exception as e:
-                        logger.error(f"Failed to insert article '{article.get('title')}': {e}")
-
-                logger.info(f"Committed {page_success}/{len(articles)} articles from page {page_num}")
-
-            # Final summary
-            logger.info("=" * 60)
-            logger.info(f"Scraping complete!")
-            logger.info(f"Total articles processed: {total_articles}")
-            logger.info(f"Pages scraped: {end_page - start_page + 1 - len(failed_pages)}/{end_page - start_page + 1}")
-
-            if failed_pages:
-                logger.warning(f"Failed pages: {failed_pages}")
-
-        except Exception as e:
-            logger.error(f"Fatal error during scraping: {e}")
-            raise
-    
     def fetch_rss_feed(self) -> Optional[ET.Element]:
         """
         Fetch and parse the RSS feed
@@ -505,9 +506,10 @@ class FabricBlogScraper:
                     logger.warning("Skipping item with missing title or URL")
                     continue
                 
-                # Extract description/summary
+                # Extract description/summary (strip HTML — the community
+                # feed embeds full markup in <description>)
                 description_elem = item.find('description')
-                summary = html.unescape(description_elem.text) if description_elem is not None and description_elem.text else None
+                summary = _strip_html_to_text(description_elem.text) or None if description_elem is not None and description_elem.text else None
                 
                 # Extract publish date
                 pub_date_elem = item.find('pubDate')
@@ -552,22 +554,25 @@ class FabricBlogScraper:
     def fetch_article_details(self, url: str) -> Dict:
         """
         Fetch individual article page to extract additional details
-        
+
         Args:
             url: Article URL to fetch
-            
+
         Returns:
-            Dictionary containing categories and author, or None if fetch fails
+            Dictionary containing categories, author, and ``final_url`` (the
+            URL after redirects — the community site redirects feed links to
+            the canonical article URL), or None if fetch fails
         """
         try:
             logger.info(f"Fetching article details from: {url}")
             response = self._rate_limited_get(url)
 
             soup = BeautifulSoup(response.content, 'html.parser')
-            
+
             details = {
                 'categories': None,
-                'author': None
+                'author': None,
+                'final_url': response.url.rstrip('/') if getattr(response, 'url', None) else url
             }
             
             # Extract categories
@@ -626,12 +631,22 @@ class FabricBlogScraper:
                     trimmed_url = article['url'].rstrip('/')
                     exists = self.article_exists(trimmed_url)
 
-                    # For new articles, fetch additional details from the article page
+                    # For new articles, fetch additional details from the article page.
+                    # The fetch also resolves the community site's redirect chain
+                    # (feed link -> canonical article URL), which is what we store.
                     if not exists:
                         logger.info(f"New article found: {article['title']}")
                         article_details = self.fetch_article_details(article['url'])
 
                         if article_details:
+                            # Canonicalize: store the final (post-redirect) URL so
+                            # each article has exactly one row and links in the
+                            # UI/API don't bounce through redirects.
+                            final_url = (article_details.get('final_url') or trimmed_url).rstrip('/')
+                            if final_url != trimmed_url:
+                                article['url'] = final_url
+                                exists = self.article_exists(final_url)
+
                             # Update article with fetched details if not already present in RSS
                             if not article.get('categories') and article_details.get('categories'):
                                 article['categories'] = article_details['categories']
@@ -663,39 +678,38 @@ class FabricBlogScraper:
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(
-        description='Fabric Blog Scraper - Scrape Microsoft Fabric blog posts',
+        description='Fabric Blog Scraper - Scrape Microsoft Fabric blog posts '
+                    '(community.fabric.microsoft.com)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Full load - scrape all pages (default)
-  python scrape_fabric_blog.py
-  
-  # Full load - scrape specific page range
-  python scrape_fabric_blog.py --start-page 1 --end-page 10
-  
-  # Delta load - check RSS feed for new articles
+  # Delta load - check RSS feed for new articles (supported mode)
   python scrape_fabric_blog.py --rss
+
+The blog moved from blog.fabric.microsoft.com to the Microsoft Fabric
+Community site. The RSS feed is the supported load mode; the old full
+page-load (running without --rss) is no longer available.
         """
     )
     
     parser.add_argument(
         '--rss',
         action='store_true',
-        help='Delta load: Check RSS feed for new articles instead of full site scan'
+        help='Delta load: Check RSS feed for new articles (supported load mode)'
     )
     
     parser.add_argument(
         '--start-page',
         type=int,
         default=1,
-        help='Start page for full load (default: 1)'
+        help='Start page (kept for compatibility; full load is no longer supported)'
     )
     
     parser.add_argument(
         '--end-page',
         type=int,
         default=169,
-        help='End page for full load (default: 169)'
+        help='End page (kept for compatibility; full load is no longer supported)'
     )
     
     args = parser.parse_args()
