@@ -10,7 +10,7 @@ Fabric GPS is a Python/Flask application that tracks Microsoft Fabric roadmap re
 ### Key data flow
 
 1. `get_current_releases.py` fetches from `roadmap.fabric.microsoft.com`, normalizes JSON, and upserts into SQL Server via SQLAlchemy. A SHA-256 `row_hash` on each row detects content changes — only changed rows get a new `last_modified` date and have their `release_vector` and blog references nulled out to trigger re-processing.
-2. `scrape_fabric_blog.py` scrapes blog posts into the `fabric_blog_posts` table (uses raw `pyodbc`, not SQLAlchemy).
+2. `scrape_fabric_blog.py` discovers new posts from the community RSS feed and reads each article's **full body, labels and view count from the Khoros Community API** (`lib/khoros_api.py`), storing them in the `fabric_blog_posts` table (uses raw `pyodbc`, not SQLAlchemy). The rendered article pages sit behind bot protection and are not used; the feed's `<description>` is only a short teaser, so the API is what makes the stored summary worth embedding. When a post's body changes, its `blog_vector` is nulled to trigger re-embedding.
 3. `vectorize_blog_posts.py` and `match_releases_to_blogs.py` generate embeddings and run cosine-distance matching between `release_items.release_vector` and `fabric_blog_posts.blog_vector` columns (SQL Server native `VECTOR(1536)` type).
 
 ### Database
@@ -49,10 +49,14 @@ APP_MODE=refresh bash start.sh
 
 # Run a single pipeline step
 python get_current_releases.py
-python scrape_fabric_blog.py --rss          # delta via RSS
-python scrape_fabric_blog.py --start-page 1 --end-page 10  # full scrape
+python scrape_fabric_blog.py --rss          # delta via RSS + community API
 python vectorize_blog_posts.py
 python match_releases_to_blogs.py
+
+# One-shot backfill: replace teaser summaries with full article bodies
+python backfill_blog_content.py --dry-run   # report only
+python backfill_blog_content.py --limit 5   # trial run
+python backfill_blog_content.py             # full run, then re-vectorize
 
 # Run Alembic migrations
 alembic upgrade head

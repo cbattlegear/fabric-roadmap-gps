@@ -29,6 +29,7 @@ import html
 
 from lib.community_urls import extract_message_id, message_id_like_pattern
 from lib.db_retry import retry_on_transient_errors
+from lib.khoros_api import KhorosClient
 from lib.rate_limit import SlidingWindowLimiter
 from lib.telemetry import init_telemetry
 
@@ -122,7 +123,11 @@ class FabricBlogScraper:
         "?board.id=fbc_fabricupdatesblogs"
     )
 
-    def __init__(self, rate_limiter: Optional[SlidingWindowLimiter] = None):
+    def __init__(
+        self,
+        rate_limiter: Optional[SlidingWindowLimiter] = None,
+        khoros_client: Optional[KhorosClient] = None,
+    ):
         self.base_url = self.COMMUNITY_BOARD_URL
         self.rss_url = self.COMMUNITY_RSS_URL
         self.session = requests.Session()
@@ -147,6 +152,11 @@ class FabricBlogScraper:
         self.connection_string = os.getenv('SQLSERVER_CONN')
         if not self.connection_string:
             raise ValueError("SQLSERVER_CONN environment variable not set")
+
+        # Content comes from the community API rather than the rendered page
+        # — see lib/khoros_api.py for why. Shares this scraper's rate limiter
+        # so all outbound traffic stays under one budget.
+        self.khoros = khoros_client or KhorosClient(rate_limiter=self.rate_limiter)
 
     def _rate_limited_get(self, url: str, *, timeout: int = 30) -> requests.Response:
         """GET ``url`` through the rate limiter with 429 exponential backoff.
@@ -374,6 +384,20 @@ class FabricBlogScraper:
             VALUES (?, ?, ?, ?, ?, ?, ?);
         """
         
+        # A changed body invalidates the stored embedding. Done as its own
+        # statement before the MERGE (while `summary` still holds the previous
+        # value) and as a plain NULL assignment, because the VECTOR type has
+        # limited expression support and won't take a CASE expression.
+        # The parameter is CAST because pyodbc binds long strings as `ntext`,
+        # which SQL Server refuses to compare against `nvarchar(max)`.
+        if article.get('summary'):
+            cursor.execute(
+                "UPDATE fabric_blog_posts SET blog_vector = NULL "
+                "WHERE url = ? AND blog_vector IS NOT NULL "
+                "AND (summary IS NULL OR summary <> CAST(? AS NVARCHAR(MAX)))",
+                (article['url'].rstrip('/'), article['summary']),
+            )
+
         cursor.execute(upsert_sql, (
             article['url'].rstrip('/'),  # for USING clause
             article['title'],
@@ -597,95 +621,56 @@ class FabricBlogScraper:
         
         return articles
     
-    def fetch_article_details(self, url: str) -> Optional[Dict]:
-        """Best-effort enrichment for a single article page.
+    # Categories column is nvarchar(500); keep joined labels inside it.
+    MAX_CATEGORIES_LEN = 500
 
-        The community RSS feed carries no categories and only a username for
-        the author, so we try the article page for better values. The page is
-        behind bot protection that may reject automated requests, so this is
-        strictly optional: any failure returns ``None`` and the article is
-        still ingested from the feed alone.
+    def fetch_article_details(self, message_id: str) -> Optional[Dict]:
+        """Fetch an article's full content and metadata from the community API.
 
-        Returns:
-            Dictionary with ``categories`` and ``author`` (either may be
-            ``None``), or ``None`` if the page could not be fetched or parsed.
+        The RSS feed only carries a teaser (a few hundred characters, and
+        empty for some posts), no categories and no view counts. The API
+        returns the whole post body plus labels, which is what makes the
+        stored summary worth embedding.
+
+        Returns a dict with ``summary``, ``categories``, ``author`` and
+        ``views`` — any of which may be ``None`` — or ``None`` if the article
+        could not be read at all. Callers must treat this as optional: a
+        failure here must never stop the article being ingested from the feed.
         """
         try:
-            logger.info(f"Fetching article details from: {url}")
-            response = self._rate_limited_get(url)
+            article = self.khoros.fetch_article(message_id)
+            if article is None:
+                logger.warning(
+                    f"Community API returned no content for message {message_id}"
+                )
+                return None
 
-            soup = BeautifulSoup(response.content, 'html.parser')
+            # Labels are a separate lookup. A failure there is not a reason to
+            # discard the body we just fetched, so `None` simply means
+            # "unknown" and leaves any stored categories untouched.
+            labels = self.khoros.fetch_labels(message_id)
+            categories = None
+            if labels:
+                categories = ', '.join(labels)[:self.MAX_CATEGORIES_LEN]
 
+            body_text = _strip_html_to_text(article.get('body'))
             details = {
-                'categories': self._extract_categories(soup),
-                'author': self._extract_author(soup),
+                'summary': body_text or None,
+                'categories': categories,
+                'author': article.get('author'),
+                'views': article.get('views'),
             }
-
             logger.info(
-                f"Extracted details - Categories: {details['categories']}, "
-                f"Author: {details['author']}"
+                f"Fetched article {message_id} from API - "
+                f"{len(body_text)} chars, categories: {categories}"
             )
             return details
 
-        except requests.RequestException as e:
-            # Expected when the community site's bot protection rejects us —
-            # the article still gets stored with its feed metadata.
-            logger.warning(f"Could not fetch article details from {url}: {e}")
+        except Exception as e:  # noqa: BLE001 — enrichment is best-effort
+            logger.warning(
+                f"Could not fetch article {message_id} from community API: {e}"
+            )
             return None
-        except Exception as e:
-            logger.warning(f"Error extracting article details from {url}: {e}")
-            return None
-
-    @staticmethod
-    def _extract_categories(soup: BeautifulSoup) -> Optional[str]:
-        """Pull post labels/tags out of an article page.
-
-        Tries standard article metadata first (``article:tag`` / ``keywords``)
-        and falls back to the community platform's label links. Returns
-        ``None`` when the page exposes nothing usable.
-        """
-        categories: List[str] = []
-
-        for meta in soup.find_all('meta', attrs={'property': 'article:tag'}):
-            value = (meta.get('content') or '').strip()
-            if value:
-                categories.append(value)
-
-        if not categories:
-            keywords = soup.find('meta', attrs={'name': 'keywords'})
-            if keywords and keywords.get('content'):
-                categories = [
-                    part.strip()
-                    for part in keywords['content'].split(',')
-                    if part.strip()
-                ]
-
-        if not categories:
-            # Community (Khoros) label links, e.g. /t5/.../label-name/label-id/...
-            for link in soup.select('a[href*="label-id/"], .lia-message-labels a'):
-                value = link.get_text(strip=True)
-                if value:
-                    categories.append(value)
-
-        # Preserve order while dropping duplicates.
-        unique = list(dict.fromkeys(categories))
-        return ', '.join(unique) if unique else None
-
-    @staticmethod
-    def _extract_author(soup: BeautifulSoup) -> Optional[str]:
-        """Pull the author's display name out of an article page."""
-        for attrs in ({'name': 'author'}, {'property': 'article:author'}):
-            meta = soup.find('meta', attrs=attrs)
-            if meta and (meta.get('content') or '').strip():
-                return html.unescape(meta['content'].strip())
-
-        author_link = soup.select_one('.lia-user-name-link, .UserName')
-        if author_link:
-            value = author_link.get_text(strip=True)
-            if value:
-                return html.unescape(value)
-
-        return None
     
     def scrape_from_rss(self):
         """
@@ -734,19 +719,32 @@ class FabricBlogScraper:
                     else:
                         exists = False
                         logger.info(f"New article found: {article['title']}")
-                        # Optional enrichment only: the feed has no categories
-                        # and only a username for the author. A failure here
-                        # must not stop the article being ingested, and never
-                        # affects the URL we store.
-                        article_details = self.fetch_article_details(trimmed_url)
 
-                        if article_details:
-                            if not article.get('categories') and article_details.get('categories'):
-                                article['categories'] = article_details['categories']
-                            if not article.get('author') and article_details.get('author'):
-                                article['author'] = article_details['author']
-                        else:
-                            enrichment_failures += 1
+                    # Pull the real content from the community API. This runs
+                    # for known articles too, so edits to a post are picked up
+                    # and so the stored summary is the full body rather than
+                    # the feed's teaser. Failure is not fatal — the article is
+                    # still ingested from the feed alone.
+                    article_details = (
+                        self.fetch_article_details(message_id) if message_id else None
+                    )
+
+                    if article_details:
+                        if article_details.get('summary'):
+                            article['summary'] = article_details['summary']
+                        if article_details.get('categories'):
+                            article['categories'] = article_details['categories']
+                        if article_details.get('author'):
+                            article['author'] = article_details['author']
+                        if article_details.get('views') is not None:
+                            article['views'] = article_details['views']
+                    else:
+                        enrichment_failures += 1
+                        if exists:
+                            # Never downgrade a stored full body back to the
+                            # feed's teaser. Sending NULL leaves the stored
+                            # summary in place (the upsert COALESCEs it).
+                            article['summary'] = None
 
                     self.upsert_article_with_retry(article)
 
@@ -766,9 +764,9 @@ class FabricBlogScraper:
             logger.info(f"Total processed: {len(articles)}")
             if enrichment_failures:
                 logger.warning(
-                    f"{enrichment_failures} new article(s) stored without page "
-                    f"enrichment (categories/author may be missing) — the "
-                    f"community site may be rejecting automated page requests"
+                    f"{enrichment_failures} article(s) stored from feed data "
+                    f"only (full body/categories unavailable) — the community "
+                    f"API may be unreachable"
                 )
 
         except Exception as e:

@@ -52,7 +52,8 @@ def scraper_module():
 def scraper(scraper_module):
     from lib.rate_limit import SlidingWindowLimiter
     s = scraper_module.FabricBlogScraper(
-        rate_limiter=SlidingWindowLimiter(max_calls=1000, window_seconds=60)
+        rate_limiter=SlidingWindowLimiter(max_calls=1000, window_seconds=60),
+        khoros_client=MagicMock(),
     )
     s.session = MagicMock()
     return s
@@ -134,8 +135,10 @@ def test_scrape_from_rss_stores_feed_permalink_for_new_article(scraper):
     scraper.find_article_url_by_message_id = MagicMock(return_value=None)
     scraper.article_exists = MagicMock(return_value=False)
     scraper.fetch_article_details = MagicMock(return_value={
+        "summary": "The full article body",
         "categories": "Data Factory",
-        "author": "Real Name",
+        "author": None,
+        "views": None,
     })
     scraper.upsert_article_with_retry = MagicMock()
 
@@ -143,9 +146,9 @@ def test_scrape_from_rss_stores_feed_permalink_for_new_article(scraper):
 
     article = scraper.upsert_article_with_retry.call_args[0][0]
     assert article["url"] == FEED_URL
-    # The feed carries no categories, so the page fills that gap...
+    # The feed carries no categories, so the API fills that gap...
     assert article["categories"] == "Data Factory"
-    # ...but it does supply an author, which is left alone.
+    # ...and the feed's author is kept when the API adds nothing better.
     assert article["author"] == "someuser"
 
 
@@ -160,34 +163,45 @@ def test_scrape_from_rss_reuses_stored_url_for_migrated_row(scraper):
     scraper.fetch_rss_feed = MagicMock(return_value=ET.fromstring(COMMUNITY_FEED))
     scraper.find_article_url_by_message_id = MagicMock(return_value=FINAL_URL)
     scraper.article_exists = MagicMock()
-    scraper.fetch_article_details = MagicMock()
+    scraper.fetch_article_details = MagicMock(return_value=None)
     scraper.upsert_article_with_retry = MagicMock()
 
     scraper.scrape_from_rss()
 
     scraper.find_article_url_by_message_id.assert_called_once_with("123")
-    # Known article → no page fetch, and no exact-URL probe is needed.
-    scraper.fetch_article_details.assert_not_called()
+    # Known article → the exact-URL probe is unnecessary.
     scraper.article_exists.assert_not_called()
     article = scraper.upsert_article_with_retry.call_args[0][0]
     assert article["url"] == FINAL_URL
 
 
-def test_scrape_from_rss_existing_article_not_fetched(scraper):
+def test_scrape_from_rss_refreshes_content_for_known_articles(scraper):
+    """Known articles are re-read so edits to a post are picked up.
+
+    Content lives in the API rather than the feed, so skipping known articles
+    would freeze their bodies at whatever was stored on first ingest.
+    """
     scraper.fetch_rss_feed = MagicMock(return_value=ET.fromstring(COMMUNITY_FEED))
     scraper.find_article_url_by_message_id = MagicMock(return_value=FEED_URL)
-    scraper.fetch_article_details = MagicMock()
+    scraper.fetch_article_details = MagicMock(return_value={
+        "summary": "An edited body",
+        "categories": None,
+        "author": None,
+        "views": 12,
+    })
     scraper.upsert_article_with_retry = MagicMock()
 
     scraper.scrape_from_rss()
 
-    scraper.fetch_article_details.assert_not_called()
+    scraper.fetch_article_details.assert_called_once_with("123")
     article = scraper.upsert_article_with_retry.call_args[0][0]
     assert article["url"] == FEED_URL
+    assert article["summary"] == "An edited body"
+    assert article["views"] == 12
 
 
 def test_scrape_from_rss_stores_article_when_enrichment_fails(scraper):
-    """Bot protection on the article page must not block ingestion."""
+    """An unreachable API must not block ingestion."""
     scraper.fetch_rss_feed = MagicMock(return_value=ET.fromstring(COMMUNITY_FEED))
     scraper.find_article_url_by_message_id = MagicMock(return_value=None)
     scraper.article_exists = MagicMock(return_value=False)
@@ -199,7 +213,7 @@ def test_scrape_from_rss_stores_article_when_enrichment_fails(scraper):
     scraper.upsert_article_with_retry.assert_called_once()
     article = scraper.upsert_article_with_retry.call_args[0][0]
     assert article["url"] == FEED_URL
-    # Feed-sourced values survive even though the page could not be read.
+    # Feed-sourced values survive even though the API could not be read.
     assert article["title"] == "Sample Post"
     assert article["author"] == "someuser"
 
@@ -230,67 +244,17 @@ def test_find_article_url_by_message_id_returns_none_when_absent(scraper):
 
 
 # ---------------------------------------------------------------------------
-# Scraper: article page enrichment
+# Scraper: article enrichment
+#
+# Content now comes from the community API rather than the rendered page —
+# the HTML extraction tests that lived here moved to
+# tests/test_blog_content_api.py along with the code they covered.
 # ---------------------------------------------------------------------------
 
-def test_extract_categories_prefers_article_tags(scraper_module):
-    from bs4 import BeautifulSoup
+def test_fetch_article_details_returns_none_when_api_fails(scraper):
+    scraper.khoros.fetch_article.side_effect = requests.RequestException("boom")
 
-    soup = BeautifulSoup(
-        '<html><head>'
-        '<meta property="article:tag" content="Data Factory">'
-        '<meta property="article:tag" content="Real-Time Intelligence">'
-        '<meta name="keywords" content="ignored">'
-        '</head></html>',
-        'html.parser',
-    )
-    assert scraper_module.FabricBlogScraper._extract_categories(soup) == (
-        "Data Factory, Real-Time Intelligence"
-    )
-
-
-def test_extract_categories_falls_back_to_keywords_then_labels(scraper_module):
-    from bs4 import BeautifulSoup
-
-    extract = scraper_module.FabricBlogScraper._extract_categories
-
-    keywords = BeautifulSoup(
-        '<meta name="keywords" content="Power BI, Fabric ,, Power BI">', 'html.parser'
-    )
-    # Blank entries dropped, duplicates collapsed, order preserved.
-    assert extract(keywords) == "Power BI, Fabric"
-
-    labels = BeautifulSoup(
-        '<div class="lia-message-labels">'
-        '<a href="/t5/x/label-id/99">Announcements</a>'
-        '</div>',
-        'html.parser',
-    )
-    assert extract(labels) == "Announcements"
-
-    assert extract(BeautifulSoup('<p>nothing here</p>', 'html.parser')) is None
-
-
-def test_extract_author_prefers_metadata(scraper_module):
-    from bs4 import BeautifulSoup
-
-    extract = scraper_module.FabricBlogScraper._extract_author
-
-    meta = BeautifulSoup('<meta name="author" content="Jane &amp; Co">', 'html.parser')
-    assert extract(meta) == "Jane & Co"
-
-    link = BeautifulSoup('<a class="lia-user-name-link">someuser</a>', 'html.parser')
-    assert extract(link) == "someuser"
-
-    assert extract(BeautifulSoup('<p>no author</p>', 'html.parser')) is None
-
-
-def test_fetch_article_details_returns_none_on_bot_protection(scraper):
-    scraper._rate_limited_get = MagicMock(
-        side_effect=requests.HTTPError("403 Client Error: Forbidden")
-    )
-
-    assert scraper.fetch_article_details(FEED_URL) is None
+    assert scraper.fetch_article_details("123") is None
 
 
 def test_upsert_does_not_blank_out_stored_values(scraper):
