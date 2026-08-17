@@ -169,9 +169,13 @@ class BlogUrlMigration:
             conn = pyodbc.connect(self.connection_string)
             cursor = conn.cursor()
             params: list = [f"{COMMUNITY_URL_PREFIX}%"]
+            # NOTE: T-SQL has no boolean expression type, so the null check
+            # must go through CASE — `(blog_vector IS NOT NULL)` in a select
+            # list is a syntax error.
             if self.limit is not None:
                 cursor.execute(
-                    "SELECT TOP (?) id, url, (blog_vector IS NOT NULL) AS has_vector "
+                    "SELECT TOP (?) id, url, "
+                    "CASE WHEN blog_vector IS NOT NULL THEN 1 ELSE 0 END AS has_vector "
                     "FROM fabric_blog_posts "
                     "WHERE url NOT LIKE ? "
                     "ORDER BY id",
@@ -179,7 +183,8 @@ class BlogUrlMigration:
                 )
             else:
                 cursor.execute(
-                    "SELECT id, url, (blog_vector IS NOT NULL) AS has_vector "
+                    "SELECT id, url, "
+                    "CASE WHEN blog_vector IS NOT NULL THEN 1 ELSE 0 END AS has_vector "
                     "FROM fabric_blog_posts "
                     "WHERE url NOT LIKE ? "
                     "ORDER BY id",
@@ -228,7 +233,8 @@ class BlogUrlMigration:
 
             # Does the canonical URL already have a row (e.g. from the new RSS feed)?
             cursor.execute(
-                "SELECT id, (blog_vector IS NULL) AS vector_is_null "
+                "SELECT id, CASE WHEN blog_vector IS NULL THEN 1 ELSE 0 END "
+                "AS vector_is_null "
                 "FROM fabric_blog_posts WHERE url = ?",
                 (final_url,),
             )
@@ -251,9 +257,30 @@ class BlogUrlMigration:
 
             if survivor is not None:
                 survivor_id, survivor_vector_null = survivor[0], bool(survivor[1])
+                if not self.dry_run:
+                    # The legacy row is usually richer than a survivor created
+                    # from the new RSS feed (which carries no categories and
+                    # no view counts), so fill the survivor's gaps before the
+                    # legacy row is deleted. COALESCE only fills NULLs, so
+                    # fresher feed-sourced values always win.
+                    cursor.execute(
+                        "UPDATE target SET "
+                        "categories = COALESCE(target.categories, src.categories), "
+                        "author = COALESCE(target.author, src.author), "
+                        "views = COALESCE(target.views, src.views), "
+                        "summary = COALESCE(target.summary, src.summary), "
+                        "post_date = COALESCE(target.post_date, src.post_date), "
+                        "updated_at = GETUTCDATE() "
+                        "FROM fabric_blog_posts target "
+                        "INNER JOIN fabric_blog_posts src ON src.id = ? "
+                        "WHERE target.id = ?",
+                        (old_id, survivor_id),
+                    )
                 if has_vector and survivor_vector_null and not self.dry_run:
                     # Carry the vector over so the survivor doesn't have to
-                    # be re-embedded.
+                    # be re-embedded. Kept as a plain column assignment (no
+                    # functions applied) because VECTOR has limited
+                    # expression support.
                     cursor.execute(
                         "UPDATE fabric_blog_posts SET blog_vector = "
                         "(SELECT blog_vector FROM fabric_blog_posts WHERE id = ?) "

@@ -201,6 +201,67 @@ def _migration(migrate_module, *, dry_run: bool = False) -> "migrate_module.Blog
     )
 
 
+def _executed_sql(migrate_module, call_method) -> list:
+    """Capture the SQL a migration method sends through a mocked pyodbc."""
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = None
+    mock_cursor.fetchall.return_value = []
+    mock_cursor.rowcount = 0
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch.object(migrate_module.pyodbc, "connect", return_value=mock_conn):
+        call_method()
+
+    return [call.args[0] for call in mock_cursor.execute.call_args_list]
+
+
+def test_sql_has_no_boolean_predicate_in_select_list(migrate_module):
+    """Guard against a T-SQL syntax error the mocked DB cannot surface.
+
+    SQL Server has no boolean expression type in a select list, so
+    ``SELECT (blog_vector IS NULL) AS ...`` fails with "Incorrect syntax near
+    the keyword 'IS'". Null checks in a select list must go through CASE.
+    """
+    migration = _migration(migrate_module)
+    statements = (
+        _executed_sql(migrate_module, migration._fetch_pending_rows)
+        + _executed_sql(migrate_module, migration._fetch_orphaned_release_urls)
+        + _executed_sql(
+            migrate_module,
+            lambda: migration._migrate_row(7, OLD_URL, FINAL_URL, has_vector=True),
+        )
+    )
+    assert statements, "expected the migration to issue SQL"
+
+    for sql in statements:
+        select_list = sql.split(" FROM ")[0]
+        assert "IS NULL)" not in select_list, sql
+        assert "IS NOT NULL)" not in select_list, sql
+
+    pending_sql = _executed_sql(migrate_module, migration._fetch_pending_rows)[0]
+    assert "CASE WHEN blog_vector IS NOT NULL THEN 1 ELSE 0 END" in pending_sql
+
+
+def test_fetch_pending_rows_binds_limit_and_skips_community_urls(migrate_module):
+    migration = migrate_module.BlogUrlMigration(
+        "Driver={Test};Server=test;", limit=5, session=MagicMock()
+    )
+    mock_cursor = MagicMock()
+    mock_cursor.fetchall.return_value = [(1, OLD_URL, 1), (2, OLD_URL + "b", 0)]
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch.object(migrate_module.pyodbc, "connect", return_value=mock_conn):
+        rows = migration._fetch_pending_rows()
+
+    sql, params = mock_cursor.execute.call_args.args
+    assert "SELECT TOP (?)" in sql
+    assert params == (5, "https://community.fabric.microsoft.com%")
+    # has_vector is normalized to a bool for the caller.
+    assert rows == [(1, OLD_URL, True), (2, OLD_URL + "b", False)]
+
+
 def test_migrate_row_updates_in_place_when_no_survivor(migrate_module):
     migration = _migration(migrate_module)
     mock_cursor = MagicMock()
@@ -224,7 +285,8 @@ def test_migrate_row_updates_in_place_when_no_survivor(migrate_module):
 def test_migrate_row_deletes_duplicate_and_carries_vector(migrate_module):
     migration = _migration(migrate_module)
     mock_cursor = MagicMock()
-    mock_cursor.fetchone.return_value = (99, True)  # survivor id=99, vector IS NULL
+    # CASE WHEN ... THEN 1 ELSE 0 END → the driver returns 1/0, not a bool.
+    mock_cursor.fetchone.return_value = (99, 1)  # survivor id=99, vector IS NULL
     mock_cursor.rowcount = 1
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
@@ -242,12 +304,42 @@ def test_migrate_row_deletes_duplicate_and_carries_vector(migrate_module):
     mock_conn.commit.assert_called()
 
 
+def test_migrate_row_carries_metadata_gaps_from_deleted_duplicate(migrate_module):
+    """The legacy row's metadata must not be lost when it is deleted.
+
+    A survivor created from the community RSS feed has no categories and no
+    view count, so those gaps are filled from the legacy row. COALESCE puts
+    the survivor's own value first, so fresher feed-sourced values win.
+    """
+    migration = _migration(migrate_module)
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (99, 0)  # survivor already has a vector
+    mock_cursor.rowcount = 0
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+
+    with patch.object(migrate_module.pyodbc, "connect", return_value=mock_conn):
+        migration._migrate_row(7, OLD_URL, FINAL_URL, has_vector=False)
+
+    carry = [
+        (sql, params) for sql, params in
+        [call.args for call in mock_cursor.execute.call_args_list]
+        if sql.startswith("UPDATE target SET")
+    ]
+    assert len(carry) == 1, "expected exactly one metadata carry-over statement"
+    sql, params = carry[0]
+    for column in ("categories", "author", "views", "summary", "post_date"):
+        assert f"{column} = COALESCE(target.{column}, src.{column})" in sql
+    # (source row, target row) — carrying *from* the legacy row *into* the survivor.
+    assert params == (7, 99)
+
+
 def test_migrate_row_dry_run_performs_no_writes(migrate_module):
     migration = _migration(migrate_module, dry_run=True)
     mock_cursor = MagicMock()
     mock_cursor.fetchone.side_effect = [
-        (99, True),  # survivor check
-        (0,),        # release count
+        (99, 1),  # survivor check
+        (0,),     # release count
     ]
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
