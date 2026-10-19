@@ -2,9 +2,11 @@
 
 import asyncio
 import json
+import runpy
 import threading
 from contextlib import asynccontextmanager
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -64,7 +66,6 @@ def app(engine):
 
     return create_app(
         flask, lambda: engine, base_url="https://gps.example",
-        allowed_hosts=["gps.example"], allowed_origins=["https://gps.example"],
     )
 
 
@@ -446,21 +447,22 @@ def test_production_factory_timeouts_and_allowlists(monkeypatch):
     assert create.call_args.kwargs["allowed_origins"] == ["https://gps.example"]
 
 
-def test_api_documentation_explains_mcp_usage_and_rollout_gate(monkeypatch):
+def test_api_documentation_explains_mcp_usage_and_automatic_availability(monkeypatch):
     from bs4 import BeautifulSoup
     monkeypatch.setenv("CURRENT_ENVIRONMENT", "development")
     import server
     with patch.object(server, "get_engine", return_value=object()), \
          patch.object(server, "get_distinct_values", return_value=[]), \
-         patch.object(server, "BASE_URL", "https://gps.example/"):
+         patch.object(server, "EMAIL_BASE_URL", "https://gps.example/"):
         response = server.app.test_client().get("/endpoints")
     assert response.status_code == 200
     section = BeautifulSoup(response.data, "html.parser").select_one("#mcp")
     text = section.get_text(" ", strip=True)
     assert "https://gps.example/mcp" in text
     assert "Streamable HTTP" in text
-    assert "disabled by default" in text
-    assert "Front Door client smoke checks" in text
+    assert "Included automatically in web mode" in text
+    assert "No feature flag or separate server is needed" in text
+    assert "disabled by default" not in text
     assert 'client.initialize()' in text
     assert 'client.list_tools()' in text
     for tool in ("search_releases", "get_release", "get_release_history", "get_filter_options"):
@@ -469,6 +471,55 @@ def test_api_documentation_explains_mcp_usage_and_rollout_gate(monkeypatch):
     assert "1-25" in text
     assert "never generates embeddings" in text
     assert section.select_one('a[href$="/MCP.md"]')
+
+
+@pytest.mark.parametrize("canonical_host,base_url,expected", [
+    ("", "https://gps.example", "https://gps.example"),
+    ("canonical.example", "http://localhost:8000", "https://canonical.example"),
+    ("", None, "http://localhost:8000"),
+])
+def test_production_factory_requires_no_new_environment(monkeypatch, canonical_host, base_url, expected):
+    import mcp_app
+    monkeypatch.setenv("CURRENT_ENVIRONMENT", "development")
+    monkeypatch.setenv("CANONICAL_HOST", canonical_host)
+    if base_url is None:
+        monkeypatch.delenv("BASE_URL", raising=False)
+    else:
+        monkeypatch.setenv("BASE_URL", base_url)
+    for name in ("MCP_ALLOWED_HOSTS", "MCP_ALLOWED_ORIGINS", "MCP_ENABLED"):
+        monkeypatch.delenv(name, raising=False)
+    with patch.object(mcp_app, "make_engine"), \
+         patch.object(mcp_app.event, "listens_for", return_value=lambda fn: fn), \
+         patch.object(mcp_app, "create_app") as create:
+        mcp_app.production_app()
+    assert create.call_args.kwargs == {
+        "base_url": expected, "allowed_hosts": None, "allowed_origins": None,
+    }
+
+
+def test_normal_gunicorn_startup_always_hosts_mcp_and_refresh_stays_sequential(monkeypatch):
+    root = Path(__file__).resolve().parents[1]
+    monkeypatch.delenv("GUNICORN_WORKERS", raising=False)
+    # A stale deployment variable must not select an incompatible WSGI worker.
+    monkeypatch.setenv("GUNICORN_WORKER_CLASS", "gthread")
+    config = runpy.run_path(str(root / "gunicorn.conf.py"))
+    assert config["wsgi_app"] == "mcp_app:production_app()"
+    assert config["worker_class"] == "uvicorn_worker.UvicornWorker"
+    assert config["workers"] == 2
+    assert config["accesslog"] is None
+    startup = (root / "start.sh").read_text()
+    assert startup.count("exec gunicorn -c gunicorn.conf.py") == 1
+    assert "MCP_ENABLED" not in startup
+    assert not (root / "mcp_gunicorn.conf.py").exists()
+    refresh = startup.split('elif [[ "$MODE" == "refresh" ]]; then', 1)[1].split("\nelse\n", 1)[0]
+    assert "gunicorn" not in refresh
+    assert [
+        line.strip().split("python ", 1)[1].split()[0]
+        for line in refresh.splitlines() if "python " in line
+    ] == [
+        "get_current_releases.py", "scrape_fabric_blog.py", "vectorize_blog_posts.py",
+        "match_releases_to_blogs.py", "weekly_email_job.py",
+    ]
 
 
 def test_config_rejects_wildcards_and_invalid_base():

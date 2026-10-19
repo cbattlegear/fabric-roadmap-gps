@@ -1,4 +1,4 @@
-"""Optional ASGI host: one managed listener for MCP and the existing Flask app."""
+"""Standard web host: one managed ASGI listener for MCP and existing Flask."""
 
 import asyncio
 import logging
@@ -99,14 +99,21 @@ class RoadmapApplication:
             self.inflight -= 1
 
 
-def create_app(flask_app, engine_provider, *, base_url, allowed_hosts, allowed_origins):
+def create_app(flask_app, engine_provider, *, base_url, allowed_hosts=None, allowed_origins=None):
+    parsed = urlsplit(base_url)
+    if (
+        parsed.scheme not in ("https", "http") or not parsed.netloc
+        or parsed.username or parsed.password or parsed.query or parsed.fragment
+    ):
+        raise ValueError("MCP base URL must be an absolute HTTP(S) URL without credentials/query/fragment")
+    if allowed_hosts is None:
+        allowed_hosts = [parsed.netloc]
+    if allowed_origins is None:
+        allowed_origins = [f"{parsed.scheme}://{parsed.netloc}"]
     if not allowed_hosts or any("*" in host for host in allowed_hosts):
         raise ValueError("MCP_ALLOWED_HOSTS requires exact host[:port] entries, no wildcards")
     if any("*" in origin for origin in allowed_origins):
         raise ValueError("MCP_ALLOWED_ORIGINS must contain exact origins, no wildcards")
-    parsed = urlsplit(base_url)
-    if parsed.scheme not in ("https", "http") or not parsed.netloc or parsed.query or parsed.fragment:
-        raise ValueError("MCP base URL must be an absolute HTTP(S) URL without query/fragment")
     mcp = create_roadmap_server(engine_provider, base_url.rstrip("/"))
     transport = mcp.streamable_http_app(
         json_response=True, stateless_http=True, max_request_body_size=MAX_BODY,
@@ -120,9 +127,13 @@ def create_app(flask_app, engine_provider, *, base_url, allowed_hosts, allowed_o
 def production_app():
     from server import app as flask_app
 
-    base_url = os.environ.get("BASE_URL", "")
+    canonical_host = os.environ.get("CANONICAL_HOST", "")
+    base_url = (
+        f"https://{canonical_host}" if canonical_host
+        else os.environ.get("BASE_URL", "http://localhost:8000")
+    )
     if os.environ.get("CURRENT_ENVIRONMENT") != "development" and not base_url.startswith("https://"):
-        raise ValueError("MCP requires an HTTPS BASE_URL in production")
+        raise ValueError("Web hosting requires HTTPS BASE_URL or CANONICAL_HOST in production")
     engine = make_engine(
         connect_args={"timeout": 5}, pool_size=4, max_overflow=0,
         pool_timeout=2, pool_pre_ping=False,
@@ -134,6 +145,10 @@ def production_app():
 
     return create_app(
         flask_app, lambda: engine, base_url=base_url,
-        allowed_hosts=[v.strip() for v in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",") if v.strip()],
-        allowed_origins=[v.strip() for v in os.environ.get("MCP_ALLOWED_ORIGINS", "").split(",") if v.strip()],
+        allowed_hosts=[
+            v.strip() for v in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",") if v.strip()
+        ] or None,
+        allowed_origins=[
+            v.strip() for v in os.environ.get("MCP_ALLOWED_ORIGINS", "").split(",") if v.strip()
+        ] or None,
     )

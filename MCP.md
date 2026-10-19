@@ -2,9 +2,11 @@
 
 ## Status and compatibility
 
-Implemented, **disabled by default** (`MCP_ENABLED=0`). This is not a claim that
-the production Front Door endpoint is live or verified. Keep the About MCP
-status Planned until the deployment smoke test below succeeds.
+MCP is **included automatically in normal web startup** when this version is
+deployed. It has no opt-in feature flag, separate listener, or new required
+environment setting. This is not a claim that the production Front Door
+endpoint has been deployed or verified: Linux Gunicorn and public Front Door
+smoke checks remain validation gaps until run in that environment.
 
 The official [`mcp==2.3.0` Python SDK](https://py.sdk.modelcontextprotocol.io/)
 owns JSON-RPC parsing, initialization, capability/tool discovery, validation,
@@ -72,40 +74,47 @@ RESULT_TOO_LARGE); never a success-shaped fallback. Invalid JSON-RPC uses SDK
 protocol errors. Transport rejections use HTTP 400/403/404/405/408/413/421/429/503,
 not fake JSON-RPC success. On 429/503 respect `Retry-After: 60`.
 
-## Hosting and launch policy
+## Standard web hosting
 
-The image and refresh pipeline are unchanged. In **web** mode only,
-`MCP_ENABLED=1` selects `mcp_gunicorn.conf.py`: Gunicorn supervises two
+The image and refresh pipeline are unchanged. In **web** mode,
+`start.sh` runs the normal `gunicorn.conf.py`: Gunicorn supervises two
 `uvicorn_worker.UvicornWorker` ASGI workers on the existing port. The top-level
 ASGI dispatcher sends `/mcp` to the SDK Starlette app and every existing route
 to Flask through `a2wsgi` (four WSGI threads per worker). It forwards lifespan
 directly to the SDK app so each worker starts/stops its session manager exactly
-once. No extra listener/server is started inside a worker. Normal Flask-only
-hosting remains `gunicorn.conf.py`; `APP_MODE=refresh` never imports the MCP host.
-Do not use preload or override the MCP worker class with `gthread`.
+once. No extra listener/server is started inside a worker.
+`APP_MODE=refresh` never imports the MCP host and retains the sequential data
+and email pipeline. There is no Flask-only alternative selected by a flag.
+The required ASGI worker replaces `gthread`; the old `GUNICORN_WORKER_CLASS`
+and `GUNICORN_THREADS` settings no longer select a WSGI-only host. Flask has
+four adapter threads per worker. Do not use preload or replace the ASGI worker.
 
 Example production environment (use the **actual** public/forwarded host):
 
 ```text
 APP_MODE=web
-MCP_ENABLED=1
 BASE_URL=https://www.fabric-gps.com
-MCP_ALLOWED_HOSTS=www.fabric-gps.com
-MCP_ALLOWED_ORIGINS=https://www.fabric-gps.com
 GUNICORN_WORKERS=2
 FORWARDED_ALLOW_IPS=<trusted proxy IPs>
 ```
 
-Existing SQL/email/telemetry environment requirements still apply. Hosts are exact
-`host[:port]` entries; no wildcards, including wildcard ports. Non-browser clients
+Existing SQL/email/telemetry environment requirements still apply. Canonical
+release/client links and Host/Origin allowlists derive from the existing
+`CANONICAL_HOST` as HTTPS when set, otherwise `BASE_URL` (development default:
+`http://localhost:8000`). Production already requires an HTTPS public URL.
+No new setting is needed for the normal public hostname. If a proxy forwards a
+different Host, optional `MCP_ALLOWED_HOSTS` and `MCP_ALLOWED_ORIGINS` overrides
+accept comma-separated exact values. They are deployment-specific overrides,
+not enablement requirements. Hosts are exact `host[:port]` entries; no wildcards,
+including wildcard ports. Non-browser clients
 may omit Origin; when sent it must match the exact allowlist. CORS is intentionally
 not enabled, so this MVP supports native/CLI clients, not cross-origin browsers.
 Never disable DNS-rebinding protection to fix a misconfigured proxy Host.
 For local development use `CURRENT_ENVIRONMENT=development`, an explicit
-`BASE_URL=http://127.0.0.1:8000` and `MCP_ALLOWED_HOSTS=127.0.0.1:8000`,
+`BASE_URL=http://127.0.0.1:8000` (without a production `CANONICAL_HOST`),
 then `python -m uvicorn mcp_app:production_app --factory --port 8000`.
 
-Anonymous opt-in access is affordable only under these fixed per-worker budgets:
+Automatic anonymous access is constrained by these fixed per-worker budgets:
 60 HTTP requests/minute globally (includes initialize/discovery and invalid
 requests), four inflight MCP HTTP requests, four live DB tool jobs, 16 KiB bodies,
 five seconds to receive a body, 15-second tool response deadline, 8-second retry
@@ -122,9 +131,10 @@ ODBC driver/OS failures are still subject to Gunicorn's worker-health watchdog.
 The application caps each structured payload at 256 KiB; legacy-compatible
 text duplication can approximately double the wire payload.
 
-Launch is a deliberate operator decision: **do not enable** anonymous public
-access until origin restrictions, WAF budgets and the smoke test are in place.
-If these budgets prove unaffordable, disable MCP and adopt the SDK's supported
+Deploy this version with origin restrictions and WAF budgets in place, and
+perform the smoke checks below as part of deployment validation. They are not
+an application feature gate: web startup always serves MCP. If anonymous usage
+proves unaffordable, apply an explicit edge policy and plan the SDK's supported
 MCP OAuth authorization flow; do not add a bespoke API-key scheme.
 
 Telemetry logs only tool operation/outcome/duration and transport rejection code.
@@ -140,7 +150,8 @@ generic REST caching and canonical redirects. Disable caching regardless of
 method/status; all application MCP responses also send `Cache-Control: no-store`.
 Do not rewrite `/mcp` to `/mcp/`, and do not redirect protocol POSTs.
 
-Preserve `Host` matching `MCP_ALLOWED_HOSTS`, `Origin`, `Content-Type`,
+Preserve `Host` matching the derived public hostname (or the exact
+`MCP_ALLOWED_HOSTS` override), `Origin`, `Content-Type`,
 `Accept`, `MCP-Protocol-Version`, `Mcp-Method`, `Mcp-Name`, `Mcp-Session-Id`,
 `Last-Event-ID`, JSON response content types, and any SDK protocol/session
 response headers. Permit POST; GET/DELETE return 405 (`Allow: POST`) because
@@ -185,7 +196,7 @@ async def smoke():
 asyncio.run(smoke())
 ```
 
-**Required deployment gate (not possible in offline pytest):** on staging, then
+**Deployment validation (not possible in offline pytest):** on staging, then
 through the public Front Door URL, run this client to initialize, list all four
 tools and call search, filters, detail and history for a returned ID. Compare
 records against `/api/releases?release_item_id=...` and its history endpoint.
@@ -195,4 +206,5 @@ types and no-store on successful/error requests. Test disallowed Host/Origin
 (429); use staging for load tests. Confirm `/`, RSS/API, healthcheck and refresh
 mode still work; test multiple workers/restarts without session affinity. Record
 deployment version, client/negotiated protocol, Front Door rule and results in
-the release/PR before enabling generally or updating About to delivered.
+the release/PR. Until then report the deployment checks as unverified, without
+claiming the endpoint is disabled or requiring a manual feature enablement step.

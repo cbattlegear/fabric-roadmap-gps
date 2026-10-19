@@ -78,11 +78,14 @@ Caching is handled by Azure Front Door at the CDN edge. The server sets HTTP cac
 - `Cache-Control: public, max-age=14400, stale-while-revalidate=3600` (4h fresh, 1h stale)
 - `ETag` — Weak content hash for conditional GET (send `If-None-Match` to receive 304)
 - `Last-Modified` — Timestamp for conditional requests
-## Read-only MCP (opt-in)
+## Read-only MCP
 
-Fabric GPS includes an optional official-SDK Streamable HTTP endpoint at `/mcp`.
+Fabric GPS serves an official-SDK Streamable HTTP endpoint at `/mcp` automatically
+in web mode, alongside all existing Flask routes on the same managed listener.
 It exposes only public roadmap search, detail, history and filter discovery.
 See [MCP deployment and client guide](MCP.md) for the supported protocol/SDK,
-strict limits, client examples, Front Door configuration, and rollout gates.
-It is disabled by default; the existing Flask/Gunicorn and refresh modes remain
-unchanged unless `MCP_ENABLED=1` is explicitly set in web mode.
+strict limits, client examples, Front Door configuration, and deployment checks.
+No feature flag or new required environment setting is needed: Host/Origin
+allowlists derive from the existing `CANONICAL_HOST` or `BASE_URL`. Normal
+`gunicorn -c gunicorn.conf.py` startup uses the supported ASGI worker; refresh
+mode keeps its existing sequential pipeline.
