@@ -38,12 +38,13 @@ PAGINATION_PAGE_LIMIT = 20
 # Pure helpers
 # ---------------------------------------------------------------------------
 def build_cache_key(subscription: Any) -> str:
-    """SHA-256 cache key from cadence + filter combo.
+    """SHA-256 cache key from payload version + cadence + filter combo.
 
     Using the full hash (not a truncation) avoids collisions when
     subscribers have long filter lists.
     """
     parts = [
+        'digest-v2',  # Invalidate legacy payloads truncated to 50 changes.
         subscription.email_cadence or 'weekly',
         (subscription.product_filter or '').strip().lower(),
         (subscription.release_type_filter or '').strip().lower(),
@@ -132,9 +133,9 @@ def apply_subscription_filters(
 
 def select_top_changes(
     items: List[Dict[str, Any]],
-    max_count: int = MAX_DIGEST_ITEMS,
+    max_count: Optional[int] = MAX_DIGEST_ITEMS,
 ) -> List[Dict[str, Any]]:
-    """Sort by ``last_modified`` desc and truncate to ``max_count``."""
+    """Sort newest first; ``None`` keeps all items for accurate digest counts."""
     ordered = sorted(items, key=lambda x: x.get('last_modified') or '', reverse=True)
     return ordered[:max_count]
 
@@ -324,9 +325,9 @@ class DigestContentBuilder:
         items = list(self.fetch_raw_changes())
         items = filter_by_cadence(items, subscription.email_cadence, now=self._clock())
         items = apply_subscription_filters(items, subscription)
-        items = select_top_changes(items)
+        items = select_top_changes(items, max_count=None)
 
-        ai_summary = self._ai_summary_fn(items) if items else None
+        ai_summary = self._ai_summary_fn(items[:MAX_DIGEST_ITEMS]) if items else None
 
         try:
             content = json.dumps(

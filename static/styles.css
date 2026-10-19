@@ -652,9 +652,31 @@ body {
 }
 
 .change-description a {
-  word-break: break-all;
-  -webkit-word-break: break-all;
+  color: var(--fabric-primary);
+  word-break: normal;
   overflow-wrap: break-word;
+}
+
+.change-description :is(h1, h2, h3, h4, h5, h6) {
+  font: inherit;
+  font-weight: 600;
+  margin: 0 0 var(--spacing-s);
+}
+
+.change-description :is(p, ul, ol, blockquote, pre) {
+  margin: 0 0 var(--spacing-s);
+}
+
+.change-description > :last-child {
+  margin-bottom: 0;
+}
+
+.change-description :is(ul, ol) {
+  padding-inline-start: var(--spacing-l);
+}
+
+.change-description pre {
+  white-space: pre-wrap;
 }
 
 .no-results {
