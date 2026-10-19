@@ -161,7 +161,7 @@ def _is_transient_sql_azure_error(exc: Exception) -> bool:
 # callers that still import these symbols from db.db_sqlserver.
 
 
-def make_engine(conn_str: str | None = None):
+def make_engine(conn_str: str | None = None, **engine_options):
     """
     Build a SQLAlchemy engine. Prefer to pass a DSN or set SQLSERVER_CONN env var.
     Example env value:
@@ -178,7 +178,9 @@ def make_engine(conn_str: str | None = None):
     logger.debug("SQLAlchemy connection string: %s", sanitized_conn)
     # fast_executemany helps bulk inserts with pyodbc; pool_pre_ping detects dead connections
     # pool_recycle ensures connections are periodically refreshed
-    return create_engine(sanitized_conn, fast_executemany=True, future=True, pool_pre_ping=True, pool_recycle=3600)
+    options = dict(fast_executemany=True, future=True, pool_pre_ping=True, pool_recycle=3600)
+    options.update(engine_options)
+    return create_engine(sanitized_conn, **options)
 
 
 # ---------------------------------------------------------------------------
@@ -1707,7 +1709,7 @@ def get_subscriptions_with_changed_watches(engine) -> List[Tuple[EmailSubscripti
     ]
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
-def fetch_history_rows(engine, release_item_id: str):
+def fetch_history_rows(engine, release_item_id: str, limit: Optional[int] = None):
     """Call stored procedure to retrieve history rows and shape output.
     Exposed fields: changed_columns (array) and last_modified for each version.
     We attempt to split ChangedColumns on comma, trimming whitespace.
@@ -1721,7 +1723,14 @@ def fetch_history_rows(engine, release_item_id: str):
         cursor.execute("EXEC [dbo].[GetReleaseItemHistoryById] @ReleaseItemId = ?", (release_item_id,))
         # Expect: VersionNum, release_item_id, ChangedColumns, last_modified
         out = []
-        for row_dict in _rows_to_dicts(cursor):
+        if limit is None:
+            history_rows = _rows_to_dicts(cursor)
+        else:
+            if not 1 <= limit <= 51:
+                raise ValueError("History limit must be between 1 and 51")
+            columns = [column[0] for column in cursor.description]
+            history_rows = [dict(zip(columns, row)) for row in cursor.fetchmany(limit)]
+        for row_dict in history_rows:
             changed_raw = row_dict.get("ChangedColumns") or ""
             # Convert comma separated to list (ignore empty) preserving order
             changed_list = [c.strip() for c in changed_raw.split(',') if c and c.strip()]

@@ -6,6 +6,9 @@ MODE="${APP_MODE:-web}"
 alembic upgrade head
 
 if [[ "$MODE" == "web" ]]; then
+  if [[ "${MCP_ENABLED:-0}" == "1" ]]; then
+    exec gunicorn -c mcp_gunicorn.conf.py
+  fi
   # Run the Flask app with Gunicorn
   exec gunicorn -c gunicorn.conf.py
 elif [[ "$MODE" == "refresh" ]]; then

@@ -128,7 +128,9 @@ def _get(row: Any, key: str) -> Any:
     return getattr(row, key, None)
 
 
-def _format_release_row(row: Any, *, distance: Optional[float] = None) -> dict:
+def _format_release_row(
+    row: Any, *, distance: Optional[float] = None, include_description_html: bool = True,
+) -> dict:
     """Serialize one release row into the public JSON shape.
 
     Accepts either a ``ReleaseItemModel`` instance (regular search) or a
@@ -148,12 +150,13 @@ def _format_release_row(row: Any, *, distance: Optional[float] = None) -> dict:
         "product_id": _get(row, "product_id"),
         "product_name": _get(row, "product_name"),
         "feature_description": _get(row, "feature_description"),
-        "feature_description_html": render_description_html(_get(row, "feature_description")),
         "blog_title": _get(row, "blog_title"),
         "blog_url": _get(row, "blog_url"),
         "last_modified": _iso_or_none(_get(row, "last_modified")),
         "active": _get(row, "active"),
     }
+    if include_description_html:
+        formatted["feature_description_html"] = render_description_html(_get(row, "feature_description"))
     if distance is not None:
         formatted["distance"] = round(distance, 4)
     return formatted

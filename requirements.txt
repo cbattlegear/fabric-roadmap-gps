@@ -13,3 +13,7 @@ alembic>=1.16.5
 beautifulsoup4==4.12.2
 markdown-it-py>=3.0.0
 openai>=1.0.0
+mcp==2.3.0
+a2wsgi==1.10.10
+uvicorn==0.40.0
+uvicorn-worker==0.4.0

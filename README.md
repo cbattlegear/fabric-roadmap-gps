@@ -78,3 +78,11 @@ Caching is handled by Azure Front Door at the CDN edge. The server sets HTTP cac
 - `Cache-Control: public, max-age=14400, stale-while-revalidate=3600` (4h fresh, 1h stale)
 - `ETag` — Weak content hash for conditional GET (send `If-None-Match` to receive 304)
 - `Last-Modified` — Timestamp for conditional requests
+## Read-only MCP (opt-in)
+
+Fabric GPS includes an optional official-SDK Streamable HTTP endpoint at `/mcp`.
+It exposes only public roadmap search, detail, history and filter discovery.
+See [MCP deployment and client guide](MCP.md) for the supported protocol/SDK,
+strict limits, client examples, Front Door configuration, and rollout gates.
+It is disabled by default; the existing Flask/Gunicorn and refresh modes remain
+unchanged unless `MCP_ENABLED=1` is explicitly set in web mode.
