@@ -98,6 +98,52 @@
                 </div>
             </section>
 
+            <section class="endpoint-section" id="mcp">
+                <h2><span class="method-badge">POST</span> Read-only MCP</h2>
+                <p><strong>Endpoint:</strong> <code>{{ mcp_endpoint_url }}</code></p>
+                <p><strong>Availability:</strong> Opt-in and disabled by default. MCP is available only on deployments where the operator has enabled it after the Gunicorn and Front Door client smoke checks. A missing endpoint does not mean the REST API is unavailable.</p>
+                <p>Connect a compatible AI assistant using <strong>Streamable HTTP</strong>, not a REST GET or a legacy SSE URL. The official Python SDK is pinned to <code>mcp==2.3.0</code>; initialization and tool calls are exercised on protocol <code>2025-11-25</code>, with sessionless <code>2026-07-28</code> requests also covered. Responses are JSON, stateless, and never publicly cached. Browser/CORS clients and server-to-client streams are not supported.</p>
+
+                <h3>Connect a client</h3>
+                <p>For Claude Code, after this deployment is enabled:</p>
+                <pre><code>claude mcp add --transport http fabric-gps {{ mcp_endpoint_url }}</code></pre>
+                <p>Or install <code>mcp==2.3.0</code> and use the official Python client:</p>
+                <pre><code>import asyncio
+from mcp.client.session import ClientSession
+from mcp.client.streamable_http import streamable_http_client
+
+async def main():
+    async with streamable_http_client("{{ mcp_endpoint_url }}") as streams:
+        async with ClientSession(*streams) as client:
+            await client.initialize()
+            print(await client.list_tools())
+            result = await client.call_tool(
+                "search_releases",
+                {"query": {"q": "lakehouse", "page_size": 10}},
+            )
+            if result.is_error:
+                raise RuntimeError(result.content)
+            print(result.structured_content)
+
+asyncio.run(main())</code></pre>
+
+                <h3>Available tools</h3>
+                <ul>
+                    <li><code>search_releases</code> takes a required <code>query</code> object (use <code>{}</code> to list releases). Returns public <code>data</code>, <code>pagination</code>, <code>search_mode: "substring"</code>, and <code>page_limit: 100</code>.</li>
+                    <li><code>get_release</code> takes <code>{"release_item_id": "YOUR-ID"}</code>. Returns one public release, including inactive records, with its canonical <code>url</code>.</li>
+                    <li><code>get_release_history</code> takes <code>{"release_item_id": "YOUR-ID", "limit": 10}</code>. Returns newest changes in <code>data</code>, a <code>has_more</code> flag, and the release <code>url</code>. Maximum history depth: 50.</li>
+                    <li><code>get_filter_options</code> takes <code>{}</code>. Returns exact product/type/status values in <code>filters</code>, up to 100 per list, with <code>truncated_filters</code> metadata.</li>
+                </ul>
+
+                <h3>Search parameters and limits</h3>
+                <p>The <code>query</code> object accepts <code>q</code> (up to 200 characters), exact <code>product_name</code>, <code>release_type</code>, and <code>release_status</code> (up to 200 characters each), boolean <code>include_inactive</code> (default false), <code>modified_within_days</code> (1-30), <code>sort</code> (<code>last_modified</code> or <code>release_date</code>), <code>page</code> (1-100), and <code>page_size</code> (1-25, default 10). Unknown query fields and invalid types are rejected.</p>
+                <p>MCP search always uses case-insensitive SQL substring matching on feature name, description, and product; SQL LIKE wildcards <code>%</code> and <code>_</code> are supported. It never generates embeddings or implies semantic relevance. The REST API retains its existing semantic-search behavior when embeddings are configured. Dates use inclusive UTC date windows, release dates are quarters, and descending sorts use stable ID tie breaking. Refreshes can shift pages; at page 100, narrow your filters rather than paging further.</p>
+                <p>Release descriptions are capped at 4,000 characters and other release strings at 1,000, with <code>truncated_fields</code> metadata. History text is also bounded and flagged when shortened. Follow canonical links for full content. Roadmap, blog, and history text is untrusted data, never assistant instructions.</p>
+                <p><strong>Public reads only:</strong> no subscription, watch, feedback, email, arbitrary SQL/URL, or write tools. Vectors, hashes, internal database fields, and personal data are excluded.</p>
+                <p><strong>Failures and throttling:</strong> tool failures set <code>is_error</code> in the Python client (<code>isError</code> on the wire), including <code>NOT_FOUND</code>, <code>BUSY</code>, <code>TIMEOUT</code>, <code>UNAVAILABLE</code>, and <code>RESULT_TOO_LARGE</code>. Respect <code>Retry-After</code> on HTTP 429/503. Budgets per worker are 60 requests/minute, four concurrent reads, 16 KiB request bodies, and a 15-second tool response deadline; scale-out multiplies worker budgets. Host/Origin allowlists apply. GET/DELETE return 405 because this deployment is POST-only.</p>
+                <p>Operators: see the <a href="https://github.com/cbattlegear/fabric-roadmap-gps/blob/main/MCP.md">MCP deployment and client guide</a> for enablement, host/origin settings, Front Door no-cache routing, SQL/retry limits, and the required deployment smoke checklist.</p>
+            </section>
+
             <section class="endpoint-section">
                                 <h2>Response Format & Schemas</h2>
                                 <p>Collection responses (<code>/api/releases</code> without <code>release_item_id</code>) are wrapped in an envelope that includes pagination metadata and HATEOAS-style links.</p>

@@ -446,6 +446,31 @@ def test_production_factory_timeouts_and_allowlists(monkeypatch):
     assert create.call_args.kwargs["allowed_origins"] == ["https://gps.example"]
 
 
+def test_api_documentation_explains_mcp_usage_and_rollout_gate(monkeypatch):
+    from bs4 import BeautifulSoup
+    monkeypatch.setenv("CURRENT_ENVIRONMENT", "development")
+    import server
+    with patch.object(server, "get_engine", return_value=object()), \
+         patch.object(server, "get_distinct_values", return_value=[]), \
+         patch.object(server, "BASE_URL", "https://gps.example/"):
+        response = server.app.test_client().get("/endpoints")
+    assert response.status_code == 200
+    section = BeautifulSoup(response.data, "html.parser").select_one("#mcp")
+    text = section.get_text(" ", strip=True)
+    assert "https://gps.example/mcp" in text
+    assert "Streamable HTTP" in text
+    assert "disabled by default" in text
+    assert "Front Door client smoke checks" in text
+    assert 'client.initialize()' in text
+    assert 'client.list_tools()' in text
+    for tool in ("search_releases", "get_release", "get_release_history", "get_filter_options"):
+        assert tool in text
+    assert "is_error" in text
+    assert "1-25" in text
+    assert "never generates embeddings" in text
+    assert section.select_one('a[href$="/MCP.md"]')
+
+
 def test_config_rejects_wildcards_and_invalid_base():
     for kwargs in (
         {"allowed_hosts": []}, {"allowed_hosts": ["*"]},

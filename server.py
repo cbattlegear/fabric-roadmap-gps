@@ -943,7 +943,8 @@ def _build_endpoints_html() -> str:
     with app.app_context():
         return render_template('endpoints.html', 
                              rss_examples=rss_examples_data,
-                             api_examples=api_examples_data)
+                             api_examples=api_examples_data,
+                             mcp_endpoint_url=f"{BASE_URL.rstrip('/')}/mcp")
 
 
 @app.get("/subscribe")
