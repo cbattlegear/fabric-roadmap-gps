@@ -10,8 +10,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import pytest
+from bs4 import BeautifulSoup
 
 from lib import email_template as et
+from lib.description_format import render_description_html, render_description_text
 
 
 # ---------------------------------------------------------------------------
@@ -118,6 +120,31 @@ class TestButton:
 # Digest HTML
 # ---------------------------------------------------------------------------
 class TestRenderDigestHtml:
+    def test_description_uses_shared_email_renderer_without_changing_source(self):
+        source = (
+            "# Header## ControlsThis is **optional**."
+            "Choices:- First choice.- Second choice."
+            '<script>alert(1)</script>'
+        )
+        change = _change(feature_description=source)
+        html = et.render_digest_html([change], _sub(), "https://example.com")
+        assert render_description_html(source, email=True) in html
+        soup = BeautifulSoup(html, "html.parser")
+        assert soup.script is None
+        assert len(soup.find_all("li")) == 2
+        assert change["feature_description"] == source
+
+    def test_full_count_above_fifty_with_existing_card_limit(self):
+        changes = [_change(feature_name=f"Feature {i}") for i in range(75)]
+        html = et.render_digest_html(changes, _sub(), "https://example.com")
+        assert "<title>Fabric GPS Weekly Update - 75 Changes</title>" in html
+        assert "75 Fabric roadmap item change(s)" in html
+        assert "75 Microsoft Fabric roadmap items modified" in html
+        assert html.count(">View in Fabric GPS</a>") == et.MAX_EMAIL_CARDS
+        assert "... and 55 more change(s)" in html
+        assert "Feature 20" not in html
+        assert "View All on Fabric GPS" in html
+
     def test_empty_changes_renders_empty_state(self):
         html = et.render_digest_html([], _sub(), "https://example.com")
         assert "No roadmap item changes in the past week" in html
@@ -189,6 +216,25 @@ class TestRenderDigestHtml:
 # Digest text
 # ---------------------------------------------------------------------------
 class TestRenderDigestText:
+    def test_description_has_readable_lists_and_link_destinations(self):
+        source = "**Details** [Docs](https://example.com/docs)\n\n- One\n- Two"
+        change = _change(feature_description=source)
+        text = et.render_digest_text([change], _sub(), "https://example.com")
+        assert render_description_text(source) in text
+        assert "Docs (https://example.com/docs)" in text
+        assert "- One\n- Two" in text
+        assert "**Details**" not in text
+        assert change["feature_description"] == source
+
+    def test_full_count_above_fifty_with_existing_text_limit(self):
+        changes = [_change(feature_name=f"Feature {i}") for i in range(75)]
+        text = et.render_digest_text(changes, _sub(), "https://example.com")
+        assert "(75 items)" in text
+        assert "50. Feature 49" in text
+        assert "Feature 50" not in text
+        assert "... and 25 more change(s)." in text
+        assert "Visit https://example.com" in text
+
     def test_includes_header_and_links(self):
         text = et.render_digest_text([_change()], _sub(), "https://example.com")
         assert "FABRIC GPS - WEEKLY UPDATE" in text

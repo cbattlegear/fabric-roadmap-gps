@@ -162,6 +162,19 @@ def test_format_orm_row_regular():
     assert "distance" not in out
 
 
+@pytest.mark.parametrize("mapping", [False, True])
+def test_description_is_derived_without_mutating_source_or_history_fields(mapping):
+    source = "**Bold** details.## ControlsThis setting is optional."
+    row = _make_orm_row(feature_description=source, row_hash="original-hash")
+    original = vars(row).copy()
+    input_row = vars(row).copy() if mapping else row
+    out = _format_release_row(input_row)
+    assert out["feature_description"] == source
+    assert "<strong>Bold</strong>" in out["feature_description_html"]
+    assert "<h2>Controls</h2>" in out["feature_description_html"]
+    assert (input_row if mapping else vars(input_row)) == original
+
+
 def test_format_dict_row_vector_includes_distance_rounded():
     row = {
         "release_item_id": "r2",

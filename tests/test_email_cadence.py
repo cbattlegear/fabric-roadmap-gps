@@ -8,7 +8,8 @@ test the cutoff boundary without freezing the clock for the whole module.
 """
 
 from datetime import datetime
-from unittest.mock import patch  # noqa: F401  (kept for future tests)
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -17,6 +18,27 @@ import pytest
 # only at construction time, not at import. The class itself is safe to
 # reach for the static helper.
 from weekly_email_job import WeeklyEmailSender
+
+
+@pytest.mark.parametrize("cadence", ["daily", "weekly"])
+def test_digest_subject_uses_full_count(cadence):
+    sender = WeeklyEmailSender.__new__(WeeklyEmailSender)
+    sender.base_url = "https://example.com"
+    changes = [_item("2026-04-22") for _ in range(75)]
+    builder = MagicMock()
+    builder.get_for.return_value = (changes, None)
+    sender.send_azure_email = MagicMock(return_value=True)
+    subscription = SimpleNamespace(
+        email="test@example.com", email_cadence=cadence,
+        unsubscribe_token="token", product_filter=None,
+        release_type_filter=None, release_status_filter=None,
+    )
+    with patch.object(sender, "_builder", return_value=builder):
+        assert sender.send_digest_email(subscription)
+    message = sender.send_azure_email.call_args.kwargs
+    assert message["subject"] == f"Fabric GPS {cadence.title()} Update - 75 Changes"
+    assert "75 Fabric roadmap item change(s)" in message["html_content"]
+    assert "(75 items)" in message["text_content"]
 
 
 def _item(last_modified, **extra):

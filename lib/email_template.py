@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 from urllib.parse import urlencode
 
 from lib.quarter_date import format_as_quarter
+from lib.description_format import render_description_html, render_description_text
 
 
 # ---------------------------------------------------------------------------
@@ -36,6 +37,7 @@ TEXT_SECONDARY = "#605e5c"
 HERO_GRADIENT = "linear-gradient(135deg,#19433c 0%,#286c61 100%)"
 
 MAX_EMAIL_CARDS = 20
+MAX_EMAIL_TEXT_ITEMS = 50
 
 _BADGE_COLORS = {
     "product": ("#004578", "#ffffff"),
@@ -158,8 +160,8 @@ def _render_change_card(change: Dict[str, Any], base_url: str, utm_campaign: str
                         <strong>Last Modified:</strong> {escape_html(modified_date)} &nbsp;|&nbsp;
                         <strong>Release Date:</strong> {escape_html(release_date)}
                     </div>
-                    <p style=\"margin:0 0 14px 0;font-size:14px;line-height:1.5;color:{TEXT_PRIMARY};\">{escape_html(description)}
-                    </p>
+                    <div class=\"change-description\" style=\"margin:0 0 14px 0;font-size:14px;line-height:1.5;color:{TEXT_PRIMARY};overflow-wrap:break-word;\">{render_description_html(description, email=True)}
+                    </div>
                     {build_button(detail_url, "View in Fabric GPS")}
                 </div>
                 """
@@ -270,7 +272,7 @@ def render_digest_html(
 <html lang=\"en\">
 <head>
 <meta charset=\"UTF-8\">
-<title>Fabric GPS {cadence_label} Update</title>
+<title>Fabric GPS {cadence_label} Update - {total_changes} Changes</title>
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">
 <style>
 body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSystemFont,'Helvetica Neue',Arial,sans-serif; }}
@@ -285,7 +287,7 @@ body,table,td,p,a {{ font-family:'Segoe UI',system-ui,-apple-system,BlinkMacSyst
         <tr>
           <td style=\"background:{HERO_GRADIENT};color:#ffffff;border-radius:14px; padding:34px 34px 38px 34px; text-align:center;box-shadow:0 4px 14px rgba(0,0,0,0.12);\">
             <h1 style=\"margin:0 0 10px 0;font-size:26px;line-height:1.2;font-weight:600;letter-spacing:.5px;\">Fabric GPS — {cadence_label} Update</h1>
-            <p style=\"margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);\">Microsoft Fabric roadmap items modified during {cadence_period}.</p>
+            <p style=\"margin:0;font-size:15px;line-height:1.5;max-width:520px;display:inline-block;color:rgba(255,255,255,0.95);\">{total_changes} Microsoft Fabric roadmap items modified during {cadence_period}.</p>
           </td>
         </tr>
         <tr><td style=\"height:28px;\"></td></tr>
@@ -358,7 +360,7 @@ def render_digest_text(
         "",
     ])
 
-    for i, change in enumerate(changes, 1):
+    for i, change in enumerate(changes[:MAX_EMAIL_TEXT_ITEMS], 1):
         release_date = _fmt_release_date(change.get('release_date'))
 
         modified_date = 'Unknown'
@@ -375,7 +377,13 @@ def render_digest_text(
             f"   Status: {change.get('release_status', 'Unknown')}",
             f"   Last Modified: {modified_date}",
             f"   Release Date: {release_date}",
-            f"   Description: {change.get('feature_description', 'No description available.')}",
+            f"   Description: {render_description_text(change.get('feature_description'))}",
+            "",
+        ])
+
+    if len(changes) > MAX_EMAIL_TEXT_ITEMS:
+        text_parts.extend([
+            f"... and {len(changes) - MAX_EMAIL_TEXT_ITEMS} more change(s).",
             "",
         ])
 

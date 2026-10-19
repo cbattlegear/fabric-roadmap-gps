@@ -11,4 +11,5 @@ opentelemetry-instrumentation-flask==0.57b0
 azure-communication-email>=1.0.0
 alembic>=1.16.5
 beautifulsoup4==4.12.2
+markdown-it-py>=3.0.0
 openai>=1.0.0

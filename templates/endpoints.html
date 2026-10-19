@@ -113,6 +113,7 @@
             "product_id": "uuid|null",
             "product_name": "string",
             "feature_description": "string|null",
+            "feature_description_html": "sanitized HTML string",
             "blog_title": "string|null",
             "blog_url": "string|null",
             "last_modified": "YYYY-MM-DD",
@@ -149,11 +150,16 @@
     "product_id": "uuid|null",
     "product_name": "string",
     "feature_description": "string|null",
+    "feature_description_html": "sanitized HTML string",
     "blog_title": "string|null",
     "blog_url": "string|null",
     "last_modified": "YYYY-MM-DD",
     "active": true
 }</code></pre>
+
+                                <p><code>feature_description</code> is the unmodified source.
+                                <code>feature_description_html</code> is derived at read time for display:
+                                repaired Markdown and sanitized HTML, with no changes to stored data or history.</p>
 
                                 <h3>History Endpoint <code>/api/releases/history/&lt;release_item_id&gt;</code></h3>
                                 <p>Returns the change history for a single release item, newest first. Each entry shows which fields changed. Possible change descriptions include field diffs (e.g. <code>Release Date 2025-06-01 -&gt; 2025-09-01</code>), <code>Roadmap Item Added</code>, <code>Removed from Roadmap</code>, and <code>Restored to Roadmap</code>.</p>

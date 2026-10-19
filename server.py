@@ -9,6 +9,7 @@ from typing import Optional, List
 from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory, url_for, abort
 from flask_limiter import Limiter
 from html import escape
+from markupsafe import Markup
 from email.utils import format_datetime
 import hashlib
 
@@ -45,6 +46,7 @@ from db.db_sqlserver import (
     rotate_unsubscribe_token,
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
+from lib.description_format import render_description_html
 from lib.quarter_date import format_as_quarter
 from lib.releases_api import (
     ReleasesQuery,
@@ -57,6 +59,11 @@ from lib.releases_api import (
 os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
 app = Flask(__name__)
+
+
+@app.template_filter('description_html')
+def _description_html_filter(value):
+    return Markup(render_description_html(value))
 
 
 @app.template_filter('release_date_quarter')

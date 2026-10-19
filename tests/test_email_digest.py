@@ -9,6 +9,7 @@ ai_summary_fn, clock) mocked so no live network or DB is involved.
 from __future__ import annotations
 
 import json
+import hashlib
 from contextlib import contextmanager
 from datetime import datetime
 from types import SimpleNamespace
@@ -48,6 +49,10 @@ def _item(**overrides):
 # build_cache_key
 # ---------------------------------------------------------------------------
 class TestBuildCacheKey:
+    def test_legacy_truncated_cache_key_is_invalidated(self):
+        legacy_key = hashlib.sha256(b"weekly|||").hexdigest()
+        assert email_digest.build_cache_key(_sub()) != legacy_key
+
     def test_same_inputs_yield_same_key(self):
         a = email_digest.build_cache_key(_sub(product_filter="Power BI"))
         b = email_digest.build_cache_key(_sub(product_filter="Power BI"))
@@ -354,6 +359,43 @@ class TestDigestContentBuilderFetch:
 
 
 class TestDigestContentBuilderGetFor:
+    @pytest.mark.parametrize("cadence", ["daily", "weekly"])
+    @pytest.mark.parametrize("count", [0, 1, 49, 50, 51, 75])
+    def test_preserves_full_filtered_count_including_cache_hits(self, cadence, count):
+        session = FakeSession()
+        matching = [
+            _item(release_item_id=str(i), last_modified="2026-04-22")
+            for i in range(count)
+        ]
+        excluded = [_item(release_item_id="other", product_name="Fabric")]
+        if cadence == "daily":
+            excluded.append(_item(release_item_id="old", last_modified="2026-04-19"))
+        ai_summary = MagicMock(return_value="Summary")
+        http_get = MagicMock(return_value=_ok_response({
+            "data": matching + excluded,
+            "pagination": {"has_next": False},
+        }))
+        builder = email_digest.DigestContentBuilder(
+            engine=None, base_url="http://x",
+            session_scope=_make_session_scope(session),
+            cache_model=FakeCacheModel,
+            ai_summary_fn=ai_summary,
+            http_get=http_get,
+            clock=lambda: datetime(2026, 4, 22, 12),
+        )
+        subscription = _sub(email_cadence=cadence, product_filter="Power BI")
+        changes, summary = builder.get_for(subscription)
+        assert changes == matching
+        if matching:
+            ai_summary.assert_called_once_with(matching[:50])
+        else:
+            ai_summary.assert_not_called()
+        assert json.loads(session.added[0].content_json)["changes"] == matching
+
+        session._scalar_result = FakeCacheRow(session.added[0].content_json)
+        assert builder.get_for(subscription) == (changes, summary)
+        http_get.assert_called_once()
+
     def test_cache_hit_returns_cached_changes_and_summary(self):
         cached_payload = {"changes": [_item(release_item_id="x")], "ai_summary": "S"}
         row = FakeCacheRow(json.dumps(cached_payload))

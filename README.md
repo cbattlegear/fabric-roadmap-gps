@@ -39,6 +39,23 @@ Subscribers can receive digest emails with customizable options:
 - **Content filters**: Filter by product, release type, and/or release status
 - **Feature watches**: Watch individual release items for instant alerts (checked hourly regardless of digest cadence)
 
+Digest subjects, titles, and counts reflect all changes matching the subscriber's
+cadence and filters. HTML emails show up to 20 cards, with the remaining count and
+a link to browse the roadmap; plain-text emails show up to 50 items. AI summaries
+use at most the 50 most recently modified items.
+
+Roadmap cards, individual release pages, and digest emails share a sanitized
+description formatter (`lib/description_format.py`). It repairs explicit heading,
+list, and encoded line-break markers in flattened Markdown, without guessing
+ambiguous missing word boundaries. Code and link destinations are preserved.
+Email HTML uses inline formatting; plain-text email keeps readable lists and
+link destinations.
+
+Formatting happens only when presenting data: no descriptions, row hashes,
+timestamps, vectors, or release history are updated. The API's
+`feature_description` remains the original source; the additive
+`feature_description_html` field contains the display-ready, sanitized HTML.
+
 ### Preferences
 
 Existing subscribers can manage their preferences at `/preferences?token=<unsubscribe_token>`. This link is included in the footer of every email.

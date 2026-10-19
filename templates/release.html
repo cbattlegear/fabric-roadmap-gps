@@ -42,7 +42,7 @@
 
             <div class="modal-section" style="margin-top: var(--spacing-l);">
                 <h2 style="font-size: 1.1rem; margin-bottom: var(--spacing-s);">Description</h2>
-                <div class="change-description">{{ release.feature_description or 'No description available.' }}</div>
+                <div class="change-description">{{ release.feature_description | description_html }}</div>
             </div>
 
             {% if release.blog_title and release.blog_url %}

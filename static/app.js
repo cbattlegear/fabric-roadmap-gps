@@ -1,5 +1,3 @@
-const md = new markdownit({html: true});
-
 function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -18,23 +16,6 @@ function parseRoadmapDate(value) {
         if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
     }
     return new Date(value);
-}
-
-function descriptionPrepareHtml(text) {
-    if (!text) return 'No description available.';
-    let escaped = escapeHtml(text);
-    let unescapeStr = escaped.replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'");
-
-    unescapeStr = unescapeStr.replace('###', '');
-
-    // Convert line breaks to <br>
-    unescapeStr = unescapeStr.replace(/\n/g, '<br>');
-    unescapeStr = md.render(unescapeStr);
-    return unescapeStr;
 }
 
 // Redirect old hash-based release URLs to new route
@@ -157,7 +138,7 @@ class RecentChanges {
             params.append('page', String(this.page));
             params.append('page_size', String(this.pageSize));
             params.append('include_inactive', 'true');
-            if (this.dataVersion) params.append('v', this.dataVersion);
+            params.append('v', `${this.dataVersion || 'current'}-description-v1`);
 
             const response = await fetch(`/api/releases?${params.toString()}`);
 
@@ -220,7 +201,8 @@ class RecentChanges {
         noResults.style.display = 'none';
         container.innerHTML = this.currentData.map(item => this.createChangeItem(item)).join('');
         container.querySelectorAll('.change-item').forEach(card => {
-            card.addEventListener('click', () => {
+            card.addEventListener('click', (event) => {
+                if (event.target.closest('a')) return;
                 const id = card.getAttribute('data-id');
                 window.location.href = `/release/${id}`;
             });
@@ -259,7 +241,7 @@ class RecentChanges {
                     <span class="change-date">Last Modified: ${date}</span>
                     <span class="release-date">Release Date: ${releaseDate}</span>
                 </div>
-                <div class="change-description">${descriptionPrepareHtml(item.feature_description || 'No description available.')}</div>
+                <div class="change-description">${item.feature_description_html || escapeHtml(item.feature_description || 'No description available.')}</div>
                 <div style="margin-top:.5rem; font-size:.75rem; display: flex; justify-content: space-between; align-items: center;">
                     <div class="change-link-inline" style="color: var(--fabric-primary);">Click for details ▸</div>
                     ${item.blog_title && item.blog_url ? `<a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" style="color: var(--fabric-secondary); text-decoration: none; display: flex; align-items: center; gap: .25rem;" onclick="event.stopPropagation();" title="${escapeHtml(item.blog_title)}">📚 Related blog</a>` : ''}

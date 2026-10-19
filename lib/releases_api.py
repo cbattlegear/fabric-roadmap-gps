@@ -12,6 +12,7 @@ from typing import Any, Mapping, Optional
 from urllib.parse import urlencode
 
 from db.db_sqlserver import VALID_SORT_OPTIONS
+from lib.description_format import render_description_html
 from lib.quarter_date import format_as_quarter
 
 DEFAULT_PAGE_SIZE = 50
@@ -147,6 +148,7 @@ def _format_release_row(row: Any, *, distance: Optional[float] = None) -> dict:
         "product_id": _get(row, "product_id"),
         "product_name": _get(row, "product_name"),
         "feature_description": _get(row, "feature_description"),
+        "feature_description_html": render_description_html(_get(row, "feature_description")),
         "blog_title": _get(row, "blog_title"),
         "blog_url": _get(row, "blog_url"),
         "last_modified": _iso_or_none(_get(row, "last_modified")),

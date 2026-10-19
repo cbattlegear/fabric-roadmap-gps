@@ -13,6 +13,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from bs4 import BeautifulSoup
+
+from lib.description_format import render_description_html
 
 
 @pytest.fixture
@@ -94,6 +97,45 @@ def test_api_releases_single_item_path(client, server_module):
     assert "pagination" not in body
     assert body["release_item_id"] == "abc-123"
     assert body["release_date"] == "Q2 2024"
+
+
+def test_api_and_release_page_share_read_only_description_formatting(client, server_module):
+    source = (
+        "# Header## ControlsThis setting is **off by default**."
+        '<script>alert(1)</script>'
+    )
+    row = _row(release_item_id="formatted", feature_description=source, row_hash="unchanged")
+    original = vars(row).copy()
+    with patch.object(server_module, "get_engine", return_value=object()), \
+         patch.object(server_module, "get_release_item_by_id", return_value=row), \
+         patch.object(server_module, "fetch_history_rows", return_value=[]):
+        api = client.get("/api/releases?release_item_id=formatted").get_json()
+        page = client.get("/release/formatted")
+    assert api["feature_description"] == source
+    assert api["feature_description_html"] == render_description_html(source)
+    description = BeautifulSoup(page.data, "html.parser").select_one(".change-description")
+    assert str(description.h2) == "<h2>Controls</h2>"
+    assert description.strong.get_text() == "off by default"
+    assert description.script is None
+    assert vars(row) == original
+
+
+def test_list_api_also_supplies_sanitized_description_html(client, server_module):
+    row = _row(feature_description='**Details** <img src=x onerror=alert(1)>')
+    with patch.object(server_module, "get_engine", return_value=object()), \
+         patch.object(server_module, "count_recently_modified_releases", return_value=1), \
+         patch.object(server_module, "get_recently_modified_releases", return_value=[row]):
+        item = client.get("/api/releases").get_json()["data"][0]
+    assert item["feature_description"] == row.feature_description
+    assert item["feature_description_html"] == "<p><strong>Details</strong> </p>"
+
+
+def test_homepage_versions_changed_immutable_assets(client):
+    page = BeautifulSoup(client.get("/").data, "html.parser")
+    assert page.select_one('script[src="/static/app.js?v=description-v1"]')
+    assert page.select_one('link[href="/static/styles.css?v=description-v1"]')
+    assert not page.select_one('script[src="/static/app.js"]')
+    assert not page.select_one('script[src="/static/markdown-it.min.js"]')
 
 
 def test_api_releases_single_item_not_found_returns_404(client, server_module):
