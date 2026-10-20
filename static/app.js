@@ -143,7 +143,7 @@ class RecentChanges {
             params.append('page', String(this.page));
             params.append('page_size', String(this.pageSize));
             params.append('include_inactive', filters.include_inactive);
-            params.append('v', `${this.dataVersion || 'current'}-description-v1`);
+            params.append('v', `${this.dataVersion || 'current'}-description-v2`);
 
             const response = await fetch(`/api/releases?${params.toString()}`, { signal: request.signal });
 

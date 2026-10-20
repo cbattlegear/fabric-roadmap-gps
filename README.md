@@ -281,6 +281,9 @@ Roadmap cards, individual release pages, and digest emails share a sanitized
 description formatter (`lib/description_format.py`). It repairs explicit heading,
 list, and encoded line-break markers in flattened Markdown, without guessing
 ambiguous missing word boundaries. Code and link destinations are preserved.
+Adjacent bold headings and their explicit Overview/Key Capabilities boundaries
+are supported too. A leading heading is omitted only when it exactly matches
+the separately displayed feature title and other description content remains.
 Email HTML uses inline formatting; plain-text email keeps readable lists and
 link destinations.
 

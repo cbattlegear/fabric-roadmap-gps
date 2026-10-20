@@ -130,9 +130,25 @@ def test_list_api_also_supplies_sanitized_description_html(client, server_module
     assert item["feature_description_html"] == "<p><strong>Details</strong> </p>"
 
 
+@pytest.mark.parametrize("heading", ["**Exact title**", "<h2>Exact title</h2>"])
+def test_api_and_detail_deduplicate_only_the_matching_description_heading(client, server_module, heading):
+    source = heading + "\n\n**Overview**Enable **safe** formatting."
+    row = _row(release_item_id="formatted", feature_name="Exact title", feature_description=source)
+    with patch.object(server_module, "get_engine", return_value=object()), \
+         patch.object(server_module, "get_release_item_by_id", return_value=row), \
+         patch.object(server_module, "fetch_history_rows", return_value=[]):
+        api = client.get("/api/releases?release_item_id=formatted").get_json()
+        page = BeautifulSoup(client.get("/release/formatted").data, "html.parser")
+    expected = render_description_html(source, feature_name=row.feature_name)
+    assert api["feature_description"] == row.feature_description == source
+    assert api["feature_description_html"] == expected
+    assert page.select_one(".change-description").decode_contents().strip() == expected
+    assert "Exact title" not in BeautifulSoup(expected, "html.parser").get_text()
+
+
 def test_homepage_versions_changed_immutable_assets(client):
     page = BeautifulSoup(client.get("/").data, "html.parser")
-    assert page.select_one('script[src="/static/app.js?v=related-label-v3"][defer]')
+    assert page.select_one('script[src="/static/app.js?v=description-boundaries-v4"][defer]')
     assert page.select_one('script[src="/static/blog-feedback.js?v=article-activation-v2"][defer]')
     assert page.select_one('link[href="/static/styles.css?v=section-navigation-v1"]')
     assert not page.select_one('script[src="/static/app.js"]')

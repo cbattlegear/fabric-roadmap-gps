@@ -160,7 +160,7 @@ def _render_change_card(change: Dict[str, Any], base_url: str, utm_campaign: str
                         <strong>Last Modified:</strong> {escape_html(modified_date)} &nbsp;|&nbsp;
                         <strong>Release Date:</strong> {escape_html(release_date)}
                     </div>
-                    <div class=\"change-description\" style=\"margin:0 0 14px 0;font-size:14px;line-height:1.5;color:{TEXT_PRIMARY};overflow-wrap:break-word;\">{render_description_html(description, email=True)}
+                    <div class=\"change-description\" style=\"margin:0 0 14px 0;font-size:14px;line-height:1.5;color:{TEXT_PRIMARY};overflow-wrap:break-word;\">{render_description_html(description, email=True, feature_name=change.get('feature_name'))}
                     </div>
                     {build_button(detail_url, "View in Fabric GPS")}
                 </div>
@@ -377,7 +377,7 @@ def render_digest_text(
             f"   Status: {change.get('release_status', 'Unknown')}",
             f"   Last Modified: {modified_date}",
             f"   Release Date: {release_date}",
-            f"   Description: {render_description_text(change.get('feature_description'))}",
+            f"   Description: {render_description_text(change.get('feature_description'), feature_name=change.get('feature_name'))}",
             "",
         ])
 

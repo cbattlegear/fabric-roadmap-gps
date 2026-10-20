@@ -49,6 +49,10 @@ def _repair_prose(text: str) -> str:
     text = re.sub(r"&lt;br\s*/?\s*&gt;", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</?(?:p|div)\b[^>]*>", "\n\n", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"(?<!\*)(\*\*[^*\n]+\*\*)(?=\*\*[^*\n]+\*\*(?!\*))",
+        r"\1\n\n", text,
+    )
 
     # Flattened exports glue headings onto the preceding sentence or heading.
     text = re.sub(r"(?<=\S)[ \t]*(?<!#)(?=#{2,6}[ \t]+)", "\n\n", text)
@@ -69,6 +73,10 @@ def _repair_prose(text: str) -> str:
     text = re.sub(r"(?<=[.:;])[ \t]*(?=[*-][ \t]+)", "\n", text)
     text = re.sub(r"(?<=\S)[ \t]{2,}(?=-[ \t]+)", "\n", text)
     text = re.sub(r"(?<=\*\*)(?=-[ \t]+)", "\n", text)
+    text = re.sub(
+        r"^(\*\*(?:Overview|Key Capabilities)\*\*)(?=\S)",
+        r"\1\n\n", text, flags=re.MULTILINE,
+    )
 
     lines = []
     for line in text.split("\n"):
@@ -109,7 +117,9 @@ def _safe_href(href: str) -> bool:
         return False
 
 
-def render_description_html(text: Optional[str], *, email: bool = False) -> str:
+def render_description_html(
+    text: Optional[str], *, email: bool = False, feature_name: Optional[str] = None,
+) -> str:
     """Render sanitized HTML without mutating the source or accessing the DB."""
     source = text if text and text.strip() else _FALLBACK
     soup = BeautifulSoup(_MARKDOWN.render(_normalize(source)), "html.parser")
@@ -143,14 +153,23 @@ def render_description_html(text: Optional[str], *, email: bool = False) -> str:
                 style = "margin:12px 0 8px 0;font-size:14px;line-height:1.5;font-weight:600;"
             if style:
                 tag["style"] = style
+    first = soup.find(True, recursive=False)
+    if feature_name and first and any(
+        sibling.get_text(strip=True) for sibling in first.find_next_siblings()
+    ) and (
+        re.fullmatch(r"h[1-6]", first.name) or
+        (first.name == "p" and len(first.contents) == 1 and first.find(["strong", "b"]))
+    ):
+        if " ".join(first.get_text().split()) == " ".join(feature_name.split()):
+            first.decompose()
     if not soup.get_text(strip=True):
         return f"<p>{_FALLBACK}</p>"
     return str(soup).strip()
 
 
-def render_description_text(text: Optional[str]) -> str:
+def render_description_text(text: Optional[str], *, feature_name: Optional[str] = None) -> str:
     """Readable plain text, retaining list markers and link destinations."""
-    soup = BeautifulSoup(render_description_html(text), "html.parser")
+    soup = BeautifulSoup(render_description_html(text, feature_name=feature_name), "html.parser")
     for whitespace in soup.find_all(string=lambda value: value.isspace()):
         if whitespace.parent.name in ("ul", "ol", "[document]"):
             whitespace.extract()

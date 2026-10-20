@@ -73,8 +73,8 @@ app.jinja_env.globals["blog_identity"] = blog_identity
 
 
 @app.template_filter('description_html')
-def _description_html_filter(value):
-    return Markup(render_description_html(value))
+def _description_html_filter(value, feature_name=None):
+    return Markup(render_description_html(value, feature_name=feature_name))
 
 
 @app.template_filter('release_date_quarter')

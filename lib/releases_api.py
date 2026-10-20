@@ -156,7 +156,9 @@ def _format_release_row(
         "active": _get(row, "active"),
     }
     if include_description_html:
-        formatted["feature_description_html"] = render_description_html(_get(row, "feature_description"))
+        formatted["feature_description_html"] = render_description_html(
+            _get(row, "feature_description"), feature_name=_get(row, "feature_name"),
+        )
     if distance is not None:
         formatted["distance"] = round(distance, 4)
     return formatted
