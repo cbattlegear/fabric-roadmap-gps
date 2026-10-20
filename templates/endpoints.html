@@ -11,6 +11,13 @@
 {% block content %}
         <div class="container">
             <section class="endpoint-section">
+                <h2><span class="method-badge method-get">GET</span> Roadmap Insights</h2>
+                <p><code>/api/insights</code> provides observed temporal activity, status transitions, target movements, current upcoming quarters, coverage metadata and paginated evidence. View the accessible dashboard at <a href="/insights">Insights</a>.</p>
+                <p>Use <code>days=30</code> (default) or <code>90</code>, exact <code>product_name</code>, and <code>metric=all|addition|edit|removal|restoration|status|target|upcoming</code>. Optional <code>end=YYYY-MM-DD</code> is the exclusive UTC window end, within the past 366 days or tomorrow. Status drill-downs accept a day <code>bucket=YYYY-MM-DD</code>; upcoming drill-downs accept <code>bucket=YYYY-QN</code> or <code>unknown</code>. Evidence uses <code>page=1..200</code>, 50 rows per page; aggregate totals are not truncated.</p>
+                <p>Counts are observed events, with separate distinct-feature counts; they are not delivery guarantees. Repeated transitions count separately, pipeline-only writes do not. Coverage is explicitly incomplete/unverified; additions are first retained observations. Upcoming targets are a current snapshot, independent of the historical window. Errors return 400 for invalid filters or 503 for unavailable data. Successful results are publicly cached for one hour with content ETags.</p>
+                <p><a href="/api/insights?days=90&amp;metric=target">Example: target movements over 90 days</a></p>
+            </section>
+            <section class="endpoint-section">
                 <h2><span class="method-badge method-get">GET</span> RSS Feed</h2>
                 <p><strong>Endpoints:</strong> <code>/rss</code> and <code>/rss.xml</code></p>
                 <p><strong>Description:</strong> Returns an RSS 2.0 feed of recently modified releases with optional filtering.</p>

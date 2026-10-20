@@ -116,6 +116,91 @@ pytest (`tests/test_saved_views.py`). No npm dependencies, network, browser, or
 credentials are required. Install Node.js 22+ alongside Python to run them;
 missing Node fails with an explicit setup message.
 
+## Roadmap Insights
+
+`/insights` is a compact, chart-first Analytics Dashboard: stacked product
+activity, a daily status trend, target-change share, and upcoming-quarter bars.
+Charts are server-rendered; accessible data tables and event evidence live in
+keyboard-operable disclosures rather than filling the overview. Filter by `product_name` and
+`days=30` or `days=90`. Counts link to exact, paginated evidence rather than the
+changelog's latest-change-per-feature view. No login or JavaScript is required.
+
+The same bounded data is available at `/api/insights`, for example:
+
+```text
+/api/insights?days=90&product_name=Power%20BI
+/api/insights?days=30&metric=target
+/api/insights?days=30&metric=status&bucket=2026-10-19
+/api/insights?metric=upcoming&bucket=2027-Q1&page=2
+```
+
+**Metric definitions**
+
+- History windows are UTC calendar days: `start` inclusive, `end` exclusive.
+  The default end is tomorrow's UTC midnight, including the current partial day.
+  An optional canonical `end=YYYY-MM-DD` fixes the window; it must be within the
+  last 366 days or tomorrow. Repeated retained content transitions for the same
+  feature count as separate **events**; distinct-feature counts are also shown.
+- Activity categories are mutually exclusive: first retained observation
+  (addition), removal, restoration, otherwise substantive edit. The tracked
+  fields match the release-ingestion schema. Vectors, blog references,
+  `row_hash` and `last_modified` alone never constitute roadmap activity.
+  Product attribution uses the version **after** each event, including removals
+  and product moves. Missing/empty products are grouped as `Unknown product`.
+- Status transitions are events with a known predecessor and a change to
+  status/type or their numeric values. Description-only changes and first
+  observations are excluded. Target movements compare the previous and revised
+  stored dates, including transitions to/from null. These two metrics can overlap
+  each other and activity categories; they must not be added together.
+- Upcoming targets are a **current snapshot**, independent of historical filters:
+  active features not marked `Shipped`, grouped by current/future published
+  quarter plus an `unknown` bucket. Unknown statuses are included, never assumed
+  delivered; older targets are excluded. Quarter precision follows the current
+  source and existing date normalization. Exact stored dates in evidence are not
+  promised shipping days, actual delays, or delivery guarantees.
+- Coverage is deliberately `complete: false`: retention and the initial import
+  are not verified. An addition is only the first **retained observation**.
+  A baseline version overlapping the window start supplies the predecessor and
+  is not itself counted. Missing predecessors cannot prove transitions.
+  SQL Server temporal queries omit zero-duration versions from updates in a
+  single transaction; these are not separately observable events. The last
+  stored write includes pipeline work and is not a source-refresh heartbeat.
+
+**API and operating bounds**
+
+Technical coverage limitations remain in the API and these metric definitions,
+not a prominent dashboard warning. No complete historical coverage is implied.
+
+The JSON response contains `filters`, `coverage`, `activity`, `transitions`, `visuals`,
+`target_changes`, `upcoming`, `products`, and `details` (total, items and page
+links). `metric` accepts `all`, `addition`, `edit`, `removal`, `restoration`,
+`status`, `target`, or `upcoming`. `bucket` accepts only a UTC day for `status`
+or `YYYY-QN` / `unknown` for `upcoming`. `product_name` is an exact match, limited
+to 200 characters. Detail pages contain at most 50 rows; pages are limited to
+1-200 (10,000 browsable observations; totals remain exact). Follow the returned
+links to preserve filters. Each endpoint is rate-limited to 30 requests/minute
+per worker/IP. Invalid filters return 400; database failures are logged and return
+a visible 503 with `no-store`, never zero-filled metrics.
+
+The set-based SQL uses a maximum 90-day temporal range plus one overlapping
+baseline, filters products after computing predecessors, returns aggregates and
+one evidence page, limits parallelism to two, and sets a 15-second query timeout
+(at most two attempts for transient errors). Successful HTML/JSON responses use
+one-hour public CDN caching and content-hash ETags. Validators vary with data,
+filters, date-window rollover, and pagination.
+
+**Rollout gate:** before enabling this page in production, run the opt-in
+`tests/test_insights_sqlserver.py` fixture against a dedicated non-production SQL
+Server/Azure SQL database and capture representative actual execution plans and
+`STATISTICS IO/TIME` for 30/90 days, all products and a selective product.
+Check repeated same-day edits, removals/restorations, pipeline-only writes,
+boundary versions, missing retained history, and aggregate/evidence agreement.
+Set `INSIGHTS_TEST_SQLSERVER_CONN` only for that disposable test database.
+The fixture creates and drops its own uniquely named temporal table; it never
+modifies `dbo.release_items`. CI requires no SQL Server, network, or secrets.
+No index or persisted aggregate is proposed without those measurements.
+The About-page status remains Planned until merge and this rollout gate pass.
+
 ## Email Subscriptions
 
 Subscribers can receive digest emails with customizable options:

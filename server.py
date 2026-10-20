@@ -61,6 +61,9 @@ from lib.releases_api import (
     _format_release_row,
     _parse_releases_query,
 )
+from lib.insights import parse_insights_query, prepare_insights
+from db.db_sqlserver import get_insights
+from sqlalchemy.exc import SQLAlchemyError
 
 os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
@@ -1537,6 +1540,60 @@ def changelog_page():
     return render_template('changelog.html')
 
 
+def _load_insights():
+    query = parse_insights_query(request.args)
+    return query, prepare_insights(get_insights(get_engine(), query), query)
+
+
+@app.get("/api/insights")
+@limiter.limit("30 per minute")
+def api_insights():
+    """Bounded, event-based roadmap history and current target aggregates."""
+    try:
+        query, data = _load_insights()
+    except ValueError as exc:
+        response = jsonify({"error": str(exc)})
+        response.status_code = 400
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except (SQLAlchemyError, RuntimeError) as exc:
+        otelLogger.exception("Insights database query failed: %s", exc)
+        response = jsonify({"error": "Insights is temporarily unavailable. Please try again."})
+        response.status_code = 503
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    body = json.dumps(data, sort_keys=True, separators=(",", ":"))
+    response = _make_cached_response(body, last_modified=_max_last_modified(
+        [data["coverage"]], attr="last_data_write"))
+    # The shared helper's early 304 does not carry its normal cache headers.
+    response.headers["ETag"] = 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest() + '"'
+    response.headers["Cache-Control"] = f"public, max-age={_FRONT_END_TTL}, must-revalidate"
+    return response
+
+
+@app.get("/insights")
+@limiter.limit("30 per minute")
+def insights_page():
+    try:
+        query, data = _load_insights()
+    except ValueError as exc:
+        response = Response(render_template("insights.html", error=str(exc), data=None), status=400)
+    except (SQLAlchemyError, RuntimeError) as exc:
+        otelLogger.exception("Insights page query failed: %s", exc)
+        response = Response(render_template(
+            "insights.html", error="Insights is temporarily unavailable. Please try again.", data=None), status=503)
+    else:
+        html = render_template("insights.html", data=data, query=query, error=None)
+        response = _make_cached_response(html, mimetype="text/html; charset=utf-8",
+                                         last_modified=_max_last_modified(
+                                             [data["coverage"]], attr="last_data_write"))
+        response.headers["ETag"] = 'W/"' + hashlib.sha256(html.encode("utf-8")).hexdigest() + '"'
+        response.headers["Cache-Control"] = f"public, max-age={_FRONT_END_TTL}, must-revalidate"
+        return response
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def _parse_iso_date(date_str):
     """Strictly parse a canonical ``YYYY-MM-DD`` string into a ``date``.
 
@@ -1842,6 +1899,7 @@ def inject_nav():
     nav_items = [
         {"label": "Home", "url": "/"},
         {"label": "Changelog", "url": "/changelog"},
+        {"label": "Insights", "url": "/insights"},
         {"label": "API", "url": "/endpoints"},
         {"label": "Subscribe", "url": "/subscribe"},
         {"label": "About", "url": "/about"},
