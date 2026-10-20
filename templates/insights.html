@@ -2,7 +2,7 @@
 {% block title %}Roadmap Insights - Fabric GPS{% endblock %}
 {% block herotitle %}Roadmap Insights{% endblock %}
 {% block herosubtitle %}What is changing across Fabric{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="/static/insights.css?v=shared-hero-v3">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/insights.css?v=row-targets-v4">{% endblock %}
 {% block content %}
 <!-- DOM reading order stays activity, status, targets, then planned releases.
 The shorter panels stack independently beside the long product list. -->
@@ -51,21 +51,20 @@ The shorter panels stack independently beside the long product list. -->
         <span><i class="insights-kind-removal"></i>Removals</span>
         <span><i class="insights-kind-restoration"></i>Restorations</span>
       </div>
-      <div class="insights-product-chart" aria-label="Activity chart">
+      <div class="insights-product-chart" role="group" aria-label="Activity chart">
         {% for product in data.visuals.products %}
-        <div class="insights-product-row">
-          <a class="insights-product-label" href="{{ product.url }}#evidence">{{ product.name }}</a>
-          <div class="insights-stacked-track">
-            <div class="insights-stacked-bar" style="width:{{ product.width }}%">
+        <a class="insights-product-row" href="{{ product.url }}#evidence"
+           aria-label="{{ product.name }}, {{ product.events }} roadmap {{ 'event' if product.events == 1 else 'events' }}. View all changes.">
+          <span class="insights-product-label">{{ product.name }}</span>
+          <span class="insights-stacked-track" aria-hidden="true">
+            <span class="insights-stacked-bar" style="width:{{ product.width }}%">
             {% for segment in product.segments %}
-              <a class="insights-segment insights-kind-{{ segment.kind }}" style="width:{{ segment.width }}%"
-                 href="{{ segment.url }}#evidence" title="{{ segment.kind|capitalize }}: {{ segment.events }}"
-                 aria-label="{{ product.name }}, {{ segment.events }} {{ segment.kind }} events"></a>
+              <span class="insights-segment insights-kind-{{ segment.kind }}" style="width:{{ segment.width }}%"></span>
             {% endfor %}
-            </div>
-          </div>
-          <a class="insights-chart-value" href="{{ product.url }}#evidence">{{ product.events }}</a>
-        </div>
+            </span>
+          </span>
+          <span class="insights-chart-value" aria-hidden="true">{{ product.events }}</span>
+        </a>
         {% endfor %}
       </div>
       <details class="insights-data">
@@ -75,8 +74,10 @@ The shorter panels stack independently beside the long product list. -->
           <caption>Observed events and distinct features</caption>
           <thead><tr><th scope="col">Product</th><th scope="col">Change</th><th scope="col">Events</th><th scope="col">Features</th></tr></thead>
           <tbody>{% for row in data.activity %}
-          <tr><th scope="row">{{ row.product_name }}</th><td>{{ row.kind|capitalize }}</td>
-            <td><a href="{{ row.url }}#evidence">{{ row.events }}</a></td><td><a href="{{ row.url }}#evidence">{{ row.features }}</a></td></tr>
+          <tr><th scope="row">{{ row.product_name }}</th>
+            <td class="insights-link-cell"><a class="insights-data-link" href="{{ row.url }}#evidence"
+              aria-label="{{ row.product_name }}, {{ row.kind }}. Events: {{ row.events }}; features: {{ row.features }}.">{{ row.kind|capitalize }}</a></td>
+            <td>{{ row.events }}</td><td>{{ row.features }}</td></tr>
           {% endfor %}</tbody>
         </table>
         </div>
@@ -110,7 +111,9 @@ The shorter panels stack independently beside the long product list. -->
           <caption>Status or release-type transitions by UTC day</caption>
           <thead><tr><th scope="col">Day</th><th scope="col">Events</th><th scope="col">Features</th></tr></thead>
           <tbody>{% for row in data.transitions %}
-          <tr><th scope="row">{{ row.day }}</th><td><a href="{{ row.url }}#evidence">{{ row.events }}</a></td><td><a href="{{ row.url }}#evidence">{{ row.features }}</a></td></tr>
+          <tr><th scope="row" class="insights-link-cell"><a class="insights-data-link" href="{{ row.url }}#evidence"
+            aria-label="{{ row.day }}, status or release-type changes. Events: {{ row.events }}; features: {{ row.features }}.">{{ row.day }}</a></th>
+            <td>{{ row.events }}</td><td>{{ row.features }}</td></tr>
           {% endfor %}</tbody>
         </table>
         </div>
@@ -120,17 +123,17 @@ The shorter panels stack independently beside the long product list. -->
 
     <section class="insights-panel" aria-labelledby="targets-title">
       <div class="insights-panel-heading"><div><h2 id="targets-title">Release window changes</h2><p>Planned dates added, changed or removed</p></div></div>
-      <div class="insights-target-visual">
-        <a class="insights-donut" href="{{ query.url(metric='target', bucket=None, page=1) }}#evidence"
-           style="--target-share:{{ data.visuals.target_percent }}%" aria-label="{{ data.target_changes }} release window change events, {{ data.visuals.target_percent }} percent of observed events">
+      <a class="insights-target-visual" href="{{ query.url(metric='target', bucket=None, page=1) }}#evidence"
+         aria-label="{{ data.target_changes }} release window change events, {{ data.visuals.target_percent }} percent of observed events">
+        <span class="insights-donut" style="--target-share:{{ data.visuals.target_percent }}%" aria-hidden="true">
           <span>{{ data.target_changes }}<small>events</small></span>
-        </a>
-        <div class="insights-target-copy">
+        </span>
+        <span class="insights-target-copy">
           <strong>{{ data.visuals.target_percent }}%</strong>
           <span>of observed events changed a planned release date</span>
-          <a href="{{ query.url(metric='target', bucket=None, page=1) }}#evidence">Explore release window changes &rarr;</a>
-        </div>
-      </div>
+          <span class="insights-target-link">Explore release window changes &rarr;</span>
+        </span>
+      </a>
     </section>
 
     <section class="insights-panel" aria-labelledby="upcoming-title">
@@ -141,13 +144,14 @@ The shorter panels stack independently beside the long product list. -->
       {% if data.upcoming %}
       <div class="insights-quarter-chart">
         {% for row in data.upcoming %}
-        <div class="insights-quarter-row">
-          <a href="{{ row.url }}#evidence">{{ 'Undated' if row.bucket == 'unknown' else row.bucket }}</a>
-          <a class="insights-quarter-track" href="{{ row.url }}#evidence" aria-label="{{ row.features }} features with releases planned for {{ 'an unknown date' if row.bucket == 'unknown' else row.bucket }}">
+        <a class="insights-quarter-row" href="{{ row.url }}#evidence"
+           aria-label="{{ row.features }} {{ 'feature' if row.features == 1 else 'features' }} with releases planned for {{ 'an unknown date' if row.bucket == 'unknown' else row.bucket }}">
+          <span class="insights-quarter-label">{{ 'Undated' if row.bucket == 'unknown' else row.bucket }}</span>
+          <span class="insights-quarter-track" aria-hidden="true">
             <span style="width:{{ row.width }}%"></span>
-          </a>
-          <a class="insights-chart-value" href="{{ row.url }}#evidence">{{ row.features }}</a>
-        </div>
+          </span>
+          <span class="insights-chart-value" aria-hidden="true">{{ row.features }}</span>
+        </a>
         {% endfor %}
       </div>
       <details class="insights-data">
@@ -156,7 +160,8 @@ The shorter panels stack independently beside the long product list. -->
           <caption>Planned releases by quarter: distinct active, not-Shipped features</caption>
           <thead><tr><th scope="col">Quarter</th><th scope="col">Features</th></tr></thead>
           <tbody>{% for row in data.upcoming %}
-          <tr><th scope="row">{{ 'Undated' if row.bucket == 'unknown' else row.bucket }}</th><td><a href="{{ row.url }}#evidence">{{ row.features }}</a></td></tr>
+          <tr><th scope="row" class="insights-link-cell"><a class="insights-data-link" href="{{ row.url }}#evidence"
+            aria-label="{{ 'Undated' if row.bucket == 'unknown' else row.bucket }}, planned features: {{ row.features }}.">{{ 'Undated' if row.bucket == 'unknown' else row.bucket }}</a></th><td>{{ row.features }}</td></tr>
           {% endfor %}</tbody>
         </table>
       </details>

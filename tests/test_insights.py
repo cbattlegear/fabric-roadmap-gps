@@ -378,7 +378,7 @@ def test_api_shape_filter_forwarding_and_html_tables(payload):
         soup = BeautifulSoup(html, "html.parser")
         assert soup.select_one(".hero-section .hero-title").get_text(strip=True) == "Roadmap Insights"
         assert soup.select_one(".hero-home") is None
-        assert "/static/insights.css?v=shared-hero-v3" in html
+        assert "/static/insights.css?v=row-targets-v4" in html
         assert [section["aria-labelledby"] for section in soup.select(".insights-grid section")] == [
             "activity-title", "transitions-title", "targets-title", "upcoming-title"]
         assert [section["aria-labelledby"] for section in soup.select(".insights-stack > section")] == [
@@ -388,6 +388,87 @@ def test_api_shape_filter_forwarding_and_html_tables(payload):
             assert table.find_parent("details") is not None
         assert 'aria-current="page"' in html
         assert 'name="end" value="2026-10-20"' in html
+
+
+@freeze_time("2026-10-19")
+def test_product_chart_has_one_native_all_change_link_per_row(payload):
+    payload["activity"][1]["product_name"] = 'A <script> & "quoted" product'
+    payload["activity"].extend(
+        {"product_name": "Power BI", "kind": kind, "events": 1, "features": 1}
+        for kind in ("addition", "removal", "restoration")
+    )
+    with patch.object(server, "get_engine", return_value=object()), \
+         patch.object(server, "get_insights", side_effect=lambda *_: copy.deepcopy(payload)):
+        response = server.app.test_client().get(
+            "/insights?days=90&end=2026-10-20&product_name=Power%20BI&metric=status&bucket=2026-10-18&page=2"
+        )
+    soup = BeautifulSoup(response.data, "html.parser")
+    assert soup.select_one(".insights-product-chart")["role"] == "group"
+    rows = soup.select(".insights-product-chart > a.insights-product-row")
+    assert len(rows) == 2
+    for row in rows:
+        product = row.select_one(".insights-product-label").get_text()
+        count = row.select_one(".insights-chart-value").get_text()
+        assert parse_qs(urlsplit(row["href"]).query) == {
+            "days": ["90"], "end": ["2026-10-20"], "product_name": [product],
+            "metric": ["all"], "page": ["1"],
+        }
+        assert urlsplit(row["href"]).fragment == "evidence"
+        assert product in row["aria-label"] and f"{count} roadmap event" in row["aria-label"]
+        assert not row.select("a, button, [tabindex]")
+        assert not row.select("script, img")
+        assert row.select_one(".insights-stacked-track")["aria-hidden"] == "true"
+        assert all(segment.name == "span" and not segment.has_attr("href")
+                   for segment in row.select(".insights-segment"))
+    assert len(rows[0].select(".insights-segment")) == 4
+
+
+@freeze_time("2026-10-19")
+def test_data_disclosures_keep_one_distinct_link_per_row_and_visible_counts(payload):
+    with patch.object(server, "get_engine", return_value=object()), \
+         patch.object(server, "get_insights", side_effect=lambda *_: copy.deepcopy(payload)):
+        response = server.app.test_client().get("/insights?days=90&end=2026-10-20&product_name=Power%20BI")
+    soup = BeautifulSoup(response.data, "html.parser")
+    for title in ("activity-title", "transitions-title", "upcoming-title"):
+        panel = soup.find(id=title).find_parent("section")
+        rows = panel.select(".insights-data tbody tr")
+        assert rows
+        for index, row in enumerate(rows):
+            expected = payload[{
+                "activity-title": "activity", "transitions-title": "transitions",
+                "upcoming-title": "upcoming",
+            }[title]][index]
+            assert len(row.select("a")) == 1
+            link = row.select_one("a.insights-data-link")
+            assert link is not None and link.get("aria-label")
+            assert urlsplit(link["href"]).fragment == "evidence"
+            params = parse_qs(urlsplit(link["href"]).query)
+            assert params["days"] == ["90"] and params["end"] == ["2026-10-20"]
+            assert params["page"] == ["1"]
+            if title == "activity-title":
+                assert params["product_name"] == [row.th.get_text()]
+                assert params["metric"] == [link.get_text().lower()]
+                assert all(not cell.select("a") for cell in row.select("td")[1:])
+                assert [cell.get_text() for cell in row.select("td")[1:]] == [
+                    str(expected["events"]), str(expected["features"]),
+                ]
+            else:
+                assert params["product_name"] == ["Power BI"]
+                assert params["metric"] == ["status" if title == "transitions-title" else "upcoming"]
+                assert all(not cell.select("a") for cell in row.select("td"))
+                assert [cell.get_text() for cell in row.select("td")] == (
+                    [str(expected["features"])] if title == "upcoming-title"
+                    else [str(expected["events"]), str(expected["features"])]
+                )
+    for row in soup.select(".insights-quarter-chart > a.insights-quarter-row"):
+        assert not row.select("a, [tabindex]")
+        assert row.select_one(".insights-quarter-track").name == "span"
+        assert parse_qs(urlsplit(row["href"]).query)["metric"] == ["upcoming"]
+    assert len(soup.select(".insights-quarter-chart > a.insights-quarter-row")) == 2
+    target = soup.select_one("a.insights-target-visual")
+    assert target is not None and not target.select("a")
+    assert parse_qs(urlsplit(target["href"]).query)["metric"] == ["target"]
+    assert target.select_one(".insights-donut").name == "span"
 
 
 @freeze_time("2026-10-19")
@@ -471,11 +552,11 @@ def test_release_window_copy_preserves_event_metric_and_drilldown(payload, suffi
         assert "Planned dates added, changed or removed" in html
         assert "of observed events changed a planned release date" in html
         assert "Explore release window changes" in html
-        assert "release window change events" in soup.select_one(".insights-donut")["aria-label"]
+        assert "release window change events" in soup.select_one(".insights-target-visual")["aria-label"]
         assert "Target changes" not in html
         assert "Explore target changes" not in html
         assert "changed a target" not in html
-        assert parse_qs(urlsplit(soup.select_one(".insights-donut")["href"]).query)["metric"] == ["target"]
+        assert parse_qs(urlsplit(soup.select_one(".insights-target-visual")["href"]).query)["metric"] == ["target"]
         if suffix:
             assert "release window changes" in soup.select_one("#evidence > summary").text
         data = client.get("/api/insights?metric=target").get_json()
@@ -494,10 +575,10 @@ def test_planned_releases_copy_preserves_quarter_groups_and_api_keys(payload, su
         assert soup.select_one("#upcoming-title").text == "Planned releases per quarter"
         assert "View planned release data" in html
         assert "features with planned releases" in html
-        assert "features with releases planned for 2027-Q1" in html
+        assert "1 feature with releases planned for 2027-Q1" in html
         assert "Upcoming targets" not in html
         assert "View target data" not in html
-        quarter_link = soup.select_one(".insights-quarter-track")["href"]
+        quarter_link = soup.select_one(".insights-quarter-row")["href"]
         params = parse_qs(urlsplit(quarter_link).query)
         assert params["metric"] == ["upcoming"]
         assert params["bucket"] == ["2027-Q1"]

@@ -164,7 +164,9 @@ shared row height. Mobile preserves the same activity/status/target/upcoming
 reading order in one column.
 Charts are server-rendered; accessible data tables and event evidence live in
 keyboard-operable disclosures rather than filling the overview. Filter by `product_name` and
-`days=30` or `days=90`. Counts link to exact, paginated evidence.
+`days=30` or `days=90`. Each product or quarter row is one full-width native link
+to exact, paginated evidence; change-type and daily drilldowns remain in the data
+disclosures, with one comfortably sized link per row and counts kept visible.
 No login or JavaScript is required.
 
 The same bounded data is available at `/api/insights`, for example:
