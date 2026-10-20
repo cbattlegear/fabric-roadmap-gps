@@ -117,11 +117,18 @@ function changelog(fetch, clock = october19) {
     const cp = new Checkpoint(local, storage(), clock);
     const sandbox = vm.createContext({
         document: { getElementById: get, addEventListener() {} },
-        URLSearchParams, fetch,
+        URLSearchParams, AbortController, fetch,
     });
     vm.runInContext(source('changelog.js'), sandbox);
     const view = vm.runInContext('Object.create(Changelog.prototype)', sandbox);
     Object.assign(view, { checkpoint: cp, catchUp: true, requestId: 0, dataVersion: '',
+        views: { capture: () => ({
+            days: get('days-select').value || '30',
+            product_name: get('product-filter').value,
+            release_type: get('type-filter').value,
+            release_status: get('status-filter').value,
+            include_inactive: String(get('include-inactive').checked !== false),
+        }) },
         render(days) { this.rendered = days; } });
     return { view, get, local };
 }
@@ -129,6 +136,26 @@ const complete = () => ({
     days: [], complete: true, since: '2026-10-17', through: '2026-10-19',
 });
 const response = data => ({ ok: true, json: async () => data });
+
+test('saved inactive filter cannot omit removals before checkpoint acknowledgement', async () => {
+    let requested;
+    const { view, get } = changelog(async url => {
+        requested = new URLSearchParams(url.split('?')[1]);
+        return response({
+            ...complete(),
+            days: [{ date: '2026-10-19', count: 2, items: [
+                { release_item_id: 'removed', active: false },
+                { release_item_id: 'restored', active: true },
+            ] }],
+        });
+    });
+    get('include-inactive').checked = false;
+    await view.loadChangelog();
+    assert.equal(requested.get('include_inactive'), 'true');
+    assert.equal(view.loadedCheckpoint, '2026-10-19');
+    assert.equal(view.rendered[0].items.length, 1);
+    assert.equal(view.rendered[0].items[0].release_item_id, 'restored');
+});
 
 test('failed, partial, and invalid catch-up responses disable acknowledgement', async () => {
     for (const fetch of [

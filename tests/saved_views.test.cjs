@@ -22,6 +22,7 @@ class Element {
         this.classList = { toggle() {} };
     }
     addEventListener(event, fn) { this.listeners[event] = fn; }
+    setAttribute() {}
     emit(event) { return this.listeners[event]?.({ preventDefault() {} }); }
     appendChild(child) { this.children.push(child); this.options.push(child); }
     replaceChildren() { this.children = []; this.options = []; }
@@ -37,6 +38,8 @@ function setup(page = '/') {
         'copy-view-link', 'reset-saved-views', 'search-input', 'include-inactive',
         'clear-filters', 'load-more-btn', 'changes-grid', 'no-results', 'loading-indicator',
         'loading-more-indicator', 'search-spinner', 'changelog-content',
+        'catch-up-toggle', 'checkpoint-reset', 'checkpoint-mark',
+        'checkpoint-baseline', 'checkpoint-status', 'catch-up-summary',
     ];
     ids.forEach(id => { elements[id] = new Element(); });
     elements['include-inactive'].type = 'checkbox';
@@ -359,11 +362,40 @@ function pageInstance(env, page) {
     Object.assign(instance, {
         filterOptions: {}, currentData: [], minSearchLength: 2, page: 8, pageSize: 15,
         allPagesLoaded: false, loadingMore: false, hasLoadedOnce: true, dataVersion: '',
+        checkpoint: { available: false, baseline: null, error: '' },
+        catchUp: false, requestId: 0,
     });
     instance.renderChanges = () => {};
     instance.render = days => { instance.rendered = days; };
     return instance;
 }
+
+test('saved changelog views and browser history restore checkpoint mode without sharing it', async () => {
+    const env = setup('/changelog');
+    const instance = pageInstance(env, '/changelog');
+    instance.checkpoint = { baseline: '2026-10-17', available: true, error: '' };
+    env.sandbox.location.search = '?catch_up=1&include_inactive=false';
+    env.sandbox.history.replaceState(null, '', '/changelog?catch_up=1&include_inactive=false');
+    instance.fetchVersion = async () => {};
+    instance.loadFilterOptions = async () => {};
+    const modes = [];
+    instance.loadChangelog = async () => { modes.push(instance.catchUp); };
+    await instance.init();
+    assert.equal(instance.catchUp, true);
+    env.elements['view-name'].value = 'My view';
+    env.elements['save-view'].emit('click');
+    const id = instance.views.selected;
+    const stored = env.values.get(key);
+    assert.ok(!stored.includes('catch_up'));
+    assert.ok(!stored.includes('2026-10-17'));
+    env.elements['saved-view-select'].value = id;
+    env.elements['saved-view-select'].emit('change');
+    assert.equal(instance.catchUp, false);
+    assert.ok(!env.sandbox.location.search.includes('catch_up'));
+    env.sandbox.history.back();
+    assert.equal(instance.catchUp, true);
+    assert.deepEqual(modes, [true, false, true]);
+});
 
 test('both page initializers wait for filter options before restoring bookmarks', async () => {
     for (const page of ['/', '/changelog']) {
@@ -376,12 +408,12 @@ test('both page initializers wait for filter options before restoring bookmarks'
             requests.push(url);
             if (url === '/api/version') return { json: async () => ({ version: '123' }) };
             if (url === '/api/filter-options') {
-                return { json: async () => ({
+                return { ok: true, json: async () => ({
                     product_names: ['Future product'], release_types: ['Preview'],
                     release_statuses: ['Shipped'],
                 }) };
             }
-            return { json: async () => ({ data: [], days: [] }) };
+            return { ok: true, json: async () => ({ data: [], days: [] }) };
         };
         await instance.init();
         assert.equal(env.elements['product-filter'].value, 'Future product');
@@ -443,11 +475,11 @@ test('latest filter restoration wins even if older responses finish afterward', 
         instance.views.restore('?product_name=Data+%26+AI');
         const latest = load();
         assert.equal(requests[0].signal.aborted, true);
-        requests[1].resolve({ json: async () => ({
+        requests[1].resolve({ ok: true, json: async () => ({
             data: ['latest'], days: ['latest'], pagination: { has_next: false },
         }) });
         await latest;
-        requests[0].resolve({ json: async () => ({
+        requests[0].resolve({ ok: true, json: async () => ({
             data: ['stale'], days: ['stale'], pagination: { has_next: false },
         }) });
         await old;

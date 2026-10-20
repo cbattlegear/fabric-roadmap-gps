@@ -201,6 +201,24 @@ modifies `dbo.release_items`. CI requires no SQL Server, network, or secrets.
 No index or persisted aggregate is proposed without those measurements.
 The About-page status remains Planned until merge and this rollout gate pass.
 
+`tests/test_native_roadmap_sqlserver.py` additionally requires
+`NATIVE_TEST_DISPOSABLE=1`. It exercises native feedback constraints and concurrent
+votes, UTC changelog boundaries, and real database-backed MCP protocol calls.
+Its feedback/changelog fixtures create uniquely named `gps_validation_*` tables
+and drop their current and temporal history tables on completion; MCP reads the
+copy's existing roadmap without modifying it. Verify the disposable database
+identity and certificate-validated TLS connection before opting in. Keep driver
+exceptions and captured test output private: SQL errors can contain connection
+details. Never point these tests at production or enable refresh/email jobs.
+
+Empty Insights datasets and evidence pages return JSON arrays, including
+`details.items: []`. Origin requests, including conditional requests that return
+304, still execute the aggregation; CDN hits are not reproduced by local origin
+tests. Product filters and evidence pagination do not eliminate the underlying
+aggregate work. Measure sequential and conservatively bounded concurrent cache
+misses on deployment-equivalent hardware before treating CDN caching as a
+capacity mitigation.
+
 ## Email Subscriptions
 
 Subscribers can receive digest emails with customizable options:

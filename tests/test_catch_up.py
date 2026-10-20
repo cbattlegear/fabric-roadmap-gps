@@ -77,7 +77,8 @@ def test_repeated_events_are_not_collapsed_into_features():
 
 
 @freeze_time("2026-10-19")
-def test_backend_failure_is_not_a_complete_empty_response():
+def test_backend_failure_is_not_a_complete_empty_response(monkeypatch):
+    monkeypatch.setitem(server.app.config, "PROPAGATE_EXCEPTIONS", False)
     with patch.object(server, "get_engine", side_effect=RuntimeError("database unavailable")):
         response = server.app.test_client().get("/api/changelog?since=2026-10-19")
     assert response.status_code == 500

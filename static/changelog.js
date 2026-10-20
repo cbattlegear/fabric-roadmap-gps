@@ -15,7 +15,10 @@ class Changelog {
     async init() {
         await this.fetchVersion();
         await this.loadFilterOptions();
-        this.views = new RoadmapViews.Controller('/changelog', () => this.loadChangelog());
+        this.views = new RoadmapViews.Controller('/changelog', () => {
+            this.restoreFiltersFromUrl();
+            return this.loadChangelog();
+        });
         this.restoreFiltersFromUrl();
         this.bindEvents();
         this.showCheckpoint();
@@ -150,6 +153,7 @@ class Changelog {
         const initial = !this.checkpoint.baseline && this.checkpoint.available && !this.checkpoint.error;
         if (catchUp || initial) {
             params.set('since', this.checkpoint.baseline || this.checkpoint.today);
+            params.set('include_inactive', 'true');
             // Retrieve the entire checkpoint range before allowing acknowledgement.
             for (const key of ['product_name', 'release_type', 'release_status', 'days', 'v']) params.delete(key);
         }
@@ -170,6 +174,7 @@ class Changelog {
                 const days = data.days.map(day => ({
                     ...day,
                     items: day.items.filter(item =>
+                        (filters.include_inactive !== 'false' || item.active !== false) &&
                         (!filters.product_name || item.product_name === filters.product_name) &&
                         (!filters.release_type || item.release_type === filters.release_type) &&
                         (!filters.release_status || item.release_status === filters.release_status))
@@ -183,7 +188,7 @@ class Changelog {
                 const normal = await fetch(`/api/changelog?${new URLSearchParams(filters)}`, { signal: request.signal });
                 if (!normal.ok) throw new Error(`HTTP ${normal.status}`);
                 const normalData = await normal.json();
-                if (requestId !== this.requestId || e.name === 'AbortError') return;
+                if (requestId !== this.requestId) return;
                 if (!Array.isArray(normalData.days)) throw new Error('Invalid changelog response');
                 this.render(normalData.days);
             } else {
@@ -191,7 +196,7 @@ class Changelog {
             }
             document.getElementById('checkpoint-mark').disabled = !this.loadedCheckpoint;
         } catch (e) {
-            if (requestId !== this.requestId) return;
+            if (requestId !== this.requestId || e.name === 'AbortError') return;
             this.loadedCheckpoint = null;
             document.getElementById('checkpoint-mark').disabled = true;
             container.innerHTML = '<div class="no-results"><p>Error loading changelog. Please try again later.</p></div>';
