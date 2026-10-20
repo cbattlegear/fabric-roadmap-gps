@@ -143,7 +143,7 @@ body {
   background: var(--fabric-neutral-grey-20);
 }
 
-.home-email-cta:focus-visible {
+.hero-home .home-email-cta:focus-visible {
   outline: 2px solid var(--fabric-primary);
   outline-offset: -4px;
 }

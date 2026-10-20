@@ -172,6 +172,13 @@ def test_homepage_places_filters_directly_after_compact_hero(client):
     ]
 
 
+def test_homepage_cta_focus_stays_inside_clipped_container(client):
+    css = client.get("/static/styles.css").get_data(as_text=True)
+    focus_rule = css.split(".hero-home .home-email-cta:focus-visible {", 1)[1].split("}", 1)[0]
+    assert "outline: 2px solid var(--fabric-primary)" in focus_rule
+    assert "outline-offset: -4px" in focus_rule
+
+
 @pytest.mark.parametrize("path", ["/changelog", "/subscribe", "/endpoints"])
 def test_compact_homepage_hero_does_not_replace_other_page_heroes(client, server_module, path):
     with patch.object(server_module, "get_engine", return_value=object()), \
