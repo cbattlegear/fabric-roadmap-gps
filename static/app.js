@@ -137,6 +137,7 @@ class RecentChanges {
             this.toggleBottomLoading(true);
         }
 
+        let focusDestination;
         try {
             const params = new URLSearchParams();
             if (filters.product_name) params.append('product_name', filters.product_name);
@@ -185,9 +186,8 @@ class RecentChanges {
             this.renderChanges();
             if (focusResults && (document.activeElement === retryButton || document.activeElement === document.body)) {
                 const links = document.querySelectorAll('#changes-grid .change-title a');
-                const destination = links[requestedPage > 1 ? previousCount : 0] ||
+                focusDestination = links[requestedPage > 1 ? previousCount : 0] ||
                     document.getElementById('no-results');
-                destination.focus();
             }
 
             if (this.pagination && this.pagination.has_next) {
@@ -213,6 +213,7 @@ class RecentChanges {
                 this.loadingMore = false;
                 retryButton.disabled = false;
                 this.updateLoadMoreButton();
+                focusDestination?.focus();
             }
         }
     }

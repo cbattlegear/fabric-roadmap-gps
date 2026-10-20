@@ -668,6 +668,10 @@ test('latest roadmap filter restoration wins even if older responses finish afte
                 requests[0].reject(new Error('offline'));
                 await pending;
                 const resultLink = new Element('A');
+                resultLink.focus = () => {
+                    assert.equal(elements['changes-grid'].style.display, 'grid', 'focus waits until initial loading reveals results');
+                    resultLink.focused = true;
+                };
                 sandbox.document.querySelectorAll = () => scenario === 'empty' ? [] : [resultLink];
                 sandbox.document.activeElement = elements['retry-load'];
                 pending = instance.retryLoad();

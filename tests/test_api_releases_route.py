@@ -148,7 +148,7 @@ def test_api_and_detail_deduplicate_only_the_matching_description_heading(client
 
 def test_homepage_versions_changed_immutable_assets(client):
     page = BeautifulSoup(client.get("/").data, "html.parser")
-    assert page.select_one('script[src="/static/app.js?v=home-retry-v5"][defer]')
+    assert page.select_one('script[src="/static/app.js?v=home-retry-v6"][defer]')
     assert page.select_one('script[src="/static/blog-feedback.js?v=article-activation-v2"][defer]')
     assert page.select_one('link[href="/static/styles.css?v=home-polish-v3"]')
     assert not page.select_one('script[src="/static/app.js"]')
