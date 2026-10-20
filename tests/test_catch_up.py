@@ -1,4 +1,4 @@
-"""Inclusive UTC checkpoint API, temporal SQL contract, and browser regressions."""
+"""Legacy date API compatibility and automatic exact-time visit regressions."""
 
 import shutil
 import sqlite3
@@ -11,7 +11,7 @@ import pytest
 from freezegun import freeze_time
 
 import server
-from db.db_sqlserver import get_changelog_with_changes
+from db.db_sqlserver import get_changelog_with_changes, get_changelog_visit_snapshot
 
 
 @freeze_time("2026-10-19 00:00:01+00:00")
@@ -201,7 +201,10 @@ def test_changelog_shell_does_not_embed_personal_checkpoint():
         response = server.app.test_client().get("/changelog?since=1999-12-31")
     assert response.status_code == 200
     assert "1999-12-31" not in response.get_data(as_text=True)
-    assert 'id="catch-up-toggle"' in response.get_data(as_text=True)
+    html = response.get_data(as_text=True)
+    for removed in ("catch-up-toggle", "checkpoint-mark", "checkpoint-reset", "Pick up where you left off"):
+        assert removed not in html
+    assert "Changelog</h1>" in html
     engine.assert_not_called()
 
 
@@ -213,3 +216,98 @@ def test_browser_checkpoint_and_changelog_behaviors():
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_visit_snapshot_is_unfiltered_private_and_has_full_precision_metadata():
+    cutoff = "2026-10-19T00:00:00.1234567Z"
+    row = dict(release_item_id="one", feature_name="Feature", product_name="Other",
+               release_date=None, last_modified=date(2026, 10, 18), active=False,
+               changed_columns=["Removed from Roadmap"], event_id="a" * 64,
+               observed_at="2026-10-18T23:59:59.9999999Z")
+    with patch.object(server, "get_engine", return_value=object()), \
+         patch.object(server, "get_changelog_visit_snapshot", return_value={
+             "cutoff": cutoff, "window_start": "2026-07-21T00:00:00.1234567Z",
+             "complete": True, "items": [row],
+         }) as query, patch.object(server, "get_changelog_with_changes") as legacy:
+        response = server.app.test_client().get(
+            "/api/changelog?visit=1&product_name=Power+BI&include_inactive=false&days=1",
+            headers={"If-None-Match": "*", "If-Modified-Since": "Mon, 19 Oct 2026 00:00:00 GMT"},
+        )
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "private, no-store"
+    assert "ETag" not in response.headers and "Last-Modified" not in response.headers
+    assert response.json["mode"] == "visit"
+    assert response.json["cutoff"] == cutoff
+    assert response.json["days"][0]["items"][0]["observed_at"].endswith("9999999Z")
+    assert response.json["days"][0]["items"][0]["active"] is False
+    assert response.json["complete"] is True
+    assert query.call_args.kwargs == {}
+    legacy.assert_not_called()
+
+
+@pytest.mark.parametrize("query", ["visit=0", "visit=", "visit=1&since=2026-10-19", "visit=1&date=2026-10-19"])
+def test_invalid_visit_combinations_rejected_privately_before_database(query):
+    with patch.object(server, "get_engine") as engine:
+        response = server.app.test_client().get("/api/changelog?" + query)
+    assert response.status_code == 400
+    assert response.headers["Cache-Control"] == "private, no-store"
+    engine.assert_not_called()
+
+
+def test_overflow_is_an_explicit_incomplete_error_not_a_capped_success():
+    with patch.object(server, "get_engine", return_value=object()), \
+         patch.object(server, "get_changelog_visit_snapshot", return_value={"complete": False, "items": []}):
+        response = server.app.test_client().get("/api/changelog?visit=1")
+    assert response.status_code == 503
+    assert response.json["complete"] is False
+    assert "cutoff" not in response.json
+    assert response.headers["Cache-Control"] == "private, no-store"
+
+
+def test_visit_sql_binds_exclusive_precise_server_cutoff_caps_results_and_keeps_event_identity():
+    engine = MagicMock()
+    execute = engine.connect.return_value.__enter__.return_value.execute
+    execute.return_value.mappings.return_value.all.return_value = [{
+        "release_item_id": "one", "feature_name": "Feature", "product_name": "Product",
+        "release_type": "Preview", "release_status": "Planned",
+        "observed_at": "2026-10-19T00:00:00.0000001",
+    }]
+    cutoff = "2026-10-19T00:00:00.0000002"
+    first = get_changelog_with_changes(engine, event_before=cutoff)
+    statement, params = execute.call_args.args
+    sql = str(statement)
+    assert "TOP (10001)" in sql
+    assert "DATEADD(day, -90, CONVERT(datetime2(7), :event_before, 126))" in sql
+    assert "ValidFrom < CONVERT(datetime2(7), :event_before, 126)" in sql
+    assert "ValidTo >= DATEADD(day, -90, CONVERT(datetime2(7), :event_before, 126))" in sql
+    assert "EXCEPT" in sql
+    assert "CAST(d.ValidFrom AS date) AS last_modified" in sql
+    assert params == {"event_before": cutoff}
+    assert first[0]["observed_at"] == "2026-10-19T00:00:00.0000001Z"
+    assert len(first[0]["event_id"]) == 64
+    assert get_changelog_with_changes(engine, event_before=cutoff) == first
+    execute.return_value.mappings.return_value.all.return_value[0]["observed_at"] = "2026-10-19T00:00:00.0000002"
+    assert get_changelog_with_changes(engine, event_before=cutoff)[0]["event_id"] != first[0]["event_id"]
+
+
+@pytest.mark.parametrize("count,complete", [(10000, True), (10001, False)])
+def test_server_snapshot_metadata_and_exact_limit(count, complete):
+    engine = MagicMock()
+    execute = engine.connect.return_value.__enter__.return_value.execute
+    execute.return_value.mappings.return_value.one.return_value = {
+        "cutoff": "2026-10-19T00:00:00.1234567", "window_start": "2026-07-21T00:00:00.1234567",
+    }
+    with patch("db.db_sqlserver.get_changelog_with_changes", return_value=[{}] * count) as query:
+        result = get_changelog_visit_snapshot(engine)
+    assert result["complete"] is complete
+    assert result["cutoff"] == "2026-10-19T00:00:00.1234567Z"
+    assert query.call_args.kwargs == {"event_before": "2026-10-19T00:00:00.1234567"}
+    assert "DECLARE @cutoff datetime2(7) = SYSUTCDATETIME()" in str(execute.call_args.args[0])
+
+
+def test_daily_permalink_never_runs_visit_tracking():
+    response = server.app.test_client().get("/changelog/2026-10-19")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert "/static/checkpoint.js" not in html
+    assert "/static/changelog.js" not in html

@@ -33,24 +33,54 @@ The tests don't need `SQLSERVER_CONN` or any other env var — they run entirely
 Node.js 22+ is also required: pytest invokes the dependency-free browser-logic
 checks with `node --test tests/checkpoint.test.cjs`.
 
-## Browser-local changelog catch-up
+## Automatic browser-local changelog visits
 
-The `/changelog` catch-up panel stores a versioned UTC calendar day in
-`localStorage` only after **Start from today** or **Mark all changes as seen**.
-It snapshots the prior baseline in per-tab `sessionStorage`; reloads and
-acknowledgements in another tab cannot move an existing tab's baseline.
-Closing the tab starts a fresh session. Reset clears this tab's snapshot and
-the browser's saved checkpoint; other open tabs retain their snapshots.
+`/changelog` retrieves one complete unfiltered `GET /api/changelog?visit=1`
+snapshot per document, then highlights events absent from the previous
+successful visit. The first successful visit establishes history without
+labeling existing events new. After successful rendering, the complete
+snapshot is saved automatically in `localStorage`; opening a cached HTML
+shell, failed/incomplete loads, or filter-option failures never acknowledge it.
+Filters, saved views, and browser back/forward reuse the document's snapshot
+and prior event set, so highlights remain stable until the next page visit.
+Historical `/changelog/YYYY-MM-DD` pages do not read or advance visit history.
 
-The baseline day is **inclusive**. This intentionally repeats same-day changes:
-`last_modified` is a date, not an exact timestamp, and later hourly refreshes
-on the same day must not be silently skipped. Catch-up retrieves the complete
-range before enabling acknowledgement. Product/type/status filters change
-what is displayed, not what **Mark all changes as seen** acknowledges.
-Failed loads, incomplete responses and browsing alone never save a checkpoint.
-First visits do not label the whole roadmap as new. Invalid, future-dated or
-expired checkpoints require reset; unavailable storage leaves the normal
-changelog usable.
+The snapshot contains the last **90 days** of tracked-field temporal events,
+an exclusive SQL Server UTC cutoff, and opaque stable event IDs derived from
+release identity and the full seven-digit `datetime2` event time. It excludes
+pipeline-only embedding/blog writes and preserves same-day edits, removals,
+and restorations. A timestamp alone is insufficient: SQL Server `ValidFrom`
+is transaction **begin** time. Comparing complete event sets detects a
+transaction committed after the previous snapshot even if its temporal start
+precedes that snapshot's cutoff. Events outside retained coverage cannot be
+highlighted; first recorded appearance is not proof of an original announcement.
+
+The query returns at most 10,001 events to detect overflow; only snapshots
+with at most **10,000** events are complete. Larger histories return 503 and
+fall back to the ordinary changelog **without saving any checkpoint**. Nothing
+is silently capped and marked seen. Temporal diff processing keeps only versions
+overlapping the retained window and its boundary predecessor, not every older
+version of each selected feature. Browser storage contains only version,
+cutoff and at most 10,000 SHA-256 event IDs with their precise public event times
+(roughly 980 KB maximum JSON), never
+titles, descriptions, filters, or article-click records. Old day-only v1 data
+is ignored as inexact and removed after a successful v2 save; damaged history
+restarts with a conditional notice. Browser Web Locks serialize writes across
+tabs; older tabs cannot replace a newer saved cutoff. Completed snapshots are
+unioned so slower requests cannot lose late commits observed by another tab;
+individual event times expire IDs outside the rolling 90-day retained window.
+A merged manifest over the browser limit fails explicitly without replacing
+saved history. Existing documents keep
+their original highlights. If locks/storage are unavailable or full, a short
+conditional error is shown and ordinary browsing remains usable.
+
+Snapshot responses are `private, no-store`, have no validators, use the
+server's clock rather than the browser clock, and never embed personal state
+in cached HTML, shared/saved URLs, cookies, or server-side visitor records.
+Normal date/product/type/status/removed filters are display-only for the full
+manifest acknowledgement.
+
+### Legacy inclusive-day API compatibility
 
 `GET /api/changelog?since=YYYY-MM-DD` accepts a canonical date from today
 through 90 days ago, inclusive, and cannot be combined with `date`.
@@ -67,10 +97,9 @@ event (possibly with several changed fields), not a unique feature.
 the existing daily groups. Historical coverage begins August 27, 2025;
 first recorded versions are not proof of an earlier original announcement.
 
-Catch-up responses are `private, no-store` with no date-only conditional
-validator. Personal checkpoints never enter server-rendered HTML, cookies or
-server-side visitor records. The normal changelog and permanent daily links
-retain their existing caching and read paths.
+Legacy `since` responses remain `private, no-store` with no date-only
+conditional validator. They are no longer used for browser visit tracking.
+The ordinary API and permanent daily links retain their existing caching/read paths.
 
 ## Saved and shared views
 
@@ -125,10 +154,14 @@ missing Node fails with an explicit setup message.
 
 `/insights` is a compact, chart-first Analytics Dashboard: stacked product
 activity, a daily status trend, target-change share, and upcoming-quarter bars.
+On desktop the product activity panel sits beside an independent stack of the
+three shorter panels; cards stay content-sized instead of stretching to a
+shared row height. Mobile preserves the same activity/status/target/upcoming
+reading order in one column.
 Charts are server-rendered; accessible data tables and event evidence live in
 keyboard-operable disclosures rather than filling the overview. Filter by `product_name` and
-`days=30` or `days=90`. Counts link to exact, paginated evidence rather than the
-changelog's latest-change-per-feature view. No login or JavaScript is required.
+`days=30` or `days=90`. Counts link to exact, paginated evidence.
+No login or JavaScript is required.
 
 The same bounded data is available at `/api/insights`, for example:
 
@@ -267,7 +300,8 @@ The refresh job (`APP_MODE=refresh`) runs the data fetch pipeline (roadmap, blog
 ## Related-article feedback
 
 Roadmap cards and release details offer **Helpful / Not related** for a valid
-related article after its titled link is activated. The article opens normally
+related article after its link is activated (roadmap cards label it **Related blog**
+and expose the article title through its accessible name and hover title). The article opens normally
 in a new tab; a compact prompt appears in the original card without taking
 focus or claiming that the article was read. Reveal state stays in page memory
 for that release/article pair across rerenders, not in persistent click tracking.

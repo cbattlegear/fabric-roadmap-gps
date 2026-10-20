@@ -81,21 +81,23 @@ function renderChangelogDays(days, opts) {
 
             for (const item of items) {
                 const inactiveClass = item.active === false ? ' changelog-item-inactive' : '';
+                const unreadClass = item.unread ? ' changelog-unread' : '';
+                const badge = item.unread ? '<span class="changelog-new-badge">New</span>' : '';
                 const cols = item.changed_columns && item.changed_columns.length ? item.changed_columns : null;
 
                 if (cols) {
                     for (const col of cols) {
                         const parsed = parseChangeColumn(col);
                         const removedClass = parsed.removed ? ' changelog-cell-removed' : '';
-                        html += `<a href="/release/${escapeHtml(item.release_item_id)}" class="changelog-row${inactiveClass}">
-                                <div class="changelog-cell-name">${escapeHtml(item.feature_name)}</div>
+                        html += `<a href="/release/${escapeHtml(item.release_item_id)}" class="changelog-row${inactiveClass}${unreadClass}">
+                                <div class="changelog-cell-name">${badge}${escapeHtml(item.feature_name)}</div>
                                 <div class="changelog-cell-change${removedClass}">${escapeHtml(parsed.change)}</div>
                                 <div class="changelog-cell-detail">${escapeHtml(parsed.detail)}</div>
                             </a>`;
                     }
                 } else {
-                    html += `<a href="/release/${escapeHtml(item.release_item_id)}" class="changelog-row${inactiveClass}">
-                            <div class="changelog-cell-name">${escapeHtml(item.feature_name)}</div>
+                    html += `<a href="/release/${escapeHtml(item.release_item_id)}" class="changelog-row${inactiveClass}${unreadClass}">
+                            <div class="changelog-cell-name">${badge}${escapeHtml(item.feature_name)}</div>
                             <div class="changelog-cell-change">Updated</div>
                             <div class="changelog-cell-detail"></div>
                         </a>`;

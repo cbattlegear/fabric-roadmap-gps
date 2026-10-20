@@ -25,12 +25,6 @@
   text-decoration: none;
 }
 
-.change-article-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .blog-feedback {
   margin-top: var(--spacing-m);
   padding-top: var(--spacing-s);

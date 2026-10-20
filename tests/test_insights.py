@@ -376,6 +376,12 @@ def test_api_shape_filter_forwarding_and_html_tables(payload):
         assert 'class="insights-donut"' in html
         assert 'class="insights-trend"' in html
         soup = BeautifulSoup(html, "html.parser")
+        assert soup.select_one(".hero-section .hero-title").get_text(strip=True) == "Roadmap Insights"
+        assert "/static/insights.css?v=shared-hero-v3" in html
+        assert [section["aria-labelledby"] for section in soup.select(".insights-grid section")] == [
+            "activity-title", "transitions-title", "targets-title", "upcoming-title"]
+        assert [section["aria-labelledby"] for section in soup.select(".insights-stack > section")] == [
+            "transitions-title", "targets-title", "upcoming-title"]
         assert not soup.select_one("#evidence").has_attr("open")
         for table in soup.select("table"):
             assert table.find_parent("details") is not None
@@ -509,7 +515,34 @@ def test_shared_navigation_wraps_without_dashboard_stylesheet():
     assert nav_rule is not None
     assert "flex-wrap: wrap" in nav_rule.group(1)
     html = client.get("/changelog").get_data(as_text=True)
-    assert "/static/styles.css?v=compact-views-v1" in html
+    assert "/static/styles.css?v=automatic-visit-v2" in html
     assert "/static/insights.css" not in html
     soup = BeautifulSoup(html, "html.parser")
     assert soup.select_one('.header-nav a[href="/insights"]') is not None
+    insights_css = client.get("/static/insights.css").get_data(as_text=True)
+    assert not re.search(r"\.hero-(?:section|title|subtitle)\s*\{", insights_css)
+    assert ".insights-stack { display: grid;" in insights_css
+    assert "align-self: stretch" not in insights_css
+    assert "min-height: 270px" not in insights_css and "min-height: 240px" not in insights_css
+    hero_rule = re.search(r"\.hero-section\s*\{([^}]+)\}", css).group(1)
+    assert "background: linear-gradient(135deg, var(--fabric-primary)" in hero_rule
+
+
+@pytest.mark.parametrize("product_count", [0, 24])
+def test_independent_panel_stack_handles_empty_and_long_product_lists(payload, product_count):
+    payload["activity"] = [
+        {"product_name": f"Product {index}", "kind": "edit", "events": 1, "features": 1}
+        for index in range(product_count)
+    ]
+    with patch.object(server, "get_engine", return_value=object()), \
+         patch.object(server, "get_insights", side_effect=lambda *_: copy.deepcopy(payload)):
+        response = server.app.test_client().get("/insights")
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.data, "html.parser")
+    assert len(soup.select(".insights-product-row")) == product_count
+    assert [section["aria-labelledby"] for section in soup.select(".insights-grid section")] == [
+        "activity-title", "transitions-title", "targets-title", "upcoming-title"]
+    assert len(soup.select(".insights-stack > section")) == 3
+    assert soup.select_one("#evidence") is not None
+    if product_count == 0:
+        assert soup.select_one(".insights-activity .insights-empty")

@@ -6,24 +6,12 @@
 {% block twitter_title %}Microsoft Fabric Change Log — Daily Roadmap Updates | Fabric GPS{% endblock %}
 {% block twitter_description %}Daily breakdown of every Microsoft Fabric roadmap change. See which features were added, updated, or removed each day, filtered by product, release type, and status.{% endblock %}
 
-{% block herotitle %}Change Log{% endblock %}
+{% block herotitle %}Changelog{% endblock %}
 {% block herosubtitle %}Daily breakdown of Microsoft Fabric roadmap changes{% endblock %}
 
 {% block content %}
 <div class="container">
     <section class="recent-changes-section">
-        <aside class="catch-up-panel" aria-labelledby="catch-up-title">
-            <h2 id="catch-up-title">Pick up where you left off</h2>
-            <p id="checkpoint-baseline">Checking this browser's checkpoint...</p>
-            <p>Includes the baseline UTC day, so same-day changes may appear again. Nothing is marked as seen automatically.</p>
-            <div class="catch-up-actions">
-                <button type="button" id="catch-up-toggle" class="button button-secondary" aria-pressed="false" disabled>Changes since my last visit</button>
-                <button type="button" id="checkpoint-mark" class="button button-primary" disabled>Start from today</button>
-                <button type="button" id="checkpoint-reset" class="button button-secondary">Reset checkpoint</button>
-            </div>
-            <p id="checkpoint-status" role="status" aria-live="polite"></p>
-            <small>Saved only in this browser, not synced across devices. Catch-up covers at most 90 days of recorded history; tracking began August 27, 2025.</small>
-        </aside>
         <div class="filters-container">
             <div class="filter-group">
                 <label for="days-select">Modified Within:</label>
@@ -64,7 +52,7 @@
         </div>
         <p id="filter-status" role="status"></p>
 
-        <p id="catch-up-summary" role="status" aria-live="polite"></p>
+        <p id="visit-status" role="status" aria-live="polite"></p>
         <div id="changelog-content">
             <div class="loading-indicator"><div class="spinner"></div><span>Loading changelog...</span></div>
         </div>
@@ -73,8 +61,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/changelog-render.js?v=catch-up-1"></script>
-<script src="/static/checkpoint.js"></script>
+<script src="/static/changelog-render.js?v=automatic-visit-v2"></script>
+<script src="/static/checkpoint.js?v=automatic-visit-v2"></script>
 <script src="/static/saved-views.js?v=compact-views-v1"></script>
-<script src="/static/changelog.js?v=integration-v1"></script>
+<script src="/static/changelog.js?v=automatic-visit-v2"></script>
 {% endblock %}

@@ -253,7 +253,7 @@ class RecentChanges {
                 <div class="change-description">${item.feature_description_html || escapeHtml(item.feature_description || 'No description available.')}</div>
                 <div class="change-article-row">
                     <div class="change-link-inline" style="color: var(--fabric-primary);">Click for details ▸</div>
-                    ${item.blog_title && window.BlogFeedback.validUrl(item.blog_url) ? `<a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" class="change-article-link" data-feedback-article data-release-id="${escapeHtml(item.release_item_id)}" data-blog-url="${escapeHtml(item.blog_url)}" title="${escapeHtml(item.blog_title)}"><span aria-hidden="true">📚</span> <span class="change-article-title">${escapeHtml(item.blog_title)}</span></a>` : ''}
+                    ${item.blog_title && window.BlogFeedback.validUrl(item.blog_url) ? `<a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" class="change-article-link" data-feedback-article data-release-id="${escapeHtml(item.release_item_id)}" data-blog-url="${escapeHtml(item.blog_url)}" title="${escapeHtml(item.blog_title)}" aria-label="Related blog: ${escapeHtml(item.blog_title)}"><span aria-hidden="true">📚</span> <span>Related blog</span></a>` : ''}
                 </div>
                 ${item.blog_title ? window.BlogFeedback.markup(item.release_item_id, item.blog_url) : ''}
             </div>`;

@@ -38,8 +38,7 @@ function setup(page = '/') {
         'copy-view-link', 'reset-saved-views', 'search-input', 'include-inactive',
         'clear-filters', 'load-more-btn', 'changes-grid', 'no-results', 'loading-indicator',
         'loading-more-indicator', 'search-spinner', 'changelog-content',
-        'catch-up-toggle', 'checkpoint-reset', 'checkpoint-mark',
-        'checkpoint-baseline', 'checkpoint-status', 'catch-up-summary',
+        'visit-status',
     ];
     ids.forEach(id => { elements[id] = new Element(); });
     elements['include-inactive'].type = 'checkbox';
@@ -374,39 +373,45 @@ function pageInstance(env, page) {
     Object.assign(instance, {
         filterOptions: {}, currentData: [], minSearchLength: 2, page: 8, pageSize: 15,
         allPagesLoaded: false, loadingMore: false, hasLoadedOnce: true, dataVersion: '',
-        checkpoint: { available: false, baseline: null, error: '' },
-        catchUp: false, requestId: 0,
+        visit: {
+            error: '', isNew: () => false, acknowledge: async () => {},
+            snapshot: data => ({ data, cutoff: '2026-10-19T00:00:00.0000000Z', ids: new Set() }),
+        },
+        snapshot: null, requestId: 0,
     });
     instance.renderChanges = () => {};
     instance.render = days => { instance.rendered = days; };
     return instance;
 }
 
-test('saved changelog views and browser history restore checkpoint mode without sharing it', async () => {
+test('saved changelog views and browser history never revive manual mode or expose visit state', async () => {
     const env = setup('/changelog');
     const instance = pageInstance(env, '/changelog');
-    instance.checkpoint = { baseline: '2026-10-17', available: true, error: '' };
+    const visit = instance.visit;
+    const snapshot = { cutoff: '2026-10-19T00:00:00.0000000Z' };
+    instance.snapshot = snapshot;
     env.sandbox.location.search = '?catch_up=1&include_inactive=false';
     env.sandbox.history.replaceState(null, '', '/changelog?catch_up=1&include_inactive=false');
     instance.fetchVersion = async () => {};
     instance.loadFilterOptions = async () => {};
-    const modes = [];
-    instance.loadChangelog = async () => { modes.push(instance.catchUp); };
+    const snapshots = [];
+    instance.loadChangelog = async () => { snapshots.push(instance.snapshot); };
     await instance.init();
-    assert.equal(instance.catchUp, true);
+    assert.equal(instance.catchUp, undefined);
     env.elements['view-name'].value = 'My view';
     env.elements['save-view'].emit('click');
     const id = instance.views.selected;
     const stored = env.values.get(key);
     assert.ok(!stored.includes('catch_up'));
-    assert.ok(!stored.includes('2026-10-17'));
+    assert.ok(!stored.includes('cutoff'));
     env.elements['saved-view-select'].value = id;
     env.elements['saved-view-select'].emit('change');
-    assert.equal(instance.catchUp, false);
+    assert.equal(instance.catchUp, undefined);
     assert.ok(!env.sandbox.location.search.includes('catch_up'));
     env.sandbox.history.back();
-    assert.equal(instance.catchUp, true);
-    assert.deepEqual(modes, [true, false, true]);
+    assert.equal(instance.catchUp, undefined);
+    assert.deepEqual(snapshots, [snapshot, snapshot, snapshot]);
+    assert.equal(instance.visit, visit);
 });
 
 test('both page initializers wait for filter options before restoring bookmarks', async () => {
@@ -430,15 +435,18 @@ test('both page initializers wait for filter options before restoring bookmarks'
         await instance.init();
         assert.equal(env.elements['product-filter'].value, 'Future product');
         assert.equal(env.elements['filter-status'].textContent, '');
-        assert.equal(requests[0], '/api/version');
-        assert.equal(requests[1], '/api/filter-options');
-        const query = new URL(requests[2], env.sandbox.location.origin).searchParams;
-        assert.equal(query.get('product_name'), 'Future product');
-        assert.equal(query.get('include_inactive'), 'true');
         if (page === '/') {
+            assert.equal(requests[0], '/api/version');
+            assert.equal(requests[1], '/api/filter-options');
+            const query = new URL(requests[2], env.sandbox.location.origin).searchParams;
+            assert.equal(query.get('product_name'), 'Future product');
+            assert.equal(query.get('include_inactive'), 'true');
             assert.equal(query.get('page'), '1');
             assert.equal(query.get('q'), 'lake');
-        } else assert.equal(query.get('days'), '60');
+        } else {
+            assert.deepEqual(requests, ['/api/filter-options', '/api/changelog?visit=1']);
+            assert.equal(instance.getActiveFilters().days, '60');
+        }
     }
 });
 
@@ -472,8 +480,8 @@ test('opening saved roadmap view resets pagination and cancels pending search', 
     assert.equal(instance.currentData.length, 0);
 });
 
-test('latest filter restoration wins even if older responses finish afterward', async () => {
-    for (const page of ['/', '/changelog']) {
+test('latest roadmap filter restoration wins even if older responses finish afterward', async () => {
+    for (const page of ['/']) {
         const env = setup(page);
         const instance = pageInstance(env, page);
         instance.views = new env.api.Controller(page, () => {});

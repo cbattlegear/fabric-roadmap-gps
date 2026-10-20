@@ -2,10 +2,10 @@
 {% block title %}Roadmap Insights - Fabric GPS{% endblock %}
 {% block herotitle %}Roadmap Insights{% endblock %}
 {% block herosubtitle %}What is changing across Fabric{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="/static/insights.css?v=2">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/insights.css?v=shared-hero-v3">{% endblock %}
 {% block content %}
-<!-- Compact analytical workspace: product activity, status trends, target movements
-and upcoming quarters share one grid. Accessible data and evidence stay on demand. -->
+<!-- DOM reading order stays activity, status, targets, then planned releases.
+The shorter panels stack independently beside the long product list. -->
 <div class="container insights">
   {% if error %}
   <section class="insights-panel" role="alert">
@@ -84,6 +84,7 @@ and upcoming quarters share one grid. Accessible data and evidence stay on deman
       {% else %}<p class="insights-empty">No observed roadmap activity matches these filters.</p>{% endif %}
     </section>
 
+    <div class="insights-stack">
     <section class="insights-panel" aria-labelledby="transitions-title">
       <div class="insights-panel-heading">
         <div><h2 id="transitions-title">Status changes</h2><p>Published status and release-type transitions</p></div>
@@ -161,6 +162,7 @@ and upcoming quarters share one grid. Accessible data and evidence stay on deman
       </details>
       {% else %}<p class="insights-empty">No planned releases match this product.</p>{% endif %}
     </section>
+    </div>
   </div>
 
   <details class="insights-panel insights-evidence-panel" id="evidence" {% if query.metric != 'all' or query.page > 1 %}open{% endif %}>

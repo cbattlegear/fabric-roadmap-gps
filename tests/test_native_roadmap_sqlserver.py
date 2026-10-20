@@ -154,7 +154,7 @@ def test_native_changelog_boundaries_removals_restorations_and_same_day_edits(na
     release_table = engine.get_execution_options()["validation_releases"]
     yesterday = datetime.utcnow().date() - timedelta(days=1)
     start = datetime.combine(yesterday, datetime.min.time())
-    times = [start - timedelta(microseconds=1), start, start + timedelta(hours=12),
+    times = [start - timedelta(days=91), start - timedelta(microseconds=1), start, start + timedelta(hours=12),
              start + timedelta(hours=13), start + timedelta(hours=14)]
     with engine.begin() as conn:
         conn.execute(text(f"ALTER TABLE {release_table} SET (SYSTEM_VERSIONING=OFF)"))
@@ -182,6 +182,42 @@ def test_native_changelog_boundaries_removals_restorations_and_same_day_edits(na
     assert len(db.get_changelog_with_changes(
         engine, since=yesterday + timedelta(days=1), through=yesterday + timedelta(days=1)
     )) == 1
+    snapshot = db.get_changelog_visit_snapshot(engine)
+    assert snapshot["complete"] is True
+    assert len(snapshot["items"]) == 6
+    assert not any("Added to roadmap" in item["changed_columns"] for item in snapshot["items"])
+    exact = db.get_changelog_with_changes(engine, event_before=(start + timedelta(hours=14)).isoformat())
+    assert len(exact) == 4  # Exclusive cutoff excludes the 14:00 event and today's current row.
+    assert len({item["event_id"] for item in snapshot["items"]}) == 6
+    assert all(item["observed_at"] < snapshot["cutoff"] for item in snapshot["items"])
+
+
+def test_native_visit_snapshot_recognizes_late_commit_and_excludes_pipeline_only_write(native_engine):
+    engine = native_engine
+    insert_release(engine)
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE release_items SET blog_title='Pipeline-only change'"))
+    first = db.get_changelog_visit_snapshot(engine)
+    assert len(first["items"]) == 1
+    before_ids = {item["event_id"] for item in first["items"]}
+    with engine.connect() as writer:
+        transaction = writer.begin()
+        # Begin a real write transaction without locking the temporal fixture.
+        # Its later content update receives this earlier transaction start time.
+        writer.execute(text("""
+            INSERT INTO blog_match_feedback VALUES (
+                'late-commit','fixture-one','key','https://example.test/article',
+                'voter','helpful',GETUTCDATE(),GETUTCDATE())
+        """))
+        previous = db.get_changelog_visit_snapshot(engine)
+        assert {item["event_id"] for item in previous["items"]} == before_ids
+        writer.execute(text("UPDATE release_items SET feature_description='Committed after the previous visit query'"))
+        transaction.commit()
+    later = db.get_changelog_visit_snapshot(engine)
+    added = [item for item in later["items"] if item["event_id"] not in before_ids]
+    assert len(added) == 1
+    assert added[0]["observed_at"] < previous["cutoff"], "Timestamp-only tracking would have lost this commit"
+    assert added[0]["changed_columns"] == ["Description updated"]
 
 
 def test_native_mcp_protocol_queries_real_copy_without_private_fields():

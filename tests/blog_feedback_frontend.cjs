@@ -121,9 +121,10 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
         assert.equal(BlogFeedback.markup('r1', invalid), '');
     }
     assert.match(card.createChangeItem(item), /blog-feedback/);
-    assert.match(card.createChangeItem(item), />Article<\/span>/);
+    assert.match(card.createChangeItem(item), />Related blog<\/span>/);
+    assert.match(card.createChangeItem(item), /title="Article" aria-label="Related blog: Article"/);
     assert.match(card.createChangeItem(item), /target="_blank" rel="noopener noreferrer"/);
-    assert.doesNotMatch(card.createChangeItem(item), /onclick=|Related blog/);
+    assert.doesNotMatch(card.createChangeItem(item), /onclick=/);
     const hostile = card.createChangeItem({ ...item, blog_title: '<img src=x onerror="bad">' });
     assert.match(hostile, /&lt;img src=x onerror=&quot;bad&quot;&gt;/);
     assert.doesNotMatch(hostile, /<img src=x/);

@@ -930,6 +930,7 @@ def get_changelog_with_changes(
     on_date: Optional[date] = None,
     since: Optional[date] = None,
     through: Optional[date] = None,
+    event_before: Optional[str] = None,
 ) -> List[Dict]:
     """Return changelog items with changed-column annotations in a single temporal-table query.
 
@@ -937,7 +938,7 @@ def get_changelog_with_changes(
     across ALL items modified within the window, returning one row per item
     with its most-recent change summary.
 
-    Two modes:
+    Display modes:
       * Window mode (default): items whose *current* ``last_modified`` falls
         within the trailing ``days`` window. The change summary describes each
         item's most recent content change.
@@ -964,6 +965,9 @@ def get_changelog_with_changes(
     """
     if since is not None and (through is None or through < since or on_date is not None):
         raise ValueError("Catch-up requires an ordered since/through range without on_date")
+    if event_before is not None and (since is not None or on_date is not None):
+        raise ValueError("A visit snapshot cannot be combined with date/since")
+    events = since is not None or event_before is not None
 
     # Closed whitelist of (kwarg_name -> SQL fragment using a named bind
     # param). Every entry is a literal string defined here, never derived
@@ -995,7 +999,17 @@ def get_changelog_with_changes(
     # Mode-dependent fragments. Both branches use only literal SQL plus named
     # bind params (never spliced caller values), preserving the parameterized
     # contract documented above.
-    if since is not None:
+    if event_before is not None:
+        bind_values["event_before"] = event_before
+        item_source = "dbo.release_items FOR SYSTEM_TIME ALL"
+        date_predicate = """ValidFrom >= DATEADD(day, -90, CONVERT(datetime2(7), :event_before, 126))
+                           AND ValidFrom < CONVERT(datetime2(7), :event_before, 126)"""
+        selection_cte = f"""
+    Selected AS (
+        SELECT h.release_item_id, h.VersionNum AS ContentVer
+        FROM Hist h WHERE {date_predicate}
+    ),"""
+    elif since is not None:
         bind_values.update(since=since, through=through)
         item_source = "dbo.release_items FOR SYSTEM_TIME ALL"
         date_predicate = "ValidFrom >= :since AND ValidFrom < DATEADD(day, 1, :through)"
@@ -1053,11 +1067,17 @@ def get_changelog_with_changes(
                d.p_feature_description, d.p_feature_name, d.p_product_name,
                d.p_release_semester, d.p_active
     ))
-    """ if since is not None else ""
-    event_filters = f" {filter_clause}" if since is not None else ""
+    """ if events else ""
+    event_filters = f" {filter_clause}" if events else ""
     # Legacy removal suppression can preserve last_modified. Temporal UTC
     # transition dates must drive catch-up without changing normal feeds.
-    event_day = "CAST(d.ValidFrom AS date)" if since is not None else "d.last_modified"
+    event_day = "CAST(d.ValidFrom AS date)" if events else "d.last_modified"
+    event_time = "CONVERT(varchar(33), d.ValidFrom, 126) AS observed_at," if event_before else ""
+    event_limit = " TOP (10001)" if event_before else ""
+    # Keep the version overlapping the lower boundary as LAG's predecessor,
+    # rather than processing every historical version of the selected features.
+    history_bound = """AND ValidTo >= DATEADD(day, -90, CONVERT(datetime2(7), :event_before, 126))
+                       AND ValidFrom < CONVERT(datetime2(7), :event_before, 126)""" if event_before else ""
     sql = text(f"""
     WITH Hist AS (
         SELECT
@@ -1071,6 +1091,7 @@ def get_changelog_with_changes(
             WHERE {date_predicate}
             {filter_clause}
         )
+        {history_bound}
     ),{selection_cte}
     Diffs AS (
         SELECT h.*,
@@ -1085,7 +1106,7 @@ def get_changelog_with_changes(
             LAG(row_hash)            OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_row_hash
         FROM Hist h
     )
-    SELECT
+    SELECT{event_limit}
         d.release_item_id,
         d.feature_name,
         d.product_name,
@@ -1093,6 +1114,7 @@ def get_changelog_with_changes(
         d.release_status,
         d.release_date,
         {event_day} AS last_modified,
+        {event_time}
         d.active,
         ChangedColumns = CASE
             WHEN d.VersionNum = 1 THEN 'Added to roadmap'
@@ -1207,7 +1229,38 @@ def get_changelog_with_changes(
             "active": row.get("active"),
             "changed_columns": changed_list,
         })
+        if event_before:
+            # Keep all seven datetime2 fractional digits; Python/JS dates would
+            # otherwise collapse distinct SQL Server temporal event times.
+            observed = row["observed_at"]
+            items[-1]["observed_at"] = observed + "Z"
+            identity = json.dumps([row["release_item_id"], observed], separators=(",", ":"))
+            items[-1]["event_id"] = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return items
+
+
+@retry_on_transient_errors()
+def get_changelog_visit_snapshot(engine) -> Dict:
+    """Bounded committed-event manifest, not a visitor record or timestamp-only cursor.
+
+    SQL Server temporal periods use transaction BEGIN time. Comparing event IDs
+    across complete snapshots also catches older-started transactions that commit
+    after an earlier visit. The server cutoff is exclusive and never client-clock
+    derived. Overflow is explicitly incomplete and must never be acknowledged.
+    """
+    with engine.connect() as conn:
+        bounds = conn.execute(text("""
+            DECLARE @cutoff datetime2(7) = SYSUTCDATETIME();
+            SELECT CONVERT(varchar(33), @cutoff, 126) AS cutoff,
+                   CONVERT(varchar(33), DATEADD(day, -90, @cutoff), 126) AS window_start
+        """)).mappings().one()
+    items = get_changelog_with_changes(engine, event_before=bounds["cutoff"])
+    return {
+        "cutoff": bounds["cutoff"] + "Z",
+        "window_start": bounds["window_start"] + "Z",
+        "complete": len(items) <= 10000,
+        "items": items,
+    }
 
 
 def generate_secure_token() -> str:

@@ -1,20 +1,3 @@
-.catch-up-panel {
-  padding: 1.25rem;
-  margin-bottom: 1.5rem;
-  border: 1px solid var(--fabric-neutral-grey-30);
-  border-radius: 8px;
-  background: var(--fabric-neutral-grey-10);
-}
-
-.catch-up-panel h2 { margin: 0 0 .75rem; font-size: 1.25rem; }
-.catch-up-panel p { max-width: 75ch; }
-.catch-up-panel small { display: block; max-width: 75ch; line-height: 1.5; }
-.catch-up-actions { display: flex; flex-wrap: wrap; gap: .75rem; }
-.catch-up-actions .button { white-space: normal; text-align: center; }
-.catch-up-actions .button:disabled { opacity: .55; cursor: not-allowed; }
-.catch-up-actions .button:focus-visible { outline: 2px solid var(--fabric-primary); outline-offset: 3px; }
-.catch-up-actions [aria-pressed="true"] { background: var(--fabric-primary); color: white; }
-
 /* Microsoft Fabric Design Language Styles */
 :root {
   /* Color tokens inspired by Microsoft Fabric */
@@ -1118,6 +1101,22 @@ a:focus-visible {
 
 .changelog-item-inactive {
   opacity: 0.6;
+}
+
+#visit-status:empty { display: none; }
+
+.changelog-unread {
+  background: var(--fabric-neutral-grey-20);
+}
+
+.changelog-item-inactive.changelog-unread { opacity: 1; }
+
+.changelog-new-badge {
+  display: inline-block;
+  margin-inline-end: var(--spacing-s);
+  color: var(--fabric-primary);
+  font-size: .75rem;
+  font-weight: 700;
 }
 
 .changelog-cell-name {

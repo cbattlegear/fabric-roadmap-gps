@@ -236,7 +236,8 @@ asyncio.run(main())</code></pre>
                                 <h4>Parameters</h4>
                                 <ul>
                                     <li><code>days</code> - Look-back window in days (default: 30, max: 90)</li>
-                                    <li><code>since</code> - Inclusive UTC checkpoint date (<code>YYYY-MM-DD</code>, today through 90 days ago). Returns every recorded tracked-field change event through today, including repeated same-day edits; ignores <code>days</code> and cannot be combined with <code>date</code>.</li>
+                                    <li><code>since</code> - Legacy inclusive UTC range (<code>YYYY-MM-DD</code>, today through 90 days ago). Returns recorded tracked-field events through today, including repeated same-day edits; ignores <code>days</code> and cannot be combined with <code>date</code>.</li>
+                                    <li><code>visit=1</code> - Unfiltered 90-day event snapshot for automatic browser-local highlights. Returns an exact server UTC cutoff and stable event IDs, not a visitor record. Private/no-store; cannot be combined with <code>date</code> or <code>since</code>. Above 10,000 events returns an incomplete error instead of acknowledging a partial history.</li>
                                     <li><code>product_name</code> - Filter by exact product name</li>
                                     <li><code>release_type</code> - Filter by exact release type</li>
                                     <li><code>release_status</code> - Filter by exact release status</li>

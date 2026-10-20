@@ -39,6 +39,7 @@ from db.db_sqlserver import (
     record_bounce,
     healthcheck as db_healthcheck,
     get_changelog_with_changes,
+    get_changelog_visit_snapshot,
     get_subscription_by_unsubscribe_token, update_subscription_preferences,
     get_verified_subscription_by_email,
     add_feature_watch, remove_feature_watch, get_feature_watches_for_subscription,
@@ -216,7 +217,7 @@ def prevent_caching_sensitive_pages(response):
     """Prevent Front Door / browsers from caching pages with user tokens."""
     if request.path.startswith(_NO_CACHE_PATHS):
         response.headers['Cache-Control'] = 'no-store'
-    if request.path == "/api/changelog" and "since" in request.args:
+    if request.path == "/api/changelog" and ("since" in request.args or "visit" in request.args):
         response.headers['Cache-Control'] = 'private, no-store'
         response.headers.pop('ETag', None)
         response.headers.pop('Last-Modified', None)
@@ -1647,6 +1648,10 @@ def api_changelog():
              including inactive items by default; incompatible with date.
              last_modified denotes the observed UTC temporal event day.
              These responses are private/no-store, without date-only validators.
+      visit=1: complete unfiltered 90-day temporal-event snapshot with exact
+               server UTC cutoff and stable event IDs (10,000-event maximum).
+               Private/no-store; incompatible with date/since. Filters apply
+               client-side only, after the full snapshot has loaded.
       include_inactive: include removed items (default true)
       product_name, release_type, release_status: filter by field
     """
@@ -1672,6 +1677,9 @@ def api_changelog():
     # signature (and the existing query plan) unchanged.
     extra = {"on_date": on_date} if on_date is not None else {}
     since_raw = request.args.get("since")
+    visit = "visit" in request.args
+    if visit and (request.args.get("visit") != "1" or since_raw is not None or on_date is not None):
+        return jsonify({"error": "Use visit=1 without date or since"}), 400
     today = datetime.now(timezone.utc).date()
     since = None
     if since_raw is not None:
@@ -1681,11 +1689,20 @@ def api_changelog():
         if not today - timedelta(days=90) <= since <= today:
             return jsonify({"error": "Checkpoint must be within the last 90 UTC days"}), 400
         extra = {"since": since, "through": today}
-    items = get_changelog_with_changes(
-        get_engine(), days=days, include_inactive=include_inactive,
-        product_name=product_name, release_type=release_type,
-        release_status=release_status, **extra,
-    )
+    snapshot = None
+    if visit:
+        # Always fetch the full bounded manifest; filters are display-only and
+        # must not acknowledge a partial product/status/removed selection.
+        snapshot = get_changelog_visit_snapshot(get_engine())
+        if not snapshot["complete"]:
+            return jsonify({"error": "Visit tracking exceeds the retained-history limit.", "complete": False}), 503
+        items = snapshot["items"]
+    else:
+        items = get_changelog_with_changes(
+            get_engine(), days=days, include_inactive=include_inactive,
+            product_name=product_name, release_type=release_type,
+            release_status=release_status, **extra,
+        )
 
     # Serialize dates for JSON output. release_date is rendered as
     # "Q# YYYY" to match the post-2026 source format and the public API
@@ -1704,6 +1721,11 @@ def api_changelog():
                  for d, itms in sorted(grouped.items(), reverse=True)]
 
     payload = {"days": days_list, "total_items": len(items)}
+    if snapshot is not None:
+        payload.update(
+            mode="visit", complete=True, cutoff=snapshot["cutoff"],
+            window_start=snapshot["window_start"],
+        )
     if since is not None:
         payload.update(
             since=since.isoformat(), through=today.isoformat(),
@@ -1713,7 +1735,7 @@ def api_changelog():
         )
     body = json.dumps(payload,
                        separators=(",", ":"), sort_keys=True)
-    if since is not None:
+    if since is not None or visit:
         # Personal query values never share an edge-cache entry or validator.
         response = Response(body, mimetype="application/json")
         response.headers["Cache-Control"] = "private, no-store"
