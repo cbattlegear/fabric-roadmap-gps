@@ -46,6 +46,7 @@ class RecentChanges {
     async init() {
         await this.fetchVersion();
         await this.loadFilterOptions();
+        this.views = new RoadmapViews.Controller('/', () => this.reloadView());
         this.restoreFiltersFromUrl();
         await this.loadRecentChanges({ reset: true });
         this.bindEvents();
@@ -104,6 +105,8 @@ class RecentChanges {
         const filters = this.getActiveFilters();
 
         if (reset) {
+            if (this.request) this.request.abort();
+            this.loadingMore = false;
             this.page = 1;
             this.currentData = [];
             this.allPagesLoaded = false;
@@ -114,6 +117,8 @@ class RecentChanges {
         const isInitialLoad = this.page === 1 && !this.hasLoadedOnce;
 
         this.loadingMore = true;
+        const request = new AbortController();
+        this.request = request;
 
         if (this.page > 1) {
             this.toggleBottomLoading(true);
@@ -137,12 +142,13 @@ class RecentChanges {
             }
             params.append('page', String(this.page));
             params.append('page_size', String(this.pageSize));
-            params.append('include_inactive', 'true');
+            params.append('include_inactive', filters.include_inactive);
             params.append('v', `${this.dataVersion || 'current'}-description-v1`);
 
-            const response = await fetch(`/api/releases?${params.toString()}`);
+            const response = await fetch(`/api/releases?${params.toString()}`, { signal: request.signal });
 
             const payload = await response.json();
+            if (request !== this.request) return;
             const items = Array.isArray(payload) ? payload : (payload.data || []);
 
             if (this.page === 1) {
@@ -173,18 +179,21 @@ class RecentChanges {
                 this.hasLoadedOnce = true;
             }
         } catch (error) {
+            if (request !== this.request || error.name === 'AbortError') return;
             console.error('Error loading recent changes:', error);
             if (isInitialLoad) {
                 this.showError();
             }
         } finally {
-            this.toggleSearchSpinner(false);
-            if (isInitialLoad) {
-                this.showLoading(false);
+            if (request === this.request) {
+                this.toggleSearchSpinner(false);
+                if (isInitialLoad) {
+                    this.showLoading(false);
+                }
+                this.toggleBottomLoading(false);
+                this.loadingMore = false;
+                this.updateLoadMoreButton();
             }
-            this.toggleBottomLoading(false);
-            this.loadingMore = false;
-            this.updateLoadMoreButton();
         }
     }
 
@@ -258,16 +267,17 @@ class RecentChanges {
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
             searchInput.addEventListener('input', (e) => {
+                this.syncFiltersToUrl();
                 this.debounceSearch();
             });
         }
 
-        const autoSelectIds = ['product-filter','type-filter','status-filter','days-filter','sort-select'];
+        const autoSelectIds = ['product-filter','type-filter','status-filter','days-filter','sort-select','include-inactive'];
         autoSelectIds.forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
             el.addEventListener('change', () => {
-                if (this.loadingMore) return;
+                this.syncFiltersToUrl();
                 if (this._filterChangeTimer) clearTimeout(this._filterChangeTimer);
                 this._filterChangeTimer = setTimeout(() => {
                     this.syncFiltersToUrl();
@@ -287,7 +297,7 @@ class RecentChanges {
             });
         }
 
-        document.querySelectorAll('.filter-select').forEach(select => {
+        document.querySelectorAll('.filters-container .filter-select').forEach(select => {
             select.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
                     this.loadRecentChanges({ reset: true });
@@ -297,14 +307,13 @@ class RecentChanges {
     }
 
     getActiveFilters() {
-        return {
-            product_name: document.getElementById('product-filter').value,
-            release_type: document.getElementById('type-filter').value,
-            release_status: document.getElementById('status-filter').value,
-            modified_within_days: document.getElementById('days-filter').value,
-            sort: document.getElementById('sort-select').value,
-            q: (document.getElementById('search-input') && document.getElementById('search-input').value) || ''
-        };
+        return this.views.capture();
+    }
+
+    reloadView() {
+        clearTimeout(this.debounceTimer);
+        clearTimeout(this._filterChangeTimer);
+        return this.loadRecentChanges({ reset: true });
     }
 
     clearFilters() {
@@ -313,6 +322,7 @@ class RecentChanges {
         document.getElementById('status-filter').value = '';
         document.getElementById('days-filter').value = '';
         document.getElementById('sort-select').value = 'last_modified';
+        document.getElementById('include-inactive').checked = true;
         const si = document.getElementById('search-input');
         if (si) si.value = '';
         this.page = 1;
@@ -322,33 +332,11 @@ class RecentChanges {
     }
 
     syncFiltersToUrl() {
-        const filters = this.getActiveFilters();
-        const params = new URLSearchParams();
-        if (filters.product_name) params.set('product_name', filters.product_name);
-        if (filters.release_type) params.set('release_type', filters.release_type);
-        if (filters.release_status) params.set('release_status', filters.release_status);
-        if (filters.modified_within_days) params.set('modified_within_days', filters.modified_within_days);
-        if (filters.sort && filters.sort !== 'last_modified') params.set('sort', filters.sort);
-        if (filters.q && filters.q.trim().length >= this.minSearchLength) params.set('q', filters.q.trim());
-        const qs = params.toString();
-        history.replaceState(null, '', qs ? `/?${qs}` : '/');
+        this.views.sync();
     }
 
     restoreFiltersFromUrl() {
-        const params = new URLSearchParams(location.search);
-        const map = {
-            'product_name': 'product-filter',
-            'release_type': 'type-filter',
-            'release_status': 'status-filter',
-            'modified_within_days': 'days-filter',
-            'sort': 'sort-select',
-            'q': 'search-input'
-        };
-        for (const [param, elId] of Object.entries(map)) {
-            const val = params.get(param);
-            const el = document.getElementById(elId);
-            if (val && el) el.value = val;
-        }
+        this.views.restore(location.search);
     }
 
     updateLoadMoreButton() {

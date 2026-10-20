@@ -53,8 +53,13 @@
                     <option value="">All Statuses</option>
                 </select>
             </div>
+            <div class="filter-group">
+                <label for="include-inactive">Removed items</label>
+                <label><input id="include-inactive" type="checkbox" checked /> Include removed items</label>
+            </div>
             <a href="/changelog" id="clear-filters" class="button button-secondary">Clear</a>
         </div>
+        {% include 'saved_views.html' %}
 
         <p id="catch-up-summary" role="status" aria-live="polite"></p>
         <div id="changelog-content">
@@ -67,5 +72,6 @@
 {% block scripts %}
 <script src="/static/changelog-render.js?v=catch-up-1"></script>
 <script src="/static/checkpoint.js"></script>
-<script src="/static/changelog.js?v=catch-up-1"></script>
+<script src="/static/saved-views.js?v=1"></script>
+<script src="/static/changelog.js?v=integration-v1"></script>
 {% endblock %}

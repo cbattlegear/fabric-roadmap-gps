@@ -15,6 +15,7 @@ class Changelog {
     async init() {
         await this.fetchVersion();
         await this.loadFilterOptions();
+        this.views = new RoadmapViews.Controller('/changelog', () => this.loadChangelog());
         this.restoreFiltersFromUrl();
         this.bindEvents();
         this.showCheckpoint();
@@ -39,7 +40,6 @@ class Changelog {
             this.populateSelect('product-filter', data.product_names);
             this.populateSelect('type-filter', data.release_types);
             this.populateSelect('status-filter', data.release_statuses);
-            this.restoreFiltersFromUrl();
         } catch (e) {
             console.error('Error loading filter options:', e);
             this.filterError = 'Filter choices could not be loaded. Showing all products, types, and statuses; reload to retry.';
@@ -58,21 +58,12 @@ class Changelog {
     }
 
     getActiveFilters() {
-        return {
-            days: document.getElementById('days-select').value,
-            product_name: document.getElementById('product-filter').value,
-            release_type: document.getElementById('type-filter').value,
-            release_status: document.getElementById('status-filter').value,
-        };
+        return this.views.capture();
     }
 
     syncFiltersToUrl() {
-        const filters = this.getActiveFilters();
-        const params = new URLSearchParams();
-        if (filters.days && filters.days !== '30') params.set('days', filters.days);
-        if (filters.product_name) params.set('product_name', filters.product_name);
-        if (filters.release_type) params.set('release_type', filters.release_type);
-        if (filters.release_status) params.set('release_status', filters.release_status);
+        this.views.sync();
+        const params = new URLSearchParams(location.search);
         if (this.catchUp) params.set('catch_up', '1');
         const qs = params.toString();
         history.replaceState(null, '', qs ? `/changelog?${qs}` : '/changelog');
@@ -81,17 +72,7 @@ class Changelog {
     restoreFiltersFromUrl() {
         const params = new URLSearchParams(location.search);
         this.catchUp = params.get('catch_up') === '1' && !!this.checkpoint.baseline;
-        const map = {
-            'days': 'days-select',
-            'product_name': 'product-filter',
-            'release_type': 'type-filter',
-            'release_status': 'status-filter',
-        };
-        for (const [param, elId] of Object.entries(map)) {
-            const val = params.get(param);
-            const el = document.getElementById(elId);
-            if (val && el) el.value = val;
-        }
+        this.views.restore(location.search);
     }
 
     bindEvents() {
@@ -120,7 +101,7 @@ class Changelog {
                 status.textContent = `Checkpoint not saved: ${error.message}`;
             }
         });
-        const selects = ['days-select', 'product-filter', 'type-filter', 'status-filter'];
+        const selects = ['days-select', 'product-filter', 'type-filter', 'status-filter', 'include-inactive'];
         selects.forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
@@ -138,6 +119,7 @@ class Changelog {
                 document.getElementById('product-filter').value = '';
                 document.getElementById('type-filter').value = '';
                 document.getElementById('status-filter').value = '';
+                document.getElementById('include-inactive').checked = true;
                 this.syncFiltersToUrl();
                 this.loadChangelog();
             });
@@ -150,13 +132,16 @@ class Changelog {
         this.loadedCheckpoint = null;
         document.getElementById('checkpoint-mark').disabled = true;
         document.getElementById('catch-up-summary').textContent = '';
+        if (this.request) this.request.abort();
+        const request = new AbortController();
+        this.request = request;
         const container = document.getElementById('changelog-content');
         container.innerHTML = '<div class="loading-indicator"><div class="spinner"></div><span>Loading changelog...</span></div>';
 
         const filters = this.getActiveFilters();
         const params = new URLSearchParams();
         params.set('days', filters.days || '30');
-        params.set('include_inactive', 'true');
+        params.set('include_inactive', filters.include_inactive);
         if (filters.product_name) params.set('product_name', filters.product_name);
         if (filters.release_type) params.set('release_type', filters.release_type);
         if (filters.release_status) params.set('release_status', filters.release_status);
@@ -170,7 +155,7 @@ class Changelog {
         }
 
         try {
-            const response = await fetch(`/api/changelog?${params.toString()}`);
+            const response = await fetch(`/api/changelog?${params.toString()}`, { signal: request.signal });
             if (!response.ok) throw new Error(`HTTP ${response.status}`);
             const data = await response.json();
             if (requestId !== this.requestId) return;
@@ -195,10 +180,10 @@ class Changelog {
                 document.getElementById('catch-up-summary').textContent = `${features} features changed in ${items.length} change events with these filters. Mark as seen acknowledges all products, types, and statuses through ${data.through} UTC, not just these filters.`;
                 this.render(days, true);
             } else if (initial) {
-                const normal = await fetch(`/api/changelog?${new URLSearchParams({ ...filters, include_inactive: 'true' })}`);
+                const normal = await fetch(`/api/changelog?${new URLSearchParams(filters)}`, { signal: request.signal });
                 if (!normal.ok) throw new Error(`HTTP ${normal.status}`);
                 const normalData = await normal.json();
-                if (requestId !== this.requestId) return;
+                if (requestId !== this.requestId || e.name === 'AbortError') return;
                 if (!Array.isArray(normalData.days)) throw new Error('Invalid changelog response');
                 this.render(normalData.days);
             } else {

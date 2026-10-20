@@ -132,9 +132,9 @@ def test_list_api_also_supplies_sanitized_description_html(client, server_module
 
 def test_homepage_versions_changed_immutable_assets(client):
     page = BeautifulSoup(client.get("/").data, "html.parser")
-    assert page.select_one('script[src="/static/app.js?v=feedback-v1"][defer]')
+    assert page.select_one('script[src="/static/app.js?v=integration-v1"][defer]')
     assert page.select_one('script[src="/static/blog-feedback.js?v=feedback-v1"][defer]')
-    assert page.select_one('link[href="/static/styles.css?v=description-v1"]')
+    assert page.select_one('link[href="/static/styles.css?v=integration-v1"]')
     assert not page.select_one('script[src="/static/app.js"]')
     assert not page.select_one('script[src="/static/markdown-it.min.js"]')
 
