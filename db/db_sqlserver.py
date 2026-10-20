@@ -10,6 +10,8 @@ from typing import Iterable, Any, Tuple, Dict, Callable, Iterator
 import urllib.parse
 import secrets
 import logging
+import sys
+import pyodbc
 
 # ...existing code...
 from sqlalchemy import (
@@ -17,6 +19,7 @@ from sqlalchemy import (
 )
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.exc import SQLAlchemyError
 
 # Retry decorator lives in lib/db_retry.py so raw-pyodbc pipeline scripts
 # can share the same Azure-SQL transient-error detection.
@@ -28,6 +31,7 @@ from lib.quarter_date import (
     parse_release_date_value as _parse_release_date_value,
     quarter_bounds as _quarter_bounds,
 )
+from lib.insights import InsightsQuery, PAGE_SIZE
 
 naming_convention = {
     "ix": "ix_%(column_0_label)s",
@@ -385,6 +389,149 @@ def _map_to_model_kwargs(item: Any) -> Dict[str, Any]:
         _get(item, "ReleaseItemID", "release_item_id") or uuid.uuid4()
     )
     return kwargs
+
+
+def _insights_sql():
+    # Identifiers come only from the application's fixed tracked-field schema.
+    fields = [spec.model_attr for spec in _RELEASE_FIELDS]
+    columns = ", ".join(fields)
+    lag = ",\n".join(
+        f"LAG({name}) OVER (PARTITION BY release_item_id ORDER BY ValidFrom, ValidTo) AS p_{name}"
+        for name in fields + ["active", "ValidFrom"]
+    )
+
+    def comparable(name, previous=False):
+        column = ("p_" if previous else "") + name
+        expression = f"CAST({column} AS nvarchar(max)) COLLATE Latin1_General_100_BIN2"
+        return f"COALESCE({expression}, N'')" if name in ("feature_name", "feature_description") else expression
+
+    changed = ", ".join(comparable(name) for name in fields)
+    previous = ", ".join(comparable(name, True) for name in fields)
+    return text(f"""
+    WITH Versions AS (
+        SELECT release_item_id, {columns}, active, ValidFrom, ValidTo
+        FROM dbo.release_items FOR SYSTEM_TIME FROM :baseline TO :end
+    ), Diffs AS (
+        SELECT *, {lag} FROM Versions
+    ), Classified AS (
+        SELECT *,
+            COALESCE(NULLIF(product_name, ''), 'Unknown product') AS product,
+            CASE WHEN p_ValidFrom IS NULL THEN 'addition'
+                 WHEN active = 0 AND p_active = 1 THEN 'removal'
+                 WHEN active = 1 AND p_active = 0 THEN 'restoration'
+                 ELSE 'edit' END AS kind,
+            CASE WHEN p_ValidFrom IS NOT NULL AND EXISTS (
+                SELECT release_status, release_type, release_status_value, release_type_value
+                EXCEPT SELECT p_release_status, p_release_type, p_release_status_value, p_release_type_value
+            ) THEN 1 ELSE 0 END AS status_changed,
+            CASE WHEN p_ValidFrom IS NOT NULL AND EXISTS (
+                SELECT release_date EXCEPT SELECT p_release_date
+            ) THEN 1 ELSE 0 END AS target_changed
+        FROM Diffs
+        WHERE ValidFrom >= :start AND ValidFrom < :end
+          AND (p_ValidFrom IS NULL OR active <> p_active OR EXISTS (
+              SELECT {changed} EXCEPT SELECT {previous}
+          ))
+    ), Events AS (
+        SELECT * FROM Classified WHERE :product IS NULL OR product = :product
+    ), Upcoming AS (
+        SELECT release_item_id, feature_name,
+            COALESCE(NULLIF(product_name, ''), 'Unknown product') AS product_name,
+            release_status, release_type, release_date,
+            CASE WHEN release_date IS NULL THEN 'unknown'
+                 ELSE CONCAT(YEAR(release_date), '-Q', DATEPART(quarter, release_date)) END AS bucket
+        FROM dbo.release_items
+        WHERE active = 1 AND LOWER(COALESCE(release_status, '')) <> 'shipped'
+          AND (release_date IS NULL OR release_date >= :quarter_start)
+          AND (:product IS NULL OR COALESCE(NULLIF(product_name, ''), 'Unknown product') = :product)
+    ), Detail AS (
+        SELECT release_item_id, feature_name, product AS product_name, ValidFrom AS observed_at,
+            kind, p_release_status AS previous_status, release_status,
+            p_release_type AS previous_type, release_type,
+            p_release_date AS previous_target, release_date AS revised_target,
+            status_changed, target_changed, CAST(NULL AS varchar(10)) AS bucket
+        FROM Events
+        WHERE :metric <> 'upcoming'
+          AND (:metric = 'all' OR kind = :metric
+               OR (:metric = 'status' AND status_changed = 1)
+               OR (:metric = 'target' AND target_changed = 1))
+          AND (:bucket IS NULL OR CONVERT(char(10), ValidFrom, 23) = :bucket)
+        UNION ALL
+        SELECT release_item_id, feature_name, product_name, NULL, 'upcoming',
+            NULL, release_status, NULL, release_type, NULL, release_date, 0, 0, bucket
+        FROM Upcoming WHERE :metric = 'upcoming' AND (:bucket IS NULL OR bucket = :bucket)
+    )
+    SELECT
+        JSON_QUERY((SELECT product AS product_name, kind, COUNT_BIG(*) AS events,
+                    COUNT(DISTINCT release_item_id) AS features
+                    FROM Events GROUP BY product, kind ORDER BY product, kind
+                    FOR JSON PATH)) AS activity,
+        JSON_QUERY((SELECT CONVERT(char(10), ValidFrom, 23) AS day,
+                    COUNT_BIG(*) AS events, COUNT(DISTINCT release_item_id) AS features
+                    FROM Events WHERE status_changed = 1
+                    GROUP BY CONVERT(char(10), ValidFrom, 23) ORDER BY day
+                    FOR JSON PATH)) AS transitions,
+        (SELECT COUNT_BIG(*) FROM Events WHERE target_changed = 1) AS target_changes,
+        JSON_QUERY((SELECT bucket, COUNT_BIG(*) AS features FROM Upcoming
+                    GROUP BY bucket ORDER BY bucket FOR JSON PATH)) AS upcoming,
+        JSON_QUERY((SELECT name FROM (
+                    SELECT COALESCE(NULLIF(product_name, ''), 'Unknown product') AS name
+                    FROM dbo.release_items FOR SYSTEM_TIME FROM :baseline TO :end
+                    UNION SELECT COALESCE(NULLIF(product_name, ''), 'Unknown product')
+                    FROM dbo.release_items) names ORDER BY name FOR JSON PATH)) AS products,
+        JSON_QUERY((SELECT MIN(ValidFrom) AS earliest_version_in_query,
+                    (SELECT MAX(ValidFrom) FROM dbo.release_items) AS last_data_write
+                    FROM Versions FOR JSON PATH, INCLUDE_NULL_VALUES, WITHOUT_ARRAY_WRAPPER)) AS coverage,
+        JSON_QUERY((SELECT (SELECT COUNT_BIG(*) FROM Detail) AS total,
+                    JSON_QUERY((SELECT * FROM Detail
+                        ORDER BY observed_at DESC, release_item_id, kind
+                        OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+                        FOR JSON PATH, INCLUDE_NULL_VALUES)) AS items
+                    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)) AS details
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+    OPTION (MAXDOP 2)
+    """)
+
+
+@retry_on_transient_errors(max_attempts=2, initial_delay=0.5, max_delay=1.0)
+def get_insights(engine, query: InsightsQuery):
+    """Aggregate every retained content transition, with bounded detail pagination.
+
+    One overlapping baseline version per feature supplies the predecessor at the
+    UTC start boundary. Filtering products happens *after* LAG so moves retain
+    their real predecessor. Pipeline-only columns are deliberately never diffed.
+    """
+    if query.days not in (30, 90) or query.end - query.start != timedelta(days=query.days):
+        raise ValueError("Insights requires a 30- or 90-day window")
+    if not 1 <= query.page <= 200:
+        raise ValueError("Insights page is out of bounds")
+    today = datetime.utcnow().date()
+    params = {
+        "baseline": datetime.combine(query.start, datetime.min.time()) - timedelta(microseconds=1),
+        "start": datetime.combine(query.start, datetime.min.time()),
+        "end": datetime.combine(query.end, datetime.min.time()),
+        "quarter_start": date(today.year, ((today.month - 1) // 3) * 3 + 1, 1),
+        "product": query.product_name, "metric": query.metric, "bucket": query.bucket,
+        "offset": (query.page - 1) * PAGE_SIZE, "limit": PAGE_SIZE,
+    }
+    with engine.connect() as conn:
+        driver = conn.connection.driver_connection
+        old_timeout = driver.timeout
+        driver.timeout = 15
+        try:
+            # FOR JSON can split a large result into multiple rows.
+            payload = "".join(row[0] for row in conn.execute(_insights_sql(), params))
+            return json.loads(payload)
+        finally:
+            original_error = sys.exception()
+            if not conn.invalidated:
+                try:
+                    driver.timeout = old_timeout
+                except pyodbc.Error as exc:
+                    logger.exception("Unable to restore insights query timeout")
+                    conn.invalidate(exc)
+                    if original_error is None:
+                        raise SQLAlchemyError("Unable to restore insights connection timeout") from exc
 
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
