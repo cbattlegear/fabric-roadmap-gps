@@ -1481,6 +1481,11 @@ def about_page():
     return response
 
 
+@app.get("/privacy")
+def privacy_page():
+    return render_template("privacy.html")
+
+
 @app.get("/release/<release_item_id>")
 def release_detail(release_item_id):
     """Server-rendered release detail page for SEO."""

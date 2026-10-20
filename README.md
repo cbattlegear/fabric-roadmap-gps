@@ -290,6 +290,8 @@ API reads, URLs, or cookies, so cached pages remain shared and anonymous. Storag
 must be enabled to vote. Clearing storage, expiry, other browsers, and deliberate
 identifier rotation defeat deduplication; counts are **not unique people**.
 No IP, email, subscription token, or user-agent is stored as feedback identity.
+The visitor-facing article feedback and retention notice lives at `/privacy`,
+linked only in the global footer immediately after Email Notifications.
 Existing operational telemetry/logs and IP-based Flask-Limiter controls still
 apply. Limits are 20/minute and 100/hour **per worker**, in memory, reset on worker
 restart, using the existing trusted-proxy IP extraction. Deployments must prevent
@@ -330,7 +332,7 @@ with no npm packages, live database, network, or secrets.
 
 ## Application release notes
 
-The bottom of `/about` shows the three most recently published stable
+The bottom of `/about` shows, in a white bordered panel matching its neighboring sections, the three most recently published stable
 [GitHub Releases](https://github.com/cbattlegear/fabric-roadmap-gps/releases),
 ordered by publication time (not tag spelling). These are application updates;
 `/changelog` continues to track Microsoft's Fabric roadmap only.
