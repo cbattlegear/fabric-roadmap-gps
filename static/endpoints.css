@@ -1,0 +1,30 @@
+.api-docs { font-size: 1rem; }
+.api-docs .endpoint-section { scroll-margin-top: 1rem; min-width: 0; }
+.api-docs h2 { margin: 0 0 1rem; font-size: 1.5rem; }
+.api-docs h3 { margin: 1.5rem 0 .5rem; font-size: 1.1rem; }
+.api-docs p, .api-docs ul { max-width: 75ch; }
+.api-docs p, .api-docs li, .api-docs dd { overflow-wrap: anywhere; }
+.api-docs a { color: var(--fabric-primary); text-underline-offset: .2em; }
+.api-channel-links, .api-reference-links { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem 1.5rem; margin-bottom: 1rem; }
+.api-channel-links a, .api-reference-links a { display: inline-flex; align-items: center; min-height: 44px; }
+.api-parameters { display: grid; grid-template-columns: minmax(10rem, 1fr) minmax(0, 3fr); gap: .75rem 1.5rem; max-width: 90ch; }
+.api-parameters dt { font-weight: 600; overflow-wrap: anywhere; }
+.api-parameters dd { margin: 0; min-width: 0; }
+.api-docs details { margin-top: 1rem; }
+.api-docs summary { width: fit-content; max-width: 100%; min-height: 44px; padding: .65rem 0; cursor: pointer; color: var(--fabric-primary); }
+.api-docs pre { box-sizing: border-box; max-width: 100%; min-width: 0; overflow-x: auto; padding: 1rem; margin: .5rem 0 1rem; white-space: pre; background: var(--fabric-neutral-grey-20); border-radius: 4px; font-size: .875rem; line-height: 1.5; }
+.api-docs pre code { background: none; padding: 0; font-size: inherit; white-space: pre; overflow-wrap: normal; word-break: normal; }
+.api-docs :focus-visible { outline: 2px solid var(--fabric-primary); outline-offset: 3px; }
+.api-code-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; font-size: .875rem; font-weight: 600; }
+.api-code-heading button { min-height: 44px; flex-shrink: 0; }
+.api-copy-status { font-size: .875rem; }
+.api-copy-status:empty { display: none; }
+.api-copy-block [hidden] { display: none; }
+.api-copy-block label { display: block; margin-bottom: .5rem; }
+.api-copy-block input { box-sizing: border-box; width: 100%; min-width: 0; min-height: 44px; padding: .5rem; font: inherit; }
+@media (max-width: 768px) {
+  .api-docs .endpoint-section { padding: 1rem; }
+  .api-parameters { grid-template-columns: minmax(0, 1fr); gap: .25rem; }
+  .api-parameters dd { margin-bottom: .75rem; }
+  .api-channel-links, .api-reference-links { column-gap: 1rem; }
+}

@@ -461,15 +461,16 @@ def test_api_documentation_explains_mcp_usage_and_automatic_availability(monkeyp
     assert "https://gps.example/mcp" in text
     assert "Streamable HTTP" in text
     assert "Included automatically in web mode" in text
-    assert "No feature flag or separate server is needed" in text
     assert "disabled by default" not in text
-    assert 'client.initialize()' in text
-    assert 'client.list_tools()' in text
-    for tool in ("search_releases", "get_release", "get_release_history", "get_filter_options"):
-        assert tool in text
-    assert "is_error" in text
-    assert "1-25" in text
-    assert "never generates embeddings" in text
+    assert "claude mcp add --transport http fabric-gps https://gps.example/mcp" in text
+    assert "substring matching, not semantic search" in text
+    prose = " ".join(p.get_text(" ", strip=True) for p in section.select("p:not(.api-copy-status)"))
+    assert 60 <= len(prose.split()) <= 90
+    reference = (Path(__file__).resolve().parents[1] / "MCP.md").read_text()
+    for retained in ("client.initialize()", "client.list_tools()", "mcp==2.3.0",
+                     "2025-11-25", "2026-07-28", "1-25", "truncated_fields",
+                     "Front Door", "get_filter_options", "get_release_history"):
+        assert retained in reference
     assert section.select_one('a[href$="/MCP.md"]')
 
 

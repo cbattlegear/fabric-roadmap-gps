@@ -957,66 +957,12 @@ def endpoints():
 
 
 def _build_endpoints_html() -> str:
-    """Build the endpoints documentation page with examples"""
-    # Fetch distinct options (limited for brevity)
-    engine = get_engine()
-    product_names = get_distinct_values(engine, 'product_name')
-    release_types = get_distinct_values(engine, 'release_type')
-    release_statuses = get_distinct_values(engine, 'release_status')
-
-    def _mk_examples_data(base: str, values: list[str], param: str, is_rss: bool = True, label: str = "RSS"):
-        """Generate data structure for examples instead of HTML"""
-        examples = []
-        for v in values[:5]:
-            qv = urllib.parse.quote_plus(v)
-            url = f"{base}?{param}={qv}"
-            if is_rss:
-                url += "&limit=10"
-            examples.append({
-                'label': label,
-                'title': v,
-                'url': url,
-                'param': param
-            })
-        return examples
-
-    def _mk_examples_days_data(base: str, days_values: list[int], is_rss: bool = True, label: str = "RSS"):
-        """Generate data structure for days filter examples instead of HTML"""
-        examples = []
-        for d in days_values:
-            url = f"{base}?modified_within_days={d}"
-            if is_rss:
-                url += "&limit=10"
-            examples.append({
-                'label': label,
-                'title': f'modified_within_days={d}',
-                'url': url,
-                'param': 'modified_within_days',
-                'value': d
-            })
-        return examples
-
-    # Build RSS examples data
-    rss_examples_data = {
-        'product_name': _mk_examples_data("/rss", product_names, "product_name", is_rss=True, label="RSS"),
-        'release_type': _mk_examples_data("/rss", release_types, "release_type", is_rss=True, label="RSS"),
-        'release_status': _mk_examples_data("/rss", release_statuses, "release_status", is_rss=True, label="RSS")
-    }
-
-    # Build API examples data
-    api_examples_data = {
-        'product_name': _mk_examples_data("/api/releases", product_names, "product_name", is_rss=False, label="JSON"),
-        'release_type': _mk_examples_data("/api/releases", release_types, "release_type", is_rss=False, label="JSON"),
-        'release_status': _mk_examples_data("/api/releases", release_statuses, "release_status", is_rss=False, label="JSON"),
-        'modified_within_days': _mk_examples_days_data("/api/releases", [7, 14, 30], is_rss=False, label="JSON")
-    }
-
-    # Render template with data structures
+    """Render connection starters/reference without requiring database discovery."""
     with app.app_context():
-        return render_template('endpoints.html', 
-                             rss_examples=rss_examples_data,
-                             api_examples=api_examples_data,
-                             mcp_endpoint_url=f"{EMAIL_BASE_URL.rstrip('/')}/mcp")
+        return render_template(
+            'endpoints.html', public_base_url=EMAIL_BASE_URL.rstrip('/'),
+            cache_fresh_seconds=_FRONT_END_TTL, cache_stale_seconds=_STALE_TTL,
+        )
 
 
 @app.get("/subscribe")

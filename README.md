@@ -11,6 +11,12 @@ are active. Saved views, URL/history restoration, and Clear update that count.
 Desktop retains the original expanded fields and ordering. Without JavaScript,
 all fields remain visible.
 
+The API page (`/endpoints`) starts with copyable RSS/REST/MCP connections,
+followed by endpoint-specific parameters and response examples. It does not
+query the database to generate documentation. Current filter values remain
+available from `/api/filter-options`; detailed MCP clients, protocols, limits,
+and hosting requirements live in [MCP.md](MCP.md).
+
 ## Tests
 
 Unit tests live in `tests/` and run with pytest. They cover pure-Python helpers (no live SQL Server or network needed) — currently the Azure SQL retry decorator, the daily/weekly email-cadence filter, and the `ReleaseItem` parsing helpers.
