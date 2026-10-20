@@ -183,11 +183,21 @@
                                 <h4>Parameters</h4>
                                 <ul>
                                     <li><code>days</code> - Look-back window in days (default: 30, max: 90)</li>
+                                    <li><code>since</code> - Inclusive UTC checkpoint date (<code>YYYY-MM-DD</code>, today through 90 days ago). Returns every recorded tracked-field change event through today, including repeated same-day edits; ignores <code>days</code> and cannot be combined with <code>date</code>.</li>
                                     <li><code>product_name</code> - Filter by exact product name</li>
                                     <li><code>release_type</code> - Filter by exact release type</li>
                                     <li><code>release_status</code> - Filter by exact release status</li>
                                     <li><code>include_inactive</code> - Include removed items (<code>true</code> or <code>1</code>, default: true)</li>
                                 </ul>
+                                <p>In <code>since</code> mode, filters use historical event values and results include removals and restorations by default.
+                                    <code>total_events</code> counts change events (one event may change several fields);
+                                    <code>total_features</code> counts distinct features. The response also includes
+                                    <code>since</code>, <code>through</code>, and <code>complete: true</code>.
+                                    These responses use <code>Cache-Control: private, no-store</code> with no conditional validators.
+                                    Embedding and blog-only updates are excluded. Recorded history began August 27, 2025.</p>
+                                <p>Catch-up groups transitions by their observed UTC temporal-history day.
+                                    In this mode, <code>last_modified</code> is that event day, even when the legacy feed date
+                                    was preserved to suppress removal notifications.</p>
                                 <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
     "total_items": 48,
     "days": [
