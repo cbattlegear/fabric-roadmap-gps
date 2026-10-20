@@ -38,7 +38,7 @@ function setup(page = '/') {
         'copy-view-link', 'reset-saved-views', 'search-input', 'include-inactive',
         'clear-filters', 'load-more-btn', 'changes-grid', 'no-results', 'loading-indicator',
         'loading-more-indicator', 'search-spinner', 'changelog-content',
-        'visit-status',
+        'visit-status', 'load-error', 'load-error-message', 'retry-load',
     ];
     ids.forEach(id => { elements[id] = new Element(); });
     elements['include-inactive'].type = 'checkbox';
@@ -500,7 +500,7 @@ test('opening saved roadmap view resets pagination and cancels pending search', 
     let requested;
     env.sandbox.fetch = async url => {
         requested = url;
-        return { json: async () => ({ data: [], pagination: { has_next: false } }) };
+        return { ok: true, json: async () => ({ data: [], pagination: { has_next: false } }) };
     };
     instance.views.restore('?q=different');
     env.elements['saved-view-select'].value = id;
@@ -522,6 +522,161 @@ test('latest roadmap filter restoration wins even if older responses finish afte
         const requests = [];
         env.sandbox.fetch = (_url, options) => new Promise(resolve => {
             requests.push({ resolve, signal: options.signal });
+        });
+
+        function retryPage() {
+            const env = setup();
+            env.sandbox.console = { error() {} };
+            const instance = pageInstance(env, '/');
+            instance.views = new env.api.Controller('/', () => instance.reloadView());
+            instance.page = 1;
+            instance.hasLoadedOnce = false;
+            instance.renderChanges = () => {
+                env.elements['changes-grid'].innerHTML = instance.currentData.join(',');
+            };
+            const requests = [];
+            env.sandbox.fetch = (url, options) => new Promise((resolve, reject) => {
+                requests.push({ url, signal: options.signal, resolve, reject });
+            });
+            const success = (index, data, hasNext = false) => requests[index].resolve({
+                ok: true, json: async () => ({ data, pagination: { has_next: hasNext, total_pages: 3 } }),
+            });
+            return { ...env, instance, requests, success };
+        }
+
+        test('initial HTTP, network and malformed failures require explicit retry with exact current view and URL', async () => {
+            for (const failure of ['http', 'network', 'invalid-json', 'invalid-shape']) {
+                const env = retryPage();
+                const { instance, elements, requests, sandbox, values, success } = env;
+                instance.views.restore('?product_name=Data+%26+AI&release_type=Preview&q=lake&sort=release_date&include_inactive=false');
+                instance.views.sync();
+                elements['view-name'].value = 'Retained';
+                elements['save-view'].emit('click');
+                const selected = instance.views.selected;
+                const url = sandbox.location.search;
+                const storage = JSON.stringify([...values]);
+                const pending = instance.loadRecentChanges({ reset: true });
+                if (failure === 'network') requests[0].reject(new Error('offline'));
+                else requests[0].resolve({
+                    ok: failure !== 'http', status: 503,
+                    json: async () => {
+                        if (failure === 'invalid-json') throw new SyntaxError('invalid JSON');
+                        return { error: 'not data' };
+                    },
+                });
+                await pending;
+                assert.equal(instance.page, 1);
+                assert.equal(instance.allPagesLoaded, false);
+                assert.equal(instance.hasLoadedOnce, false);
+                assert.equal(elements['load-error'].hidden, false);
+                assert.equal(elements['load-error-message'].textContent, 'Could not load roadmap items.');
+                await instance.loadRecentChanges();
+                assert.equal(requests.length, 1, 'intersection callbacks cannot retry failures');
+                instance.debounceTimer = setTimeout(() => assert.fail('duplicate search fired'), 10);
+                instance._filterChangeTimer = setTimeout(() => assert.fail('duplicate filter fired'), 10);
+                const retry = instance.retryLoad();
+                assert.equal(elements['retry-load'].disabled, true);
+                await instance.retryLoad();
+                await instance.loadRecentChanges();
+                assert.equal(requests.length, 2, 'pending retry cannot duplicate');
+                assert.equal(requests[1].url, requests[0].url);
+                success(1, ['recovered']);
+                await retry;
+                assert.equal(elements['changes-grid'].innerHTML, 'recovered');
+                assert.equal(elements['load-error'].hidden, true);
+                assert.equal(elements['retry-load'].disabled, false);
+                assert.equal(instance.failedLoad, null);
+                assert.equal(instance.views.selected, selected);
+                assert.equal(sandbox.location.search, url);
+                assert.equal(JSON.stringify([...values]), storage, 'retry never writes view or seen checkpoints');
+                await new Promise(resolve => setTimeout(resolve, 20));
+            }
+        });
+
+        test('pagination failure retains cards and retries only the failed page without scroll loops', async () => {
+            const { instance, elements, requests, success } = retryPage();
+            let pending = instance.loadRecentChanges({ reset: true });
+            success(0, ['first'], true);
+            await pending;
+            pending = instance.loadRecentChanges();
+            requests[1].reject(new Error('offline'));
+            await pending;
+            assert.equal(instance.page, 2);
+            assert.equal(elements['changes-grid'].innerHTML, 'first');
+            assert.equal(instance.currentData[0], 'first');
+            assert.equal(elements['load-error-message'].textContent, 'Could not load more roadmap items.');
+            assert.equal(elements['load-more-btn'].style.display, 'none');
+            for (let i = 0; i < 3; i++) await instance.loadRecentChanges();
+            assert.equal(requests.length, 2);
+            pending = instance.retryLoad();
+            requests[2].resolve({ ok: false, status: 503 });
+            await pending;
+            assert.equal(elements['changes-grid'].innerHTML, 'first');
+            pending = instance.retryLoad();
+            assert.equal(requests[3].url, requests[1].url);
+            success(3, ['second']);
+            await pending;
+            assert.equal(elements['changes-grid'].innerHTML, 'first,second');
+            assert.equal(instance.allPagesLoaded, true);
+        });
+
+        test('retry failures and successes cannot overwrite a newer query, even before debounce fires', async () => {
+            for (const staleFailure of [false, true]) {
+                const { instance, requests, success, elements } = retryPage();
+                let pending = instance.loadRecentChanges({ reset: true });
+                requests[0].reject(new Error('offline'));
+                await pending;
+                pending = instance.retryLoad();
+                instance.views.restore('?product_name=Data+%26+AI');
+                if (staleFailure) requests[1].reject(new Error('obsolete'));
+                else success(1, ['obsolete']);
+                await pending;
+                assert.equal(instance.currentData.length, 0);
+                assert.equal(elements['load-error-message'].textContent, 'Could not load roadmap items.');
+                pending = instance.retryLoad();
+                assert.equal(new URL(requests[2].url, 'https://example.test').searchParams.get('product_name'), 'Data & AI');
+                assert.equal(new URL(requests[2].url, 'https://example.test').searchParams.get('page'), '1');
+                success(2, ['new query']);
+                await pending;
+                assert.equal(elements['changes-grid'].innerHTML, 'new query');
+            }
+        });
+
+        test('a newer view aborts retry and stale completion cannot clear its pending state or error', async () => {
+            const { instance, requests, success, elements } = retryPage();
+            let pending = instance.loadRecentChanges({ reset: true });
+            requests[0].reject(new Error('offline'));
+            await pending;
+            const obsolete = instance.retryLoad();
+            instance.views.restore('?release_type=Preview');
+            pending = instance.reloadView();
+            assert.equal(requests[1].signal.aborted, true);
+            success(1, ['obsolete']);
+            await obsolete;
+            assert.equal(instance.loadingMore, true);
+            assert.equal(elements['retry-load'].disabled, true);
+            requests[2].reject(new Error('current failure'));
+            await pending;
+            assert.equal(elements['load-error'].hidden, false);
+            assert.equal(instance.currentData.length, 0);
+        });
+
+        test('keyboard retry focuses recovered content or empty state without stealing another control focus', async () => {
+            for (const scenario of ['items', 'empty', 'moved']) {
+                const { instance, requests, success, elements, sandbox } = retryPage();
+                let pending = instance.loadRecentChanges({ reset: true });
+                requests[0].reject(new Error('offline'));
+                await pending;
+                const resultLink = new Element('A');
+                sandbox.document.querySelectorAll = () => scenario === 'empty' ? [] : [resultLink];
+                sandbox.document.activeElement = elements['retry-load'];
+                pending = instance.retryLoad();
+                if (scenario === 'moved') sandbox.document.activeElement = elements['search-input'];
+                success(1, scenario === 'empty' ? [] : ['recovered']);
+                await pending;
+                assert.equal(Boolean(resultLink.focused), scenario === 'items');
+                assert.equal(Boolean(elements['no-results'].focused), scenario === 'empty');
+            }
         });
         const load = () => page === '/' ?
             instance.loadRecentChanges({ reset: true }) : instance.loadChangelog();

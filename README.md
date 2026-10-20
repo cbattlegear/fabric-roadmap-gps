@@ -6,10 +6,15 @@ The homepage puts roadmap filters, saved Views, and results directly below a
 compact header. **Get email updates** opens the existing subscription page for
 frequency and preference choices. RSS and API documentation remain in the footer.
 On mobile, Product and Search stay visible; **More filters** reveals the existing
-type/status/window/sort/removed controls and shows how many secondary criteria
-are active. Saved views, URL/history restoration, and Clear update that count.
+type/status/window/sort/removed controls and names the active secondary criteria
+alongside their count. Saved views, URL/history restoration, and Clear update
+both. Mobile homepage Views keep viewport gutters.
 Desktop retains the original expanded fields and ordering. Without JavaScript,
 all fields remain visible.
+
+Failed homepage loads offer **Retry** for the same view and failed page.
+Pagination errors retain existing cards and pause automatic loading until Retry
+or a new filter request; retrying does not update changelog visit checkpoints.
 
 The API page (`/endpoints`) starts with copyable RSS/REST/MCP connections,
 followed by endpoint-specific parameters and response examples. It does not

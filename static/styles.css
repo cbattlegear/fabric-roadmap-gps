@@ -587,6 +587,18 @@ body {
   display: none;
 }
 
+.roadmap-results .home-load-error {
+  margin: var(--spacing-m) 0;
+}
+
+.roadmap-results .home-load-error[hidden] {
+  display: none;
+}
+
+.roadmap-results .home-load-error button {
+  min-height: 44px;
+}
+
 @media (max-width: 600px) {
   .filters-container {
     grid-template-columns: minmax(0, 1fr);
@@ -1280,6 +1292,26 @@ code { background: var(--fabric-neutral-grey-30); padding: 2px 4px; border-radiu
     display: grid;
     gap: 12px;
     padding: var(--spacing-s) 0 var(--spacing-m);
+  }
+
+  .mobile-filter-applied {
+    display: block;
+    font-size: .875rem;
+    font-weight: 400;
+    overflow-wrap: anywhere;
+    line-height: 1.4;
+  }
+
+  .mobile-filter-applied[hidden] {
+    display: none;
+  }
+
+  .roadmap-results .saved-views {
+    inset: 20vh 16px auto;
+    margin: 0 auto;
+    width: min(360px, calc(100vw - 32px));
+    position-area: none;
+    position-anchor: auto;
   }
 
   .mobile-filter-fields .filter-group:has(input[type="checkbox"]) label:last-child {

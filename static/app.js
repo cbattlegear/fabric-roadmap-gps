@@ -40,6 +40,7 @@ class RecentChanges {
         this.observer = null;
         this.hasLoadedOnce = false;
         this.dataVersion = '';
+        this.failedLoad = null;
         this.init();
     }
 
@@ -101,7 +102,7 @@ class RecentChanges {
     }
 
     async loadRecentChanges(options = {}) {
-        const { reset = false } = options;
+        const { reset = false, retry = false } = options;
         const filters = this.getActiveFilters();
 
         if (reset) {
@@ -110,13 +111,21 @@ class RecentChanges {
             this.page = 1;
             this.currentData = [];
             this.allPagesLoaded = false;
+            this.failedLoad = null;
+            document.getElementById('load-error').hidden = true;
         }
 
-        if (this.loadingMore || this.allPagesLoaded) return;
+        if (this.loadingMore || this.allPagesLoaded || (this.failedLoad && !retry)) return;
 
         const isInitialLoad = this.page === 1 && !this.hasLoadedOnce;
+        const requestedPage = this.page;
+        const filterKey = JSON.stringify(filters);
+        const previousCount = this.currentData.length;
+        const retryButton = document.getElementById('retry-load');
+        const focusResults = retry && document.activeElement === retryButton;
 
         this.loadingMore = true;
+        retryButton.disabled = true;
         const request = new AbortController();
         this.request = request;
 
@@ -147,9 +156,11 @@ class RecentChanges {
 
             const response = await fetch(`/api/releases?${params.toString()}`, { signal: request.signal });
 
+            if (!response.ok) throw new Error(`Roadmap request failed (${response.status}).`);
             const payload = await response.json();
-            if (request !== this.request) return;
-            const items = Array.isArray(payload) ? payload : (payload.data || []);
+            if (request !== this.request || JSON.stringify(this.getActiveFilters()) !== filterKey) return;
+            const items = Array.isArray(payload) ? payload : payload?.data;
+            if (!Array.isArray(items)) throw new Error('Invalid roadmap response.');
 
             if (this.page === 1) {
                 this.currentData = items;
@@ -169,7 +180,15 @@ class RecentChanges {
                 this.allPagesLoaded = true;
             }
 
+            this.failedLoad = null;
+            document.getElementById('load-error').hidden = true;
             this.renderChanges();
+            if (focusResults && (document.activeElement === retryButton || document.activeElement === document.body)) {
+                const links = document.querySelectorAll('#changes-grid .change-title a');
+                const destination = links[requestedPage > 1 ? previousCount : 0] ||
+                    document.getElementById('no-results');
+                destination.focus();
+            }
 
             if (this.pagination && this.pagination.has_next) {
                 this.page += 1;
@@ -179,11 +198,11 @@ class RecentChanges {
                 this.hasLoadedOnce = true;
             }
         } catch (error) {
-            if (request !== this.request || error.name === 'AbortError') return;
+            if (request !== this.request || error.name === 'AbortError' ||
+                JSON.stringify(this.getActiveFilters()) !== filterKey) return;
             console.error('Error loading recent changes:', error);
-            if (isInitialLoad) {
-                this.showError();
-            }
+            this.failedLoad = { filters: filterKey, page: requestedPage };
+            this.showError(requestedPage > 1);
         } finally {
             if (request === this.request) {
                 this.toggleSearchSpinner(false);
@@ -192,6 +211,7 @@ class RecentChanges {
                 }
                 this.toggleBottomLoading(false);
                 this.loadingMore = false;
+                retryButton.disabled = false;
                 this.updateLoadMoreButton();
             }
         }
@@ -263,6 +283,7 @@ class RecentChanges {
         const applyBtn = document.getElementById('apply-filters');
         const clearBtn = document.getElementById('clear-filters');
         const loadMoreBtn = document.getElementById('load-more-btn');
+        document.getElementById('retry-load').addEventListener('click', () => this.retryLoad());
 
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
@@ -316,6 +337,15 @@ class RecentChanges {
         return this.loadRecentChanges({ reset: true });
     }
 
+    retryLoad() {
+        if (!this.failedLoad || this.loadingMore) return;
+        clearTimeout(this.debounceTimer);
+        clearTimeout(this._filterChangeTimer);
+        const changed = JSON.stringify(this.getActiveFilters()) !== this.failedLoad.filters;
+        if (!changed) this.page = this.failedLoad.page;
+        return this.loadRecentChanges({ reset: changed, retry: true });
+    }
+
     clearFilters() {
         document.getElementById('product-filter').value = '';
         document.getElementById('type-filter').value = '';
@@ -342,6 +372,10 @@ class RecentChanges {
     updateLoadMoreButton() {
         const btn = document.getElementById('load-more-btn');
         if (!btn) return;
+        if (this.failedLoad) {
+            btn.style.display = 'none';
+            return;
+        }
         if (this.observer) {
             btn.style.display = this.allPagesLoaded ? 'none' : 'none';
         } else {
@@ -379,13 +413,11 @@ class RecentChanges {
         }
     }
 
-    showError() {
-        const container = document.getElementById('changes-grid');
-        const noResults = document.getElementById('no-results');
-
-        container.innerHTML = '';
-        noResults.innerHTML = '<p>Error loading changes. Please try again later.</p>';
-        noResults.style.display = 'block';
+    showError(more) {
+        document.getElementById('no-results').style.display = 'none';
+        document.getElementById('load-error-message').textContent = more ?
+            'Could not load more roadmap items.' : 'Could not load roadmap items.';
+        document.getElementById('load-error').hidden = false;
     }
 
     debounceSearch(delay = 300) {

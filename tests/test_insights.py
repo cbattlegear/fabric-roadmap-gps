@@ -597,7 +597,7 @@ def test_shared_navigation_wraps_without_dashboard_stylesheet():
     assert nav_rule is not None
     assert "flex-wrap: wrap" in nav_rule.group(1)
     html = client.get("/changelog").get_data(as_text=True)
-    assert "/static/styles.css?v=mobile-filters-v2" in html
+    assert "/static/styles.css?v=home-polish-v3" in html
     assert "/static/insights.css" not in html
     soup = BeautifulSoup(html, "html.parser")
     assert soup.select_one('.header-nav a[href="/insights"]') is not None

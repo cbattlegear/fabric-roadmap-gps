@@ -15,6 +15,8 @@
             this.details = document.createElement('details');
             this.details.className = 'mobile-filter-details';
             this.summary = document.createElement('summary');
+            this.applied = document.createElement('span');
+            this.applied.className = 'mobile-filter-applied';
             this.panel = document.createElement('div');
             this.panel.className = 'mobile-filter-fields';
             this.details.append(this.summary, this.panel);
@@ -37,9 +39,17 @@
         }
 
         update() {
-            const count = this.fields.filter((field, index) =>
-                this.value(field) !== this.defaults[index]).length;
-            this.summary.textContent = 'More filters' + (count ? ` (${count} active)` : '');
+            const active = this.fields.flatMap((field, index) => {
+                if (this.value(field) === this.defaults[index]) return [];
+                const label = this.groups[index].querySelector('label').textContent.trim().replace(/:$/, '');
+                const value = field.type === 'checkbox' ? (field.checked ? 'Included' : 'Excluded') :
+                    field.selectedOptions[0].textContent;
+                return [`${label}: ${value}`];
+            });
+            this.summary.textContent = 'More filters' + (active.length ? ` (${active.length} active)` : '');
+            this.applied.textContent = active.join('; ');
+            this.applied.hidden = active.length === 0;
+            this.summary.append(this.applied);
         }
 
         adapt() {

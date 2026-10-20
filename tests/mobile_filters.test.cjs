@@ -34,12 +34,14 @@ class Element {
     contains(node) { return node === this || this.children.some(child => child.contains(node)); }
     addEventListener(type, listener) { this.listeners[type] = listener; }
     descendants() { return this.children.flatMap(child => [child, ...child.descendants()]); }
+    get selectedOptions() { return this.options.filter(option => option.value === this.value); }
     querySelectorAll(selector) {
         return this.descendants().filter(node => selector === '[data-secondary-filter]' && node.secondary);
     }
     querySelector(selector) {
         return this.descendants().find(node =>
             selector === '.filter-actions' ? node.actions :
+            selector === 'label' ? node.tagName === 'LABEL' :
             selector === 'select' ? node.tagName === 'SELECT' :
             ['INPUT', 'SELECT'].includes(node.tagName));
     }
@@ -67,6 +69,18 @@ function setup(mobile = true) {
         field.focus = () => { document.activeElement = field; };
         group.secondary = !['product-filter', 'search-input'].includes(id);
         group.append(field);
+        const labels = {
+            'type-filter': 'Release Type:', 'status-filter': 'Status:',
+            'days-filter': 'Modified Within:', 'sort-select': 'Sort By:',
+            'include-inactive': 'Removed items',
+        };
+        const label = new Element('label');
+        label.textContent = labels[id] || id;
+        group.append(label);
+        field.options = ['', 'Preview', 'Shipped', 'General availability', '14', 'release_date', 'last_modified']
+            .map(value => ({ value, textContent: ({
+                '14': 'Last 14 days', release_date: 'Release Date', last_modified: 'Last Modified',
+            })[value] || value }));
         container.append(group);
     }
     const actions = new Element('div');
@@ -86,6 +100,7 @@ test('mobile disclosure keeps the original live fields and only Product/Search u
     assert.equal(ctl.details.open, false);
     assert.equal(ctl.details.hidden, false);
     assert.equal(ctl.summary.textContent, 'More filters');
+    assert.equal(ctl.applied.hidden, true);
     assert.equal(ctl.panel.children.length, 5);
     for (const [id, field] of Object.entries(fields)) {
         assert.equal(container.contains(field), true);
@@ -107,11 +122,32 @@ test('active secondary count includes sort/window/removed but not upfront Search
     fields['include-inactive'].checked = false;
     container.listeners.change();
     assert.equal(ctl.summary.textContent, 'More filters (5 active)');
+    assert.equal(ctl.applied.textContent,
+        'Release Type: Preview; Status: Shipped; Modified Within: Last 14 days; Sort By: Release Date; Removed items: Excluded');
+    assert.equal(ctl.applied.hidden, false);
     fields['type-filter'].value = fields['status-filter'].value = fields['days-filter'].value = '';
     fields['sort-select'].value = 'last_modified';
     fields['include-inactive'].checked = true;
     ctl.update();
     assert.equal(ctl.summary.textContent, 'More filters');
+    assert.equal(ctl.applied.textContent, '');
+    assert.equal(ctl.applied.hidden, true);
+});
+
+test('named criteria use literal option labels without HTML, truncation or disclosure expansion', () => {
+    const { ctl, fields, media } = setup();
+    const label = '<img src=x onerror=alert(1)> & a very long release type '.repeat(20);
+    fields['type-filter'].options.push({ value: 'long', textContent: label });
+    fields['type-filter'].value = 'long';
+    ctl.update();
+    assert.equal(ctl.applied.textContent, `Release Type: ${label}`);
+    assert.equal(ctl.applied.children.length, 0);
+    assert.equal(ctl.details.open, false);
+    for (const mobile of [false, true]) {
+        media.matches = mobile;
+        media.change();
+        assert.equal(ctl.applied.textContent, `Release Type: ${label}`);
+    }
 });
 
 test('desktop restores the exact original field/tab order and mobile round trips without clones', () => {

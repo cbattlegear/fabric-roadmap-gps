@@ -81,13 +81,17 @@
                     <div class="changes-grid" id="changes-grid">
                         <!-- Changes will be populated by JavaScript -->
                     </div>
+                    <div id="load-error" class="home-load-error" role="alert" hidden>
+                        <p id="load-error-message"></p>
+                        <button id="retry-load" class="button button-secondary" type="button">Retry</button>
+                    </div>
                     <div id="loading-more-indicator" style="display:none; text-align:center; padding:.75rem 0; font-size:.75rem; opacity:.7;">Loading more…</div>
                     <div style="text-align:center; margin-top:.5rem;">
                         <button id="load-more-btn" class="button button-secondary" style="display:none;">Load More</button>
                     </div>
                      <div id="infinite-scroll-sentinel" style="height:1px;"></div>
                     
-                    <div class="no-results" id="no-results" style="display: none;">
+                    <div class="no-results" id="no-results" tabindex="-1" style="display: none;">
                         <p>No changes found matching your filters. Try adjusting your criteria.</p>
                     </div>
                 </div>
@@ -96,6 +100,6 @@
 {% endblock %}
 {% block scripts %}
 <script src="/static/saved-views.js?v=compact-views-v2"></script>
-<script defer src="/static/mobile-filters.js?v=mobile-facets-v1"></script>
-<script defer src="/static/app.js?v=description-boundaries-v4"></script>
+<script defer src="/static/mobile-filters.js?v=named-facets-v2"></script>
+<script defer src="/static/app.js?v=home-retry-v5"></script>
 {% endblock %}

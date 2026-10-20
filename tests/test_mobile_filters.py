@@ -52,3 +52,19 @@ def test_mobile_disclosure_javascript_behavior():
         cwd=root, text=True, capture_output=True, timeout=60, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_home_retry_and_mobile_popover_are_scoped_and_accessible():
+    page = BeautifulSoup(server.app.test_client().get("/").data, "html.parser")
+    error = page.select_one(".roadmap-results #load-error[hidden]")
+    assert error["role"] == "alert"
+    assert error.select_one("#load-error-message")
+    assert error.select_one('button#retry-load[type="button"]').get_text(strip=True) == "Retry"
+    assert page.select_one("#no-results")["tabindex"] == "-1"
+    css = (Path(__file__).resolve().parents[1] / "static" / "styles.css").read_text()
+    rule = css.split(".roadmap-results .saved-views {", 1)[1].split("}", 1)[0]
+    assert "inset: 20vh 16px auto" in rule
+    assert "position-area: none" in rule
+    assert "position-anchor: auto" in rule
+    assert css.index(".roadmap-results .saved-views {") > css.rindex("@media (max-width: 768px)")
+    assert "overflow-wrap: anywhere" in css.split(".mobile-filter-applied {", 1)[1].split("}", 1)[0]
