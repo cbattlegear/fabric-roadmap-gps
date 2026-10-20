@@ -241,7 +241,8 @@ Set `INSIGHTS_TEST_SQLSERVER_CONN` only for that disposable test database.
 The fixture creates and drops its own uniquely named temporal table; it never
 modifies `dbo.release_items`. CI requires no SQL Server, network, or secrets.
 No index or persisted aggregate is proposed without those measurements.
-The About-page status remains Planned until merge and this rollout gate pass.
+This rollout gate still applies before deployment; About no longer publishes a
+separate planned-feature list.
 
 `tests/test_native_roadmap_sqlserver.py` additionally requires
 `NATIVE_TEST_DISPOSABLE=1`. It exercises native feedback constraints and concurrent
@@ -378,6 +379,9 @@ Frontend state/navigation tests are invoked by pytest using Node.js (22 in CI),
 with no npm packages, live database, network, or secrets.
 
 ## Application release notes
+
+`/about` gives a short product overview, with source/matching details and
+community contact behind text links rather than nested promotional cards.
 
 The bottom of `/about` shows, in a white bordered panel matching its neighboring sections, the three most recently published stable
 [GitHub Releases](https://github.com/cbattlegear/fabric-roadmap-gps/releases),

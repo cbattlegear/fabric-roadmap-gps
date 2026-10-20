@@ -37,9 +37,9 @@ def test_about_removes_privacy_notice_and_keeps_release_notes_in_shared_white_pa
     assert not soup.main.select('a[href="/privacy"]')
     notes = soup.select_one(".app-release-notes")
     assert notes is not None
-    assert soup.select_one(".coming-soon-section").find_next_sibling() == notes
+    assert soup.select_one(".about-story").find_next_sibling() == notes
     css = soup.style.get_text()
-    assert ".coming-soon-section,.app-release-notes {background:#fff;border:1px solid #e1e5e9;" in css
+    assert ".about-story,.app-release-notes {background:#fff;border:1px solid #e1e5e9;" in css
     assert "Release notes are temporarily unavailable" in notes.get_text()
 
 

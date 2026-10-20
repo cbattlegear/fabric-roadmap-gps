@@ -209,8 +209,9 @@ def test_about_renders_bottom_section_and_explicit_states(server_module, tmp_pat
     soup = BeautifulSoup(page.data, "html.parser")
     section = soup.select_one(".app-release-notes")
     assert section.parent.select(":scope > section")[-1] == section
-    assert soup.select_one(".coming-soon-section").find_next_sibling() == section
+    assert soup.select_one(".about-story").find_next_sibling() == section
     assert section.h2.get_text() == "What's New in Fabric GPS"
+    assert section.find("p").get_text() == "The latest updates to Fabric GPS."
     assert section.select_one(f'a[href="{notes.RELEASES_URL}"]')
     assert soup.select_one('a[href="/changelog"]')
     text = section.get_text()
@@ -226,6 +227,69 @@ def test_about_renders_bottom_section_and_explicit_states(server_module, tmp_pat
         else:
             assert section.strong.get_text() == "Fixed"
     assert ("may be out of date" in text) == (state == "stale")
+    assert bool(section.select_one(".app-release-status")) == (state == "stale")
+    if state == "stale":
+        assert section.select_one(".app-release-status time").get_text() == "2026-10-19 13:00 UTC"
+
+
+def test_about_is_a_short_product_story_with_existing_destinations(server_module):
+    with patch.object(server_module, "release_notes_context", return_value={
+        "available": False, "url": notes.RELEASES_URL,
+    }), patch.object(server_module, "get_engine", side_effect=AssertionError("No database needed")):
+        response = server_module.app.test_client().get("/about")
+    assert response.status_code == 200
+    soup = BeautifulSoup(response.data, "html.parser")
+    assert soup.select_one(".hero-title").get_text(strip=True) == "About Fabric GPS"
+    assert soup.select_one(".hero-subtitle").get_text(strip=True) == (
+        "A clearer view of what's changing in Microsoft Fabric."
+    )
+    story = soup.select_one(".about-story")
+    assert story is not None
+    assert story.h2.get_text() == "Follow the roadmap. Keep the context."
+    assert story.select_one(".about-prose").get_text() == (
+        "Fabric GPS brings Microsoft's Fabric roadmap and its recorded changes into one place. "
+        "Find the features you care about, see how plans have changed, and follow what's coming next."
+    )
+    capabilities = story.select_one(".about-capabilities")
+    assert [heading.get_text() for heading in capabilities.select("h3")] == [
+        "Track changes", "Understand trends", "Stay focused",
+    ]
+    assert [paragraph.get_text() for paragraph in capabilities.select("p")] == [
+        "See new, updated, and removed roadmap items in the Changelog.",
+        "Explore activity by product, release-window changes, and planned releases in Insights.",
+        "Filter the roadmap, save a view, or get updates by email.",
+    ]
+    assert [link["href"] for link in capabilities.select("a")] == [
+        "/changelog", "/insights", "/", "/subscribe",
+    ]
+    assert story.select_one("#how-it-works").find_next_sibling("p").get_text() == (
+        "Fabric GPS reads Microsoft's published Fabric roadmap and records changes over time. "
+        "AI suggests related Fabric blog articles; those links are suggestions, not confirmed matches."
+    )
+    assert story.select_one("#fabric-community").find_next_sibling("p").get_text() == (
+        "Fabric GPS started with a simple request: make roadmap changes easier to follow. "
+        "It's open source, and community feedback helps shape what comes next."
+    )
+    for href in (
+        "https://roadmap.fabric.microsoft.com/",
+        "https://community.fabric.microsoft.com/t5/Fabric-Updates-Blog/bg-p/fbc_fabricupdatesblogs",
+        "https://github.com/cbattlegear/fabric-roadmap-gps/blob/main/VECTOR_MATCHING.md",
+        "https://github.com/cbattlegear/fabric-roadmap-gps/issues",
+        "mailto:cameron@fabric-gps.com",
+    ):
+        assert story.select_one(f'a[href="{href}"]') is not None
+    assert [heading.get_text() for heading in soup.main.select("h2")] == [
+        "Follow the roadmap. Keep the context.", "What's New in Fabric GPS",
+    ]
+    assert not soup.main.select(".card, .why-build-story, .benefits-grid, .coming-soon-section, .roadmap-status")
+    text = soup.main.get_text()
+    for obsolete in (
+        "Why Build Fabric GPS?", "Pure, unfiltered", "remembers everything",
+        "complete timeline", "24-hour refresh", "instant notifications",
+        "Coming Soon", "Analytics Dashboard", "Custom Alerts", "embeddings",
+        "cosine similarity", "Azure SQL", "this browser", "Copy view link",
+    ):
+        assert obsolete not in text
 
 
 def test_build_workflow_refreshes_before_docker_and_includes_release_lifecycle():
