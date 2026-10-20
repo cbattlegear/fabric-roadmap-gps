@@ -22,7 +22,9 @@
     <meta name="twitter:image" content="{{ canonical_base }}/static/fabric_gps_logo.png" />
 
     <link rel="alternate" type="application/rss+xml" title="Fabric GPS — Microsoft Fabric Roadmap Updates" href="/rss" />
-    <link rel="stylesheet" href="/static/styles.css?v=description-v1" />
+    <link rel="stylesheet" href="/static/styles.css?v=home-polish-v3" />
+    <link rel="stylesheet" href="/static/blog-feedback.css?v=mobile-targets-v4" />
+    <script defer src="/static/blog-feedback.js?v=article-activation-v2"></script>
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon-32x32.png">
     <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon-16x16.png">
@@ -71,17 +73,19 @@
                 </div>
                 <nav class="header-nav">
                 {% for item in nav_items %}
-                    <a href="{{ item.url }}" class="nav-link{% if request.path == item.url %} active{% endif %}" {% if request.path == item.url %}aria-current="page"{% endif %}>{{ item.label }}</a>
+                    <a href="{{ item.url }}" class="nav-link{% if item.current %} active{% endif %}" {% if item.current %}aria-current="{{ item.current }}"{% endif %}>{{ item.label }}</a>
                 {% endfor %}
                 </nav>
             </div>
         </div>
     </header>
     <main>
-        <section class="hero-section">
+        <section class="hero-section{% block hero_class %}{% endblock %}">
             <div class="container">
+                {% block hero_content %}
                 <h1 class="hero-title">{% block herotitle %}Fabric Roadmap GPS{% endblock %}</h1>
                 <p class="hero-subtitle">{% block herosubtitle %}Fabric Roadmap GPS helps you track Microsoft Fabric roadmap changes quickly via filtered APIs, RSS feeds, and a weekly curated email summary.{% endblock %}</p>
+                {% endblock %}
             </div>
         </section>
         {% block content %}{% endblock %}
@@ -92,6 +96,7 @@
                 <a href="/rss" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">RSS Feed</a>
                 <a href="/endpoints" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">API Documentation</a>
                 <a href="/subscribe" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">Email Notifications</a>
+                <a href="/privacy" style="color: var(--fabric-brand-40); text-decoration: none; margin-right: 1rem;">Article Feedback &amp; Privacy</a>
                 &copy; 2026 Fabric GPS. Data sourced from Microsoft Fabric Roadmap. Updated every hour.
                 This page is not affiliated with Microsoft and is a personal project to make viewing
                 Microsoft Fabric changes easier for everyone.

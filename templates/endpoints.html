@@ -1,274 +1,259 @@
 {% extends 'base.html' %}
 {% block title %}API Documentation — Fabric GPS | Microsoft Fabric Roadmap API{% endblock %}
-{% block meta_description %}Access Microsoft Fabric roadmap data through the Fabric GPS REST API and RSS feeds. Filter releases by product, type, status, and date.{% endblock %}
-{% block og_title %}API Documentation — Fabric GPS | Microsoft Fabric Roadmap API{% endblock %}
-{% block og_description %}Access Microsoft Fabric roadmap data through the Fabric GPS REST API and RSS feeds. Filter releases by product, type, status, and date.{% endblock %}
-{% block twitter_title %}API Documentation — Fabric GPS | Microsoft Fabric Roadmap API{% endblock %}
-{% block twitter_description %}Access Microsoft Fabric roadmap data through the Fabric GPS REST API and RSS feeds. Filter releases by product, type, status, and date.{% endblock %}
+{% block meta_description %}Follow Fabric roadmap updates with RSS, build with the REST API, or connect an assistant using read-only MCP.{% endblock %}
+{% block og_title %}API Documentation — Fabric GPS{% endblock %}
+{% block og_description %}RSS, REST, and read-only MCP access to Microsoft Fabric roadmap data.{% endblock %}
+{% block twitter_title %}API Documentation — Fabric GPS{% endblock %}
+{% block twitter_description %}RSS, REST, and read-only MCP access to Microsoft Fabric roadmap data.{% endblock %}
+{% block herotitle %}API Documentation{% endblock %}
+{% block herosubtitle %}Access Fabric roadmap data.{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/endpoints.css?v=connection-first-v1">{% endblock %}
 
-{% block herotitle%}API Documentation{% endblock %}
-{% block herosubtitle%}Comprehensive guide to accessing Microsoft Fabric roadmap data through our RSS and JSON endpoints.{% endblock %}
-{% block content %}
-        <div class="container">
-            <section class="endpoint-section">
-                <h2><span class="method-badge method-get">GET</span> RSS Feed</h2>
-                <p><strong>Endpoints:</strong> <code>/rss</code> and <code>/rss.xml</code></p>
-                <p><strong>Description:</strong> Returns an RSS 2.0 feed of recently modified releases with optional filtering.</p>
-                
-                <h3>Parameters</h3>
-                <ul>
-                    <li><code>product_name</code> - Filter by exact product name (case-sensitive)</li>
-                    <li><code>release_type</code> - Filter by exact release type</li>
-                    <li><code>release_status</code> - Filter by exact release status</li>
-                    <li><code>limit</code> - Maximum number of items (1-25, default: 25)</li>
-                </ul>
-
-                <h3>Examples</h3>
-                <div class="example-grid">
-                    {% for param_type, examples in rss_examples.items() %}
-                        {% for example in examples %}
-                            <div class="example-item">
-                                <h4>{{ example.label }}: {{ example.title }}</h4>
-                                <a href="{{ example.url }}">{{ example.url }}</a>
-                            </div>
-                        {% endfor %}
-                    {% endfor %}
-                    {% if not rss_examples or not (rss_examples.product_name or rss_examples.release_type or rss_examples.release_status) %}
-                        <div class="example-item">
-                            <h4>No examples available</h4>
-                        </div>
-                    {% endif %}
-                </div>
-            </section>
-
-            <section class="endpoint-section">
-                <h2><span class="method-badge method-get">GET</span> JSON API</h2>
-                <p><strong>Endpoint:</strong> <code>/api/releases</code></p>
-                <p><strong>Description:</strong> Returns a <em>paginated envelope</em> of releases. Sorted by <code>last_modified</code> (desc) by default, or by <code>release_date</code> (desc) when specified via the <code>sort</code> parameter. Supports filtering, full-text style partial search (simple <code>ILIKE %q%</code>) and page-based navigation. All collection responses are wrapped; a single-item lookup via <code>release_item_id</code> returns just the object (legacy compatibility) without the envelope.</p>
-                
-                <h3>Parameters</h3>
-                <ul>
-                    <li><code>product_name</code> - Exact match on product name</li>
-                    <li><code>release_type</code> - Exact match on release type</li>
-                    <li><code>release_status</code> - Exact match on release status</li>
-                    <li><code>modified_within_days</code> - Items modified within last N days (1–30)</li>
-                    <li><code>q</code> - Case-insensitive substring search across <code>feature_name</code>, <code>feature_description</code>, <code>product_name</code>. When Azure OpenAI embeddings are configured, <code>q</code> uses vector (semantic) search instead.</li>
-                    <li><code>sort</code> - Sort order: <code>last_modified</code> (default) or <code>release_date</code></li>
-                    <li><code>page</code> - 1-based page number (default 1)</li>
-                    <li><code>page_size</code> - Items per page (default 50, max 200, min 1)</li>
-                    <li><code>release_item_id</code> - If provided, bypasses pagination and returns a single release object</li>
-                    <li><code>include_inactive</code> - Include releases removed from the roadmap (<code>true</code> or <code>1</code>). Default: only active releases are returned.</li>
-                </ul>
-
-                <p style="margin-top: var(--spacing-s);"><strong>Notes:</strong></p>
-                <ul>
-                    <li><code>q</code> trimming applied; empty/whitespace-only search is ignored.</li>
-                    <li>When <code>release_item_id</code> is supplied, all other filter / paging parameters are ignored.</li>
-                    <li>Stable, stateless pagination: combine your filters + <code>page</code>/<code>page_size</code>; use <code>links.next</code> until it becomes <code>null</code>.</li>
-                    <li>Returns <code>Link</code> response header with <code>rel="next"</code>/<code>rel="prev"</code> when applicable.</li>
-                </ul>
-
-                <h3>Examples</h3>
-                <div class="example-grid">
-                    {% for param_type, examples in api_examples.items() %}
-                        {% for example in examples %}
-                            <div class="example-item">
-                                <h4>{{ example.label }}: {{ example.title }}</h4>
-                                <a href="{{ example.url }}">{{ example.url }}</a>
-                            </div>
-                        {% endfor %}
-                    {% endfor %}
-                    {% if not api_examples or not (api_examples.product_name or api_examples.release_type or api_examples.release_status or api_examples.modified_within_days) %}
-                        <div class="example-item">
-                            <h4>No examples available</h4>
-                        </div>
-                    {% endif %}
-                                        <div class="example-item">
-                                                <h4>Search (q)</h4>
-                                                <a href="/api/releases?q=lake&page_size=25">/api/releases?q=lake&page_size=25</a>
-                                        </div>
-                                        <div class="example-item">
-                                                <h4>Page 3 with filters</h4>
-                                                <a href="/api/releases?product_name=Power%20BI&release_status=GA&page=3&page_size=50">/api/releases?product_name=Power BI&release_status=GA&page=3&page_size=50</a>
-                                        </div>
-                                        <div class="example-item">
-                                                <h4>Single Item</h4>
-                                                <a href="/api/releases?release_item_id=YOUR-ID-HERE">/api/releases?release_item_id=YOUR-ID-HERE</a>
-                                        </div>
-                </div>
-            </section>
-
-            <section class="endpoint-section">
-                                <h2>Response Format & Schemas</h2>
-                                <p>Collection responses (<code>/api/releases</code> without <code>release_item_id</code>) are wrapped in an envelope that includes pagination metadata and HATEOAS-style links.</p>
-                                <h3>Collection Envelope</h3>
-                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
-    "data": [
-        {
-            "release_item_id": "uuid",
-            "feature_name": "string",
-            "release_date": "Q# YYYY|null",
-            "release_type": "string",
-            "release_status": "string",
-            "product_id": "uuid|null",
-            "product_name": "string",
-            "feature_description": "string|null",
-            "feature_description_html": "sanitized HTML string",
-            "blog_title": "string|null",
-            "blog_url": "string|null",
-            "last_modified": "YYYY-MM-DD",
-            "active": true
-        }
-        // ... up to page_size items
-    ],
-    "pagination": {
-        "page": 1,
-        "page_size": 50,
-        "total_items": 1234,
-        "total_pages": 25,
-        "has_next": true,
-        "has_prev": false,
-        "next_page": 2,
-        "prev_page": null
-    },
-    "links": {
-        "self": "/api/releases?product_name=Power%20BI&page=1&page_size=50",
-        "first": "/api/releases?product_name=Power%20BI&page=1&page_size=50",
-        "last": "/api/releases?product_name=Power%20BI&page=25&page_size=50",
-        "next": "/api/releases?product_name=Power%20BI&page=2&page_size=50",
-        "prev": null
-    }
-}</code></pre>
-
-                                <h3>Single Item (release_item_id)</h3>
-                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
-    "release_item_id": "uuid",
-    "feature_name": "string",
-    "release_date": "Q# YYYY|null",
-    "release_type": "string",
-    "release_status": "string",
-    "product_id": "uuid|null",
-    "product_name": "string",
-    "feature_description": "string|null",
-    "feature_description_html": "sanitized HTML string",
-    "blog_title": "string|null",
-    "blog_url": "string|null",
-    "last_modified": "YYYY-MM-DD",
-    "active": true
-}</code></pre>
-
-                                <p><code>feature_description</code> is the unmodified source.
-                                <code>feature_description_html</code> is derived at read time for display:
-                                repaired Markdown and sanitized HTML, with no changes to stored data or history.</p>
-
-                                <h3>History Endpoint <code>/api/releases/history/&lt;release_item_id&gt;</code></h3>
-                                <p>Returns the change history for a single release item, newest first. Each entry shows which fields changed. Possible change descriptions include field diffs (e.g. <code>Release Date 2025-06-01 -&gt; 2025-09-01</code>), <code>Roadmap Item Added</code>, <code>Removed from Roadmap</code>, and <code>Restored to Roadmap</code>.</p>
-                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>[
-    {
-        "changed_columns": "Removed from Roadmap",
-        "last_modified": "2026-03-20"
-    },
-    {
-        "changed_columns": "Release Status In Development -> Shipped",
-        "last_modified": "2026-02-15"
-    },
-    {
-        "changed_columns": "Roadmap Item Added",
-        "last_modified": "2025-01-12"
-    }
-]</code></pre>
-
-                                <h3>Changelog <code>/api/changelog</code></h3>
-                                <p>Returns releases grouped by <code>last_modified</code> date with change annotations showing what was modified. Useful for building daily/weekly change reports.</p>
-                                <h4>Parameters</h4>
-                                <ul>
-                                    <li><code>days</code> - Look-back window in days (default: 30, max: 90)</li>
-                                    <li><code>product_name</code> - Filter by exact product name</li>
-                                    <li><code>release_type</code> - Filter by exact release type</li>
-                                    <li><code>release_status</code> - Filter by exact release status</li>
-                                    <li><code>include_inactive</code> - Include removed items (<code>true</code> or <code>1</code>, default: true)</li>
-                                </ul>
-                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
-    "total_items": 48,
-    "days": [
-        {
-            "date": "2026-04-04",
-            "count": 5,
-            "items": [
-                {
-                    "release_item_id": "uuid",
-                    "feature_name": "string",
-                    "product_name": "string",
-                    "release_type": "string",
-                    "release_status": "string",
-                    "release_date": "Q# YYYY|null",
-                    "last_modified": "YYYY-MM-DD",
-                    "active": true,
-                    "changed_columns": [
-                        "Release Date 2026-04-21 -> 2027-05-05"
-                    ]
-                }
-            ]
-        }
-    ]
-}</code></pre>
-                                <h4>Examples</h4>
-                                <div class="example-grid">
-                                    <div class="example-item">
-                                        <h4>Last 7 days</h4>
-                                        <a href="/api/changelog?days=7">/api/changelog?days=7</a>
-                                    </div>
-                                    <div class="example-item">
-                                        <h4>Power BI changes</h4>
-                                        <a href="/api/changelog?days=30&product_name=Power%20BI">/api/changelog?days=30&product_name=Power BI</a>
-                                    </div>
-                                    <div class="example-item">
-                                        <h4>GA items only</h4>
-                                        <a href="/api/changelog?days=30&release_type=General%20availability">/api/changelog?days=30&release_type=General availability</a>
-                                    </div>
-                                </div>
-
-                                <h3>Filter Options <code>/api/filter-options</code></h3>
-                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
-    "product_names": ["Power BI", "Data Factory", ...],
-    "release_types": ["Public Preview", "GA", ...],
-    "release_statuses": ["In Development", "Launched", ...]
-}</code></pre>
-
-                                <h3>Email Subscription</h3>
-                                <p><strong>POST</strong> <code>/api/subscribe</code> JSON body:</p>
-                                <pre style="background: var(--fabric-neutral-grey-20); padding: var(--spacing-m); border-radius: 4px; overflow-x: auto;"><code>{
-    "email": "user@example.com",
-    "products": ["Power BI"],      // optional array
-    "types": ["GA"],               // optional array
-    "statuses": ["Launched"]       // optional array
-}</code></pre>
-                                <p>Verification link sent if new/unverified. Other related endpoints:</p>
-                                <ul>
-                                        <li><code>GET /api/verify-email?token=...</code> (JSON result)</li>
-                                        <li><code>GET /verify-email?token=...</code> (HTML page)</li>
-                                        <li><code>GET /unsubscribe?token=...</code> (HTML page)</li>
-                                </ul>
-
-                                <h3>HTTP Caching</h3>
-                                <p>All JSON & RSS endpoints emit:</p>
-                                <ul>
-                                        <li><strong>ETag</strong> - Weak hash for conditional GET (send <code>If-None-Match</code> to receive 304)</li>
-                                        <li><strong>Last-Modified</strong> - Based on build time (collection) or entity timestamp</li>
-                                        <li><strong>Cache-Control</strong> - <code>public, max-age=14400, stale-while-revalidate=3600</code> (4h fresh, 1h serve-stale)</li>
-                                </ul>
-                                <p>Caching is handled by Azure Front Door at the CDN edge. The server sets appropriate HTTP cache headers on responses.</p>
-            </section>
-
-            <section class="endpoint-section">
-                <h2>Caching & Performance</h2>
-                                <p>Summary of caching strategy:</p>
-                <ul>
-                                        <li><strong>CDN Cache (Azure Front Door):</strong> Responses cached at edge based on Cache-Control headers</li>
-                                        <li><strong>Cache-Control:</strong> <code>public, max-age=14400, stale-while-revalidate=3600</code> (4h fresh, 1h stale)</li>
-                                        <li><strong>ETag:</strong> Weak content hash enables conditional GET (304 Not Modified)</li>
-                                        <li><strong>Last-Modified:</strong> Build timestamp for conditional revalidation</li>
-                </ul>
-            </section>
+{% macro copy_block(id, label, text) %}
+<div class="api-copy-block" data-copy-block>
+    <div class="api-code-heading">
+        <span>{{ label }}</span>
+        <button type="button" class="button button-secondary" data-copy-target="{{ id }}"
+                data-copy-label="{{ label }}" aria-label="Copy {{ label }}" aria-describedby="{{ id }}-status">Copy</button>
     </div>
+    <pre tabindex="0" role="region" aria-label="{{ label }}"><code id="{{ id }}">{{ text }}</code></pre>
+    <p id="{{ id }}-status" class="api-copy-status" role="status"></p>
+    <div data-copy-recovery hidden>
+        <label for="{{ id }}-manual">{{ label }} (copy manually)</label>
+        <input id="{{ id }}-manual" type="text" readonly>
+    </div>
+</div>
+{% endmacro %}
+
+{% block content %}
+<div class="container api-docs">
+    <nav class="api-channel-links" aria-label="Choose an access method">
+        <a href="#rss">RSS: follow updates</a>
+        <a href="#rest">REST: build integrations</a>
+        <a href="#mcp">MCP: connect an assistant</a>
+    </nav>
+
+    <section class="endpoint-section" id="rss" aria-labelledby="rss-title">
+        <h2 id="rss-title">Follow updates with RSS</h2>
+        <p>Paste this URL into your feed reader to follow recently modified roadmap items.</p>
+        {{ copy_block('rss-url', 'RSS feed URL', public_base_url ~ '/rss') }}
+        <p><a href="/rss">Open the RSS feed</a> (RSS 2.0). <code>/rss.xml</code> is an alias.</p>
+        <details>
+            <summary>RSS filters and examples</summary>
+            <p>Use exact <code>product_name</code>, <code>release_type</code>, or <code>release_status</code> values from <a href="#filter-options">Filter Options</a>. <code>limit</code> accepts 1–25 items, default 25.</p>
+            <ul>
+                <li><a href="/rss?limit=5">Five most recently modified items</a></li>
+                <li><a href="/rss?release_status=Shipped&amp;limit=10">Up to ten shipped items</a></li>
+            </ul>
+        </details>
+    </section>
+
+    <section class="endpoint-section" id="rest" aria-labelledby="rest-title">
+        <h2 id="rest-title">Build with REST</h2>
+        <p>Start with ten recently modified releases. Follow <code>links.next</code> for the next page.</p>
+        {{ copy_block('rest-url', 'REST starter URL', public_base_url ~ '/api/releases?page_size=10') }}
+        <p><a href="/api/releases?page_size=10">Open the JSON response</a> · <a href="#releases">Releases reference</a></p>
+    </section>
+
+    <section class="endpoint-section" id="mcp" aria-labelledby="mcp-title">
+        <h2 id="mcp-title">Connect an assistant with MCP</h2>
+        <p>Connect an AI assistant to search Fabric roadmap releases, look up individual releases, and read their history. Use the public, read-only Streamable HTTP endpoint below.</p>
+        {{ copy_block('mcp-url', 'MCP endpoint', public_base_url ~ '/mcp') }}
+        <p>For Claude Code:</p>
+        {{ copy_block('mcp-command', 'Claude Code command', 'claude mcp add --transport http fabric-gps ' ~ public_base_url ~ '/mcp') }}
+        <p>Search uses substring matching, not semantic search. Tools also list filters; none can change data or manage email or feedback.</p>
+        <p>Included automatically in web mode. Python clients, tool contracts, limits, and hosting: <a href="https://github.com/cbattlegear/fabric-roadmap-gps/blob/main/MCP.md">MCP client and deployment reference</a>.</p>
+    </section>
+
+    <nav class="api-reference-links" aria-label="API reference">
+        <a href="#releases">Releases</a>
+        <a href="#insights">Insights</a>
+        <a href="#history">History</a>
+        <a href="#changelog">Changelog</a>
+        <a href="#filter-options">Filter Options</a>
+        <a href="#email">Email management</a>
+        <a href="#caching">Caching</a>
+    </nav>
+
+    <section class="endpoint-section" id="releases" aria-labelledby="releases-title">
+        <h2 id="releases-title"><span class="method-badge method-get">GET</span> Releases</h2>
+        <p><code>/api/releases</code> returns a paginated collection, or one object when <code>release_item_id</code> is supplied.</p>
+        <dl class="api-parameters">
+            <dt><code>product_name</code>, <code>release_type</code>, <code>release_status</code></dt>
+            <dd>Exact values from <a href="#filter-options">Filter Options</a>. Availability, such as General availability, is a release type; Planned and Shipped are statuses.</dd>
+            <dt><code>modified_within_days</code></dt><dd>Inclusive UTC date window, 1–30 days.</dd>
+            <dt><code>q</code></dt><dd>Case-insensitive substring search of name, description, and product. When embeddings are configured, REST uses semantic search instead. Whitespace is trimmed; an empty query is ignored. Semantic results can include <code>distance</code>.</dd>
+            <dt><code>sort</code></dt><dd><code>last_modified</code> (default) or <code>release_date</code>, descending.</dd>
+            <dt><code>page</code>, <code>page_size</code></dt><dd>Page starts at 1. Page size defaults to 50; range 1–200. Collection responses include <code>Link</code> headers and page links. Refreshes can shift pages.</dd>
+            <dt><code>include_inactive</code></dt><dd><code>true</code> or <code>1</code> includes removed items; default false.</dd>
+            <dt><code>release_item_id</code></dt><dd>Returns one object instead of the collection; other filters and paging are ignored. An unknown ID returns 404.</dd>
+        </dl>
+        <h3>Two useful variations</h3>
+        <ul>
+            <li><a href="/api/releases?modified_within_days=7&amp;page_size=25">Changes in the last seven days</a></li>
+            <li><a href="/api/releases?release_type=General%20availability&amp;release_status=Shipped&amp;page_size=25">Shipped, generally available releases</a></li>
+        </ul>
+        <p>For a single item, replace <code>RELEASE_ID</code> with an ID returned by the collection:</p>
+        <pre tabindex="0" role="region" aria-label="Single release request template"><code>/api/releases?release_item_id=RELEASE_ID</code></pre>
+        <details>
+            <summary>Release response example</summary>
+            <p>Illustrative data, not a live record. Dates are quarters or null; description HTML is sanitized at read time. The original description is unchanged.</p>
+            <pre tabindex="0" role="region" aria-label="Release collection JSON example"><code class="language-json" data-example="releases">{
+  "data": [{
+    "release_item_id": "11111111-1111-1111-1111-111111111111",
+    "feature_name": "Example feature",
+    "release_date": "Q4 2026",
+    "release_type": "General availability",
+    "release_status": "Shipped",
+    "product_id": null,
+    "product_name": "Power BI",
+    "feature_description": "Example description.",
+    "feature_description_html": "&lt;p&gt;Example description.&lt;/p&gt;",
+    "blog_title": null,
+    "blog_url": null,
+    "last_modified": "2026-10-19",
+    "active": true
+  }],
+  "pagination": {
+    "page": 1, "page_size": 1, "total_items": 1, "total_pages": 1,
+    "has_next": false, "has_prev": false, "next_page": null, "prev_page": null
+  },
+  "links": {
+    "self": "/api/releases?page=1&amp;page_size=1",
+    "first": "/api/releases?page=1&amp;page_size=1",
+    "last": "/api/releases?page=1&amp;page_size=1",
+    "next": null, "prev": null
+  }
+}</code></pre>
+            <p>A single-item request returns the object inside <code>data</code>, without the collection envelope.</p>
+        </details>
+    </section>
+
+    <section class="endpoint-section" id="insights" aria-labelledby="insights-title">
+        <h2 id="insights-title"><span class="method-badge method-get">GET</span> Insights</h2>
+        <p><code>/api/insights</code> returns observed activity, status transitions, release-window changes, planned quarters, and paginated evidence. <a href="/insights">Open the dashboard</a>.</p>
+        <dl class="api-parameters">
+            <dt><code>days</code>, <code>end</code></dt><dd>30 (default) or 90 days. Optional <code>end=YYYY-MM-DD</code> is exclusive UTC, within the past 366 days or tomorrow.</dd>
+            <dt><code>product_name</code></dt><dd>Exact product name.</dd>
+            <dt><code>metric</code></dt><dd><code>all</code> (default), <code>addition</code>, <code>edit</code>, <code>removal</code>, <code>restoration</code>, <code>status</code>, <code>target</code>, or <code>upcoming</code>.</dd>
+            <dt><code>bucket</code></dt><dd>A UTC day for <code>status</code>, or <code>YYYY-QN</code>/<code>unknown</code> for <code>upcoming</code>.</dd>
+            <dt><code>page</code></dt><dd>1–200, 50 evidence rows per page. Aggregate totals are not truncated.</dd>
+        </dl>
+        <p><a href="/api/insights?days=90&amp;metric=target">Release-window changes over 90 days</a>. Invalid filters return 400; unavailable data returns 503.</p>
+        <details>
+            <summary>Insights response fields and coverage</summary>
+            <dl class="api-parameters">
+                <dt><code>activity</code></dt><dd>Product/kind rows with event and distinct-feature counts.</dd>
+                <dt><code>transitions</code>, <code>target_changes</code></dt><dd>Daily status/type counts and the number of release-date change events.</dd>
+                <dt><code>upcoming</code>, <code>products</code></dt><dd>Current quarter counts and product choices.</dd>
+                <dt><code>filters</code>, <code>coverage</code></dt><dd>Resolved UTC window/query and retained-history coverage, always <code>complete: false</code>.</dd>
+                <dt><code>details</code></dt><dd><code>items</code>, <code>total</code>, <code>previous_url</code>, <code>next_url</code>, and <code>capped</code>. Links target dashboard evidence.</dd>
+                <dt><code>visuals</code></dt><dd>Derived dashboard chart values and links.</dd>
+            </dl>
+            <p>Counts describe observed events, not delivery guarantees. Repeated transitions count separately; pipeline-only writes do not. Additions are first retained observations. Retention/import coverage is unverified. Planned quarters are a current snapshot, independent of the historical window.</p>
+        </details>
+    </section>
+
+    <section class="endpoint-section" id="history" aria-labelledby="history-title">
+        <h2 id="history-title"><span class="method-badge method-get">GET</span> Release history</h2>
+        <p>Replace <code>RELEASE_ID</code> with an ID from the releases collection:</p>
+        <pre tabindex="0" role="region" aria-label="Release history request template"><code>/api/releases/history/RELEASE_ID</code></pre>
+        <p>Returns newest changes first. Each entry has a <code>changed_columns</code> array and a <code>last_modified</code> date or null. Changes include field diffs, additions, removals, and restorations.</p>
+        <details>
+            <summary>History response example</summary>
+            <pre tabindex="0" role="region" aria-label="History JSON example"><code class="language-json" data-example="history">[
+  {
+    "changed_columns": ["Release Status Planned -&gt; Shipped"],
+    "last_modified": "2026-10-19"
+  },
+  {
+    "changed_columns": ["Roadmap Item Added"],
+    "last_modified": "2026-09-01"
+  }
+]</code></pre>
+        </details>
+    </section>
+
+    <section class="endpoint-section" id="changelog" aria-labelledby="changelog-title">
+        <h2 id="changelog-title"><span class="method-badge method-get">GET</span> Changelog</h2>
+        <p><code>/api/changelog</code> groups items by their modified date, with change annotations. <a href="/api/changelog?days=7">Open the last seven days</a>.</p>
+        <dl class="api-parameters">
+            <dt><code>days</code></dt><dd>Look back 1–90 days, default 30.</dd>
+            <dt><code>date</code></dt><dd>One historical <code>YYYY-MM-DD</code>; overrides <code>days</code>.</dd>
+            <dt><code>product_name</code>, <code>release_type</code>, <code>release_status</code></dt><dd>Exact filter values.</dd>
+            <dt><code>include_inactive</code></dt><dd>Includes removed items by default; set false to exclude them.</dd>
+        </dl>
+        <details>
+            <summary>Changelog response example</summary>
+            <pre tabindex="0" role="region" aria-label="Changelog JSON example"><code class="language-json" data-example="changelog">{
+  "total_items": 1,
+  "days": [{
+    "date": "2026-10-19", "count": 1,
+    "items": [{
+      "release_item_id": "11111111-1111-1111-1111-111111111111",
+      "feature_name": "Example feature",
+      "product_name": "Power BI",
+      "release_type": "General availability",
+      "release_status": "Shipped",
+      "release_date": "Q4 2026",
+      "last_modified": "2026-10-19",
+      "active": true,
+      "changed_columns": ["Release Status Planned -&gt; Shipped"]
+    }]
+  }]
+}</code></pre>
+        </details>
+        <details>
+            <summary>Temporal ranges and browser visit snapshots</summary>
+            <p><code>since=YYYY-MM-DD</code> is a legacy inclusive UTC range, today through 90 days ago. It overrides <code>days</code> and cannot be combined with <code>date</code>. Historical filters include removals/restorations by default. Repeated same-day tracked-field events count separately; pipeline/blog-only writes are excluded.</p>
+            <p>The response adds <code>since</code>, <code>through</code>, <code>total_events</code>, <code>total_features</code>, and <code>complete: true</code>. In this mode, <code>last_modified</code> is the observed UTC temporal-event day. Recorded history began August 27, 2025.</p>
+            <p><code>visit=1</code> returns the full unfiltered 90-day event snapshot for browser-local highlights, not a server visitor record. It adds <code>mode</code>, <code>complete</code>, exact UTC <code>cutoff</code>, and <code>window_start</code>; items carry stable content-event identities. Filters are display-only. It cannot combine with <code>date</code>, <code>since</code>, or <code>event_date</code>. Above 10,000 events, it returns 503 with <code>complete: false</code> rather than a partial acknowledgement.</p>
+            <p>Daily permalinks use <code>event_date=YYYY-MM-DD</code> for all tracked UTC events on one day, including repeated edits and removals. This ignores <code>days</code>, cannot combine with another temporal mode, and adds <code>mode: "events"</code>, <code>event_date</code>, <code>total_events</code>, and <code>total_features</code> without reading or advancing visit state. Legacy <code>date</code> selection remains unchanged. All three event modes are private/no-store.</p>
+        </details>
+    </section>
+
+    <section class="endpoint-section" id="filter-options" aria-labelledby="filters-title">
+        <h2 id="filters-title"><span class="method-badge method-get">GET</span> Filter Options</h2>
+        <p><a href="/api/filter-options">Open <code>/api/filter-options</code></a> for current exact values. Lists may be empty. Choose availability from <code>release_types</code>, not <code>release_statuses</code>.</p>
+        <pre tabindex="0" role="region" aria-label="Filter Options JSON example"><code class="language-json" data-example="filters">{
+  "product_names": ["Power BI", "Data Factory"],
+  "release_types": ["Public preview", "General availability"],
+  "release_statuses": ["Planned", "Shipped"]
+}</code></pre>
+        <p>Response examples illustrate structure, not the current dataset. Discover values rather than hard-coding them.</p>
+    </section>
+
+    <section class="endpoint-section" id="email" aria-labelledby="email-title">
+        <h2 id="email-title">Email management reference</h2>
+        <p>For normal use, <a href="/subscribe">get email updates</a> or <a href="/subscribe#manage">manage preferences</a>. Subscription creation requires email verification.</p>
+        <details>
+            <summary>Subscription request and related endpoints</summary>
+            <p><code>POST /api/subscribe</code> requires <code>email</code>. Filter arrays are optional; <code>cadence</code> is daily or weekly (default weekly). Requests are limited to five per hour.</p>
+            <pre tabindex="0" role="region" aria-label="Subscription JSON request example"><code class="language-json" data-example="subscription">{
+  "email": "user@example.com",
+  "products": ["Power BI"],
+  "types": ["General availability"],
+  "statuses": ["Shipped"],
+  "cadence": "weekly"
+}</code></pre>
+            <p>A successful request returns a generic confirmation to protect subscription privacy; it does not confirm delivery or reveal whether an address is subscribed.</p>
+            <ul>
+                <li><code>GET /api/verify-email?token=TOKEN</code> returns JSON; <code>GET /verify-email?token=TOKEN</code> opens the verification page.</li>
+                <li><code>GET /unsubscribe?token=TOKEN</code> opens the unsubscribe page.</li>
+                <li><code>POST /api/send-preferences-link</code> accepts an email address; <code>GET/POST /api/preferences?token=TOKEN</code> manages preferences.</li>
+                <li><code>POST/DELETE /api/watch</code> manages feature watches; <code>/watch/RELEASE_ID</code> opens the watch page.</li>
+            </ul>
+            <p>Use the verification/preferences links sent by email; never share their tokens.</p>
+        </details>
+    </section>
+
+    <section class="endpoint-section" id="caching" aria-labelledby="caching-title">
+        <h2 id="caching-title">HTTP caching</h2>
+        <p>Public releases, RSS, history, Filter Options, and ordinary changelog responses use {{ cache_fresh_seconds // 60 }} minutes fresh and {{ cache_stale_seconds // 60 }} minutes stale-while-revalidate:</p>
+        <pre tabindex="0" role="region" aria-label="Public data Cache-Control header"><code data-cache-policy>public, max-age={{ cache_fresh_seconds }}, stale-while-revalidate={{ cache_stale_seconds }}, must-revalidate</code></pre>
+        <p>ETags support conditional GET (304); Last-Modified reflects supplied data timestamps or the build timestamp. Azure Front Door uses response cache headers.</p>
+        <p>Insights uses {{ cache_fresh_seconds // 60 }} minutes fresh, content ETags, and must-revalidate, without the stale window. MCP and <code>/api/version</code> use no-store; changelog <code>since</code>/<code>visit</code>/<code>event_date</code> modes are private/no-store. Sensitive email/feedback routes are not part of this public-data caching contract. Always respect the actual response headers.</p>
+    </section>
+</div>
 {% endblock %}
+{% block scripts %}<script defer src="/static/endpoints.js?v=connection-first-v1"></script>{% endblock %}

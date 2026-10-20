@@ -5,72 +5,41 @@
 
     
 {% block herotitle%}Microsoft Fabric Roadmap Tracker{% endblock %}
-{% block herosubtitle%}
-Stay up-to-date with the latest Microsoft Fabric roadmap updates.
-Get real-time feeds and explore what's coming next.
+{% block herosubtitle %}Track features, release dates, and recent changes.{% endblock %}
+{% block hero_class %} hero-home{% endblock %}
+{% block hero_content %}
+    <div class="home-hero-content">
+        <div class="home-hero-copy">
+            <h1 class="hero-title">{{ self.herotitle() }}</h1>
+            <p class="hero-subtitle">{{ self.herosubtitle() }}</p>
+        </div>
+        <a href="/subscribe" class="button home-email-cta">Get email updates</a>
+    </div>
 {% endblock %}
 {% block content %}
         <div class="container">
-            <section class="card-grid">
-                <div class="card">
-                    <h2 class="card-title">📡 RSS Feed</h2>
-                    <p class="card-description">
-                        Subscribe to our RSS feed to get the latest roadmap updates delivered directly to your feed reader.
-                        Perfect for staying informed about new features and release dates.
-                    </p>
-                    <div class="card-actions">
-                        <a href="/rss" class="button button-primary">View RSS Feed</a>
-                        <a href="/rss.xml" class="button button-secondary">Download XML</a>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h2 class="card-title">🔌 JSON API</h2>
-                    <p class="card-description">
-                        Access structured roadmap data through our REST API. Filter by product, release type, status,
-                        or recent changes. Perfect for integrations and custom applications.
-                    </p>
-                    <div class="card-actions">
-                        <a href="/api/releases" class="button button-primary">Explore API</a>
-                        <a href="/endpoints" class="button button-secondary">Documentation</a>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h2 class="card-title">📨 Email Updates</h2>
-                    <p class="card-description">
-                        Get one concise Monday email summarizing the week's Microsoft Fabric roadmap changes—focused
-                        highlights that prep you for the week without noise or inbox clutter.
-                    </p>
-                    <div class="card-actions">
-                        <a href="/subscribe" class="button button-primary">Subscribe Now</a>
-                    </div>
-                </div>
-            </section>
-
-            <section class="recent-changes-section">
-                <h2 class="section-title">Recent Changes</h2>
+            <section class="recent-changes-section roadmap-results" aria-label="Recent roadmap changes">
                 <div class="recent-changes-content">
-                    <div class="filters-container">
+                    <div class="filters-container" data-mobile-filters>
                         <div class="filter-group">
                             <label for="product-filter">Product:</label>
                             <select id="product-filter" class="filter-select">
                                 <option value="">All Products</option>
                             </select>
                         </div>
-                        <div class="filter-group">
+                        <div class="filter-group" data-secondary-filter>
                             <label for="type-filter">Release Type:</label>
                             <select id="type-filter" class="filter-select">
                                 <option value="">All Types</option>
                             </select>
                         </div>
-                        <div class="filter-group">
+                        <div class="filter-group" data-secondary-filter>
                             <label for="status-filter">Status:</label>
                             <select id="status-filter" class="filter-select">
                                 <option value="">All Statuses</option>
                             </select>
                         </div>
-                        <div class="filter-group">
+                        <div class="filter-group" data-secondary-filter>
                             <label for="days-filter">Modified Within:</label>
                             <select id="days-filter" class="filter-select">
                                 <option value="">All Time</option>
@@ -79,7 +48,7 @@ Get real-time feeds and explore what's coming next.
                                 <option value="30">Last 30 days</option>
                             </select>
                         </div>
-                        <div class="filter-group">
+                        <div class="filter-group" data-secondary-filter>
                             <label for="sort-select">Sort By:</label>
                             <select id="sort-select" class="filter-select">
                                 <option value="last_modified">Last Modified</option>
@@ -93,9 +62,16 @@ Get real-time feeds and explore what's coming next.
                                 <div class="search-spinner" id="search-spinner"></div>
                             </div>
                         </div>
-                        <!-- <button id="apply-filters" class="button button-primary">Apply Filters</button> -->
-                        <button id="clear-filters" class="button button-secondary">Clear</button>
+                        <div class="filter-group" data-secondary-filter>
+                            <label for="include-inactive">Removed items</label>
+                            <label><input id="include-inactive" type="checkbox" checked /> Include removed items</label>
+                        </div>
+                        <div class="filter-actions">
+                            <button id="clear-filters" class="button button-secondary">Clear</button>
+                            {% include 'saved_views.html' %}
+                        </div>
                     </div>
+                    <p id="filter-status" role="status"></p>
                     
                     <div class="loading-indicator" id="loading-indicator" style="display: none;">
                         <div class="spinner"></div>
@@ -105,13 +81,17 @@ Get real-time feeds and explore what's coming next.
                     <div class="changes-grid" id="changes-grid">
                         <!-- Changes will be populated by JavaScript -->
                     </div>
+                    <div id="load-error" class="home-load-error" role="alert" hidden>
+                        <p id="load-error-message"></p>
+                        <button id="retry-load" class="button button-secondary" type="button">Retry</button>
+                    </div>
                     <div id="loading-more-indicator" style="display:none; text-align:center; padding:.75rem 0; font-size:.75rem; opacity:.7;">Loading more…</div>
                     <div style="text-align:center; margin-top:.5rem;">
                         <button id="load-more-btn" class="button button-secondary" style="display:none;">Load More</button>
                     </div>
                      <div id="infinite-scroll-sentinel" style="height:1px;"></div>
                     
-                    <div class="no-results" id="no-results" style="display: none;">
+                    <div class="no-results" id="no-results" tabindex="-1" style="display: none;">
                         <p>No changes found matching your filters. Try adjusting your criteria.</p>
                     </div>
                 </div>
@@ -119,5 +99,7 @@ Get real-time feeds and explore what's coming next.
         </div>
 {% endblock %}
 {% block scripts %}
-<script src="/static/app.js?v=description-v1"></script>
+<script src="/static/saved-views.js?v=compact-views-v2"></script>
+<script defer src="/static/mobile-filters.js?v=named-facets-v2"></script>
+<script defer src="/static/app.js?v=home-retry-v6"></script>
 {% endblock %}

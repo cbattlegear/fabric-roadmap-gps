@@ -1,123 +1,104 @@
 {% extends 'base.html' %}
 {% block title %}About — Fabric GPS | Microsoft Fabric Roadmap Tracker{% endblock %}
-{% block meta_description %}Learn how Fabric GPS tracks Microsoft Fabric roadmap changes with live data, change history, and AI-powered blog matching. Open source and community-driven.{% endblock %}
+{% block meta_description %}Follow Microsoft Fabric roadmap changes with Fabric GPS. Explore recorded changes, roadmap trends, and suggested related blog articles.{% endblock %}
 {% block og_title %}About — Fabric GPS | Microsoft Fabric Roadmap Tracker{% endblock %}
-{% block og_description %}Learn how Fabric GPS tracks Microsoft Fabric roadmap changes using live data, historical change tracking, and AI-powered blog matching.{% endblock %}
+{% block og_description %}Follow Microsoft Fabric roadmap changes with Fabric GPS. Explore recorded changes, roadmap trends, and suggested related blog articles.{% endblock %}
 {% block twitter_title %}About — Fabric GPS | Microsoft Fabric Roadmap Tracker{% endblock %}
-{% block twitter_description %}Learn how Fabric GPS tracks Microsoft Fabric roadmap changes using live data, historical change tracking, and AI-powered blog matching.{% endblock %}
+{% block twitter_description %}Follow Microsoft Fabric roadmap changes with Fabric GPS. Explore recorded changes, roadmap trends, and suggested related blog articles.{% endblock %}
 {% block extra_head %}
-<style> 
-    .features-section {max-width:1000px;margin:0 auto;padding:0 1rem 4rem 1rem;}
-    .why-build-section {margin-bottom:3.5rem;background-color: white;}    
-    .section-title {font-size:1.75rem;margin:0 0 1.25rem 0;font-weight:600;color:var(--fabric-neutral-grey-160);} 
-    .why-build-content {display:flex;flex-wrap:wrap;gap:2.2rem;align-items:stretch;}
-    .why-build-story {flex:1 1 340px;min-width:300px;background:#fff;border:1px solid #e1e5e9;border-radius:14px;padding:1.5rem 1.75rem;box-shadow:var(--elevation-2);} 
-    .story-text {margin:0 0 1.1rem 0;font-size:.95rem;line-height:1.55;color:var(--fabric-neutral-grey-140);}    
-    .benefits-grid {flex:1 1 340px;display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:1rem;align-content:start;}
-    .benefit-item {background:#fff;border:1px solid #e1e5e9;border-radius:14px;padding:1rem 1rem 1.15rem 1rem;box-shadow:var(--elevation-1);display:flex;flex-direction:column;gap:.4rem;}
-    .benefit-icon {font-size:1.6rem;}
-    .benefit-item h4 {margin:.2rem 0 0 0;font-size:1rem;font-weight:600;color:var(--fabric-neutral-grey-160);} 
-    .benefit-item p {margin:0;font-size:.8rem;line-height:1.4;color:var(--fabric-neutral-grey-120);}    
-    .coming-soon-section {background:#fff;border:1px solid #e1e5e9;border-radius:16px;padding:2rem 2rem 2.25rem 2rem;box-shadow:var(--elevation-2);} 
-    .coming-soon-title {margin:0 0 1.25rem 0;font-size:1.4rem;font-weight:600;color:var(--fabric-neutral-grey-160);} 
-    .roadmap-items {display:flex;flex-direction:column;gap:1.1rem;}
-    .roadmap-item {display:flex;gap:1rem;background:#f8f9fa;border:1px solid #e1e5e9;border-radius:14px;padding:1rem 1.1rem;align-items:flex-start;box-shadow:var(--elevation-1);} 
-    .roadmap-item.subscription-item {border:1px solid #19433c;background:linear-gradient(90deg,#19433c 0%,#286c61 100%);color:#fff;box-shadow:0 3px 10px rgba(0,0,0,0.18);} 
-    .roadmap-item.subscription-item h4,.roadmap-item.subscription-item p {color:#fff;}    
-    .roadmap-icon {font-size:1.9rem;line-height:1;} 
-    .roadmap-content h4 {margin:.15rem 0 .4rem 0;font-size:1.05rem;font-weight:600;color:var(--fabric-neutral-grey-160);} 
-    .roadmap-content p {margin:0 0 .4rem 0;font-size:.85rem;line-height:1.5;color:var(--fabric-neutral-grey-130);} 
-    .roadmap-item.subscription-item .roadmap-content h4 {color:#fff;} 
-    .roadmap-item.subscription-item .roadmap-content p {color:rgba(255,255,255,0.92);} 
-    .roadmap-status {display:inline-block;background:#19433c;color:#fff;font-size:.65rem;font-weight:600;letter-spacing:.5px;padding:.25rem .55rem;border-radius:999px;text-transform:uppercase;} 
-    @media (max-width:760px){.why-build-content{flex-direction:column;}.about-hero{padding:1.75rem 1.25rem;}.benefits-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));}}
-  </style>
+<style>
+    .about-layout {max-width:1000px;display:grid;gap:var(--spacing-l);padding-bottom:var(--spacing-xl);font-size:1rem;line-height:1.65;}
+    .about-story,.app-release-notes {background:#fff;border:1px solid #e1e5e9;border-radius:16px;padding:var(--spacing-xl);box-shadow:var(--elevation-2);}
+    .about-heading {margin:0 0 var(--spacing-m);font-size:1.75rem;line-height:1.25;font-weight:600;}
+    .about-prose,.app-release-body {max-width:72ch;}
+    .about-story h3 {margin:0 0 var(--spacing-s);font-size:1.125rem;line-height:1.35;font-weight:600;}
+    .about-story p {margin:0 0 var(--spacing-m);}
+    .about-capabilities {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--spacing-l);margin:var(--spacing-l) 0;}
+    .about-capabilities p {margin:0;}
+    .about-detail {margin-top:var(--spacing-l);}
+    .about-story .about-links {display:flex;flex-wrap:wrap;gap:var(--spacing-s) var(--spacing-l);margin-bottom:0;}
+    .about-layout a {color:var(--fabric-primary);text-underline-offset:.15em;}
+    .about-layout a:hover {color:var(--fabric-primary-hover);}
+    .app-release-notes {overflow-wrap:anywhere;}
+    .app-release {padding:var(--spacing-l) 0;border-top:1px solid #e1e5e9;}
+    .app-release h3 {margin:0 0 var(--spacing-s);font-size:1.25rem;line-height:1.35;}
+    .app-release-meta,.app-release-status {font-size:.9rem;line-height:1.5;}
+    .app-release-body h4,.app-release-body h5,.app-release-body h6 {font-size:1rem;margin:var(--spacing-l) 0 var(--spacing-s);}
+    .app-release-body pre {overflow-x:auto;padding:var(--spacing-m);background:var(--fabric-neutral-grey-10);}
+    .app-release-body blockquote {margin:var(--spacing-m) 0;padding-left:var(--spacing-m);border-left:1px solid #e1e5e9;}
+    @media (max-width:760px){
+        .about-story,.app-release-notes {padding:var(--spacing-l);}
+        .about-heading {font-size:1.5rem;}
+        .about-capabilities {grid-template-columns:minmax(0,1fr);gap:var(--spacing-m);}
+    }
+</style>
 {% endblock %}
 {% block herotitle%}About Fabric GPS{% endblock %}
-{% block herosubtitle%}
-Fabric GPS helps you track Microsoft Fabric roadmap changes quickly via filtered APIs, RSS feeds, and a weekly curated email summary.
-{% endblock %}
+{% block herosubtitle %}A clearer view of what's changing in Microsoft Fabric.{% endblock %}
 {% block content %}
 
-      <section class="features-section">
-        <div class="why-build-section">
-          <h2 class="section-title">About Fabric GPS</h2>
-          <div class="why-build-content">
-            <div class="why-build-story">
-              <p class="story-text">
-                <strong>Pure, unfiltered roadmap data.</strong> We tap directly into the 
-                <a href="https://roadmap.fabric.microsoft.com/" target="_blank">Official Microsoft Fabric Roadmap</a>
-                — reading the exact same JSON that powers Microsoft's site — so you're always seeing the source of truth.
-              </p>
-              <p class="story-text">
-                <strong>Historical tracking that remembers everything.</strong> Since August 27, 2025, we've been watching every edit, 
-                every status flip, and every new feature announcement. Our Azure SQL Database captures it all, giving you a complete timeline 
-                of what changed, when it changed, and how it evolved.
-              </p>
-              <p class="story-text">
-                <strong>AI-powered blog connections.</strong> We use Azure OpenAI embeddings and cosine similarity to automatically match 
-                releases with related articles from the <a href="https://community.fabric.microsoft.com/t5/Fabric-Updates-Blog/bg-p/fbc_fabricupdatesblogs" target="_blank">Microsoft Fabric Blog</a>. 
-                The semantic matching is pretty smart, but occasionally makes creative connections — treat it as a helpful suggestion rather than gospel.
-
-                <a href="https://github.com/cbattlegear/fabric-roadmap-gps/blob/main/VECTOR_MATCHING.md" target="_blank">You can read more about how we built that over on Github.</a>
-              </p>
-              <p class="story-text">
-                <strong>Built in the open, powered by feedback.</strong> Have ideas? Found a bug? Drop us a line at 
-                <a href="mailto:cameron@fabric-gps.com">cameron@fabric-gps.com</a> 
-                or open an issue on 
-                <a href="https://github.com/cbattlegear/fabric-roadmap-gps/issues" target="_blank">GitHub</a>. 
-                This tool exists because the community asked for it — your input shapes where it goes next.
-              </p>
-            </div>
+      <div class="container about-layout">
+        <section class="about-story" aria-labelledby="about-story-title">
+          <h2 class="about-heading" id="about-story-title">Follow the roadmap. Keep the context.</h2>
+          <p class="about-prose">Fabric GPS brings Microsoft's Fabric roadmap and its recorded changes into one place. Find the features you care about, see how plans have changed, and follow what's coming next.</p>
+          <div class="about-capabilities">
+            <section aria-labelledby="track-changes">
+              <h3 id="track-changes">Track changes</h3>
+              <p>See new, updated, and removed roadmap items in the <a href="/changelog">Changelog</a>.</p>
+            </section>
+            <section aria-labelledby="understand-trends">
+              <h3 id="understand-trends">Understand trends</h3>
+              <p>Explore activity by product, release-window changes, and planned releases in <a href="/insights">Insights</a>.</p>
+            </section>
+            <section aria-labelledby="stay-focused">
+              <h3 id="stay-focused">Stay focused</h3>
+              <p>Filter the <a href="/">roadmap</a>, save a view, or get updates by <a href="/subscribe">email</a>.</p>
+            </section>
           </div>
-        </div>
-        <div class="why-build-section">
-          <h2 class="section-title">Why Build Fabric GPS?</h2>
-          <div class="why-build-content">
-            <div class="why-build-story">
-              <p class="story-text">After several people in the span of a week asked for an easier way to track changes across the Microsoft Fabric roadmap, we built Fabric GPS to provide a simple and efficient solution.</p>
-              <p class="story-text">Our goal is to make it easier for everyone to stay informed about the latest developments in the Microsoft Fabric ecosystem.</p>
-            </div>
-            <div class="benefits-grid">
-              <div class="benefit-item">
-                <div class="benefit-icon">🎯</div>
-                <h4>Focused Updates</h4>
-                <p>Get only the roadmap changes that matter to you with smart filtering.</p>
-              </div>
-              <div class="benefit-item">
-                <div class="benefit-icon">⚡</div>
-                <h4>Real-time Data</h4>
-                <p>Stay current with 24-hour refresh cycles and instant notifications.</p>
-              </div>
-              <div class="benefit-item">
-                <div class="benefit-icon">🔧</div>
-                <h4>Developer Friendly</h4>
-                <p>RESTful APIs and RSS feeds for easy integration into your workflow.</p>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="coming-soon-section">
-          <h3 class="coming-soon-title">Coming Soon</h3>
-          <div class="roadmap-items">
-            
-            <div class="roadmap-item">
-              <div class="roadmap-icon">📈</div>
-              <div class="roadmap-content">
-                <h4>Analytics Dashboard</h4>
-                <p>Visualize roadmap trends and track update frequency across different product areas.</p>
-                <span class="roadmap-status">Planned</span>
-              </div>
-            </div>
-            <div class="roadmap-item">
-              <div class="roadmap-icon">🔔</div>
-              <div class="roadmap-content">
-                <h4>Custom Alerts</h4>
-                <p>Set up personalized alerts for specific products, features, or release types.</p>
-                <span class="roadmap-status">Research</span>
-              </div>
-            </div>
-          </div>
+          <section class="about-detail" aria-labelledby="how-it-works">
+            <h3 id="how-it-works">How it works</h3>
+            <p class="about-prose">Fabric GPS reads Microsoft's published Fabric roadmap and records changes over time. AI suggests related <a href="https://community.fabric.microsoft.com/t5/Fabric-Updates-Blog/bg-p/fbc_fabricupdatesblogs" target="_blank" rel="noopener noreferrer">Fabric blog articles</a>; those links are suggestions, not confirmed matches.</p>
+            <p class="about-links">
+              <a href="https://roadmap.fabric.microsoft.com/" target="_blank" rel="noopener noreferrer">Microsoft Fabric roadmap</a>
+              <a href="https://github.com/cbattlegear/fabric-roadmap-gps/blob/main/VECTOR_MATCHING.md" target="_blank" rel="noopener noreferrer">How blog matching works</a>
+            </p>
+          </section>
+          <section class="about-detail" aria-labelledby="fabric-community">
+            <h3 id="fabric-community">Built for the Fabric community</h3>
+            <p class="about-prose">Fabric GPS started with a simple request: make roadmap changes easier to follow. It's open source, and community feedback helps shape what comes next.</p>
+            <p class="about-links">
+              <a href="https://github.com/cbattlegear/fabric-roadmap-gps/issues" target="_blank" rel="noopener noreferrer">Suggest an improvement on GitHub</a>
+              <a href="mailto:cameron@fabric-gps.com">Get in touch</a>
+            </p>
+          </section>
+        </section>
+        <section class="app-release-notes" aria-labelledby="app-release-title">
+          <h2 class="about-heading" id="app-release-title">What's New in Fabric GPS</h2>
+          <p>The latest updates to Fabric GPS.</p>
+          {% if release_notes.available %}
+          {% if release_notes.stale %}
+          <p class="app-release-status">
+            This release snapshot may be out of date.
+            Last synchronized: <time datetime="{{ release_notes.refreshed_at }}">{{ release_notes.refreshed_label }}</time>.
+          </p>
+          {% endif %}
+          {% for release in release_notes.releases %}
+          <article class="app-release">
+            <h3><a href="{{ release.html_url }}" rel="noopener noreferrer">{{ release.name }}</a></h3>
+            <p class="app-release-meta">{{ release.tag_name }} &middot; Published <time datetime="{{ release.published_at }}">{{ release.publication_date }} UTC</time></p>
+            {% if release.body.strip() %}
+            <div class="app-release-body">{{ release.notes_html | safe }}</div>
+            {% else %}
+            <p>No release notes were provided for this version.</p>
+            {% endif %}
+          </article>
+          {% else %}
+          <p>No stable releases have been published yet.</p>
+          {% endfor %}
+          {% else %}
+          <p>Release notes are temporarily unavailable here. Read the published notes on GitHub.</p>
+          {% endif %}
+          <p><a href="{{ release_notes.url }}" rel="noopener noreferrer">View all releases on GitHub</a></p>
         </div>
       </section>
 

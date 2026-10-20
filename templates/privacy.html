@@ -1,0 +1,34 @@
+{% extends 'base.html' %}
+{% block title %}Article Feedback &amp; Privacy — Fabric GPS{% endblock %}
+{% block meta_description %}How Fabric GPS stores article feedback, browser identifiers, and feedback retention.{% endblock %}
+{% block og_title %}Article Feedback &amp; Privacy — Fabric GPS{% endblock %}
+{% block og_description %}How Fabric GPS stores article feedback, browser identifiers, and feedback retention.{% endblock %}
+{% block twitter_title %}Article Feedback &amp; Privacy — Fabric GPS{% endblock %}
+{% block twitter_description %}How Fabric GPS stores article feedback, browser identifiers, and feedback retention.{% endblock %}
+{% block herotitle %}Article Feedback &amp; Privacy{% endblock %}
+{% block herosubtitle %}How article feedback is identified, stored, and retained.{% endblock %}
+{% block extra_head %}
+<style>
+    .privacy-content {max-width:1000px;margin:0 auto;padding:0 1rem 4rem;}
+    .privacy-notice {background:#fff;border:1px solid #e1e5e9;border-radius:16px;padding:clamp(1.25rem,4vw,2rem);box-shadow:var(--elevation-2);}
+    .privacy-notice p {max-width:72ch;line-height:1.65;color:var(--fabric-neutral-grey-140);}
+    .privacy-notice p:first-child {margin-top:0;}
+    .privacy-notice p:last-child {margin-bottom:0;}
+</style>
+{% endblock %}
+{% block content %}
+<div class="privacy-content">
+  <section class="privacy-notice" aria-label="Article feedback privacy details">
+    <p>When you vote, this browser stores a random identifier in local storage for up to 180 days.
+      We send it only when you submit feedback and store its hash with the exact release/article pair,
+      your choice, and timestamps. We do not use your IP address, email, subscription token, or browser
+      user-agent as your feedback identity. Feedback is removed after 180 days without a changed vote
+      by the hourly refresh job; backups follow the database backup retention policy.</p>
+    <p>You can change your choice without adding another vote. Clearing browser storage, using a different
+      browser, or identifier expiry can allow another vote, so totals are not verified people counts.
+      Clearing site storage removes your local identifier but does not delete previously submitted feedback.
+      Existing operational logging and IP-based abuse limits still apply; feedback does not set a cookie.
+      No public voter list or score leaderboard is published.</p>
+  </section>
+</div>
+{% endblock %}

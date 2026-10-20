@@ -3,11 +3,14 @@ import os
 import urllib.parse
 import threading
 import logging
-from datetime import datetime, date, time, timezone
+from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional, List
 
 from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory, url_for, abort
 from flask_limiter import Limiter
+from flask_limiter.errors import RateLimitExceeded
+from sqlalchemy.exc import SQLAlchemyError
+from werkzeug.exceptions import RequestEntityTooLarge
 from html import escape
 from markupsafe import Markup
 from email.utils import format_datetime
@@ -36,6 +39,7 @@ from db.db_sqlserver import (
     record_bounce,
     healthcheck as db_healthcheck,
     get_changelog_with_changes,
+    get_changelog_visit_snapshot,
     get_subscription_by_unsubscribe_token, update_subscription_preferences,
     get_verified_subscription_by_email,
     add_feature_watch, remove_feature_watch, get_feature_watches_for_subscription,
@@ -44,9 +48,12 @@ from db.db_sqlserver import (
     get_verify_email_context,
     EmailRateLimitExceeded,
     rotate_unsubscribe_token,
+    record_blog_match_feedback, FeedbackReleaseNotFound, FeedbackStaleMatch,
 )
+from lib.blog_feedback import blog_identity, valid_submission
 from lib.embeddings import get_embedding, is_available as embeddings_available
 from lib.description_format import render_description_html
+from lib.github_releases import release_notes_context
 from lib.quarter_date import format_as_quarter
 from lib.releases_api import (
     ReleasesQuery,
@@ -55,15 +62,19 @@ from lib.releases_api import (
     _format_release_row,
     _parse_releases_query,
 )
+from lib.insights import parse_insights_query, prepare_insights
+from db.db_sqlserver import get_insights
+from sqlalchemy.exc import SQLAlchemyError
 
 os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
 app = Flask(__name__)
+app.jinja_env.globals["blog_identity"] = blog_identity
 
 
 @app.template_filter('description_html')
-def _description_html_filter(value):
-    return Markup(render_description_html(value))
+def _description_html_filter(value, feature_name=None):
+    return Markup(render_description_html(value, feature_name=feature_name))
 
 
 @app.template_filter('release_date_quarter')
@@ -139,7 +150,7 @@ if os.getenv("CURRENT_ENVIRONMENT") != "development" and not EMAIL_BASE_URL.star
         "Set CANONICAL_HOST or BASE_URL to an https:// URL."
     )
 
-_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/watch/", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch", "/api/send-preferences-link", "/dev/")
+_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/watch/", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch", "/api/send-preferences-link", "/api/blog-feedback", "/dev/")
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +217,12 @@ def prevent_caching_sensitive_pages(response):
     """Prevent Front Door / browsers from caching pages with user tokens."""
     if request.path.startswith(_NO_CACHE_PATHS):
         response.headers['Cache-Control'] = 'no-store'
+    if request.path == "/api/changelog" and any(
+        mode in request.args for mode in ("since", "visit", "event_date")
+    ):
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers.pop('ETag', None)
+        response.headers.pop('Last-Modified', None)
     return response
 
 
@@ -684,6 +701,63 @@ def get_engine():
     return ENGINE
 
 
+@app.post("/api/blog-feedback")
+@limiter.limit("20 per minute;100 per hour")
+def blog_feedback():
+    """Record anonymous evidence for review, never alter the match."""
+    origin = request.headers.get("Origin", "")
+    allowed_origins = {
+        f"{parts.scheme}://{parts.netloc}"
+        for parts in map(urllib.parse.urlsplit, (BASE_URL, EMAIL_BASE_URL))
+    }
+    if origin not in allowed_origins or request.headers.get("Sec-Fetch-Site") == "cross-site":
+        return jsonify(error="Cross-origin feedback is not allowed."), 403
+    if request.content_length is not None and request.content_length > 4096:
+        return jsonify(error="Feedback request is too large."), 413
+    if not request.is_json:
+        return jsonify(error="Feedback requires application/json."), 415
+    try:
+        raw_body = request.stream.read(4097)
+        if len(raw_body) > 4096:
+            return jsonify(error="Feedback request is too large."), 413
+        payload = json.loads(raw_body)
+    except RequestEntityTooLarge:
+        return jsonify(error="Feedback request is too large."), 413
+    except (ValueError, RecursionError):
+        return jsonify(error="Invalid feedback JSON."), 400
+    voter_key = request.headers.get("X-Feedback-Voter", "")
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"release_item_id", "blog_url", "vote"}
+        or not valid_submission(
+            payload.get("release_item_id"), payload.get("blog_url"), payload.get("vote"), voter_key
+        )
+    ):
+        return jsonify(error="Invalid release, blog URL, vote, or browser identifier."), 400
+    try:
+        status = record_blog_match_feedback(
+            get_engine(), payload["release_item_id"], payload["blog_url"], payload["vote"], voter_key
+        )
+    except FeedbackReleaseNotFound:
+        return jsonify(error="This release no longer exists. Refresh the page."), 404
+    except FeedbackStaleMatch:
+        return jsonify(error="This article match has changed. Refresh the page before voting."), 409
+    except SQLAlchemyError:
+        otelLogger.error("Blog feedback database operation failed.")
+        return jsonify(error="Feedback could not be saved. Please try again later."), 503
+    return jsonify(status=status, vote=payload["vote"])
+
+
+@app.errorhandler(RateLimitExceeded)
+def handle_rate_limit(error):
+    if request.path == "/api/blog-feedback":
+        response = jsonify(error="Too many votes. Please wait before trying again.")
+        response.status_code = 429
+        response.headers["Retry-After"] = "3600"
+        return response
+    return error.get_response()
+
+
 def _to_rfc2822(dt_or_date: Optional[date]) -> Optional[str]:
     if not dt_or_date:
         return None
@@ -885,65 +959,12 @@ def endpoints():
 
 
 def _build_endpoints_html() -> str:
-    """Build the endpoints documentation page with examples"""
-    # Fetch distinct options (limited for brevity)
-    engine = get_engine()
-    product_names = get_distinct_values(engine, 'product_name')
-    release_types = get_distinct_values(engine, 'release_type')
-    release_statuses = get_distinct_values(engine, 'release_status')
-
-    def _mk_examples_data(base: str, values: list[str], param: str, is_rss: bool = True, label: str = "RSS"):
-        """Generate data structure for examples instead of HTML"""
-        examples = []
-        for v in values[:5]:
-            qv = urllib.parse.quote_plus(v)
-            url = f"{base}?{param}={qv}"
-            if is_rss:
-                url += "&limit=10"
-            examples.append({
-                'label': label,
-                'title': v,
-                'url': url,
-                'param': param
-            })
-        return examples
-
-    def _mk_examples_days_data(base: str, days_values: list[int], is_rss: bool = True, label: str = "RSS"):
-        """Generate data structure for days filter examples instead of HTML"""
-        examples = []
-        for d in days_values:
-            url = f"{base}?modified_within_days={d}"
-            if is_rss:
-                url += "&limit=10"
-            examples.append({
-                'label': label,
-                'title': f'modified_within_days={d}',
-                'url': url,
-                'param': 'modified_within_days',
-                'value': d
-            })
-        return examples
-
-    # Build RSS examples data
-    rss_examples_data = {
-        'product_name': _mk_examples_data("/rss", product_names, "product_name", is_rss=True, label="RSS"),
-        'release_type': _mk_examples_data("/rss", release_types, "release_type", is_rss=True, label="RSS"),
-        'release_status': _mk_examples_data("/rss", release_statuses, "release_status", is_rss=True, label="RSS")
-    }
-
-    # Build API examples data
-    api_examples_data = {
-        'product_name': _mk_examples_data("/api/releases", product_names, "product_name", is_rss=False, label="JSON"),
-        'release_type': _mk_examples_data("/api/releases", release_types, "release_type", is_rss=False, label="JSON"),
-        'release_status': _mk_examples_data("/api/releases", release_statuses, "release_status", is_rss=False, label="JSON"),
-        'modified_within_days': _mk_examples_days_data("/api/releases", [7, 14, 30], is_rss=False, label="JSON")
-    }
-
-    # Render template with data structures
+    """Render connection starters/reference without requiring database discovery."""
     with app.app_context():
-        return render_template('endpoints.html', 
-                             rss_examples=rss_examples_data,
-                             api_examples=api_examples_data)
+        return render_template(
+            'endpoints.html', public_base_url=EMAIL_BASE_URL.rstrip('/'),
+            cache_fresh_seconds=_FRONT_END_TTL, cache_stale_seconds=_STALE_TTL,
+        )
 
 
 @app.get("/subscribe")
@@ -1404,7 +1425,14 @@ def api_release_history(release_item_id: str):
 
 @app.get("/about")
 def about_page():
-    return render_template('about.html')
+    response = app.make_response(render_template('about.html', release_notes=release_notes_context()))
+    response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
+@app.get("/privacy")
+def privacy_page():
+    return render_template("privacy.html")
 
 
 @app.get("/release/<release_item_id>")
@@ -1466,6 +1494,60 @@ def changelog_page():
     return render_template('changelog.html')
 
 
+def _load_insights():
+    query = parse_insights_query(request.args)
+    return query, prepare_insights(get_insights(get_engine(), query), query)
+
+
+@app.get("/api/insights")
+@limiter.limit("30 per minute")
+def api_insights():
+    """Bounded, event-based roadmap history and current target aggregates."""
+    try:
+        query, data = _load_insights()
+    except ValueError as exc:
+        response = jsonify({"error": str(exc)})
+        response.status_code = 400
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    except (SQLAlchemyError, RuntimeError) as exc:
+        otelLogger.exception("Insights database query failed: %s", exc)
+        response = jsonify({"error": "Insights is temporarily unavailable. Please try again."})
+        response.status_code = 503
+        response.headers["Cache-Control"] = "no-store"
+        return response
+    body = json.dumps(data, sort_keys=True, separators=(",", ":"))
+    response = _make_cached_response(body, last_modified=_max_last_modified(
+        [data["coverage"]], attr="last_data_write"))
+    # The shared helper's early 304 does not carry its normal cache headers.
+    response.headers["ETag"] = 'W/"' + hashlib.sha256(body.encode("utf-8")).hexdigest() + '"'
+    response.headers["Cache-Control"] = f"public, max-age={_FRONT_END_TTL}, must-revalidate"
+    return response
+
+
+@app.get("/insights")
+@limiter.limit("30 per minute")
+def insights_page():
+    try:
+        query, data = _load_insights()
+    except ValueError as exc:
+        response = Response(render_template("insights.html", error=str(exc), data=None), status=400)
+    except (SQLAlchemyError, RuntimeError) as exc:
+        otelLogger.exception("Insights page query failed: %s", exc)
+        response = Response(render_template(
+            "insights.html", error="Insights is temporarily unavailable. Please try again.", data=None), status=503)
+    else:
+        html = render_template("insights.html", data=data, query=query, error=None)
+        response = _make_cached_response(html, mimetype="text/html; charset=utf-8",
+                                         last_modified=_max_last_modified(
+                                             [data["coverage"]], attr="last_data_write"))
+        response.headers["ETag"] = 'W/"' + hashlib.sha256(html.encode("utf-8")).hexdigest() + '"'
+        response.headers["Cache-Control"] = f"public, max-age={_FRONT_END_TTL}, must-revalidate"
+        return response
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 def _parse_iso_date(date_str):
     """Strictly parse a canonical ``YYYY-MM-DD`` string into a ``date``.
 
@@ -1488,7 +1570,7 @@ def _parse_iso_date(date_str):
 def changelog_day_page(date_str):
     """Permanent, shareable page for a single day's roadmap changes.
 
-    Content loads client-side via ``/api/changelog?date=<date_str>``; only the
+    Content loads client-side via ``/api/changelog?event_date=<date_str>``; only the
     date-specific title/meta is server-rendered (good enough for human-shared
     link previews). Invalid dates 404 rather than rendering an empty shell.
     """
@@ -1507,8 +1589,20 @@ def api_changelog():
 
     Query Params:
       date: YYYY-MM-DD — return only that single day's changes (historical,
-            permanent view). When supplied, ``days`` is ignored.
+            first matching last_modified version per feature). Ignores days.
+      event_date: YYYY-MM-DD — all substantive UTC temporal events on that
+                  day, including repeated edits and removals. Ignores days;
+                  private/no-store; incompatible with date/since/visit.
       days: look-back window (default 30, max 90)
+      since: inclusive UTC YYYY-MM-DD checkpoint (at most 90 days old).
+             Returns all recorded tracked-field change events through today,
+             including inactive items by default; incompatible with date.
+             last_modified denotes the observed UTC temporal event day.
+             These responses are private/no-store, without date-only validators.
+      visit=1: complete unfiltered 90-day temporal-event snapshot with exact
+               server UTC cutoff and stable event IDs (10,000-event maximum).
+               Private/no-store; incompatible with date/since/event_date. Filters apply
+               client-side only, after the full snapshot has loaded.
       include_inactive: include removed items (default true)
       product_name, release_type, release_status: filter by field
     """
@@ -1533,11 +1627,43 @@ def api_changelog():
     # Pass on_date only when set so default callers keep the window-mode
     # signature (and the existing query plan) unchanged.
     extra = {"on_date": on_date} if on_date is not None else {}
-    items = get_changelog_with_changes(
-        get_engine(), days=days, include_inactive=include_inactive,
-        product_name=product_name, release_type=release_type,
-        release_status=release_status, **extra,
-    )
+    since_raw = request.args.get("since")
+    event_date_raw = request.args.get("event_date")
+    event_date = None
+    if event_date_raw is not None:
+        event_date = _parse_iso_date(event_date_raw)
+        if event_date is None or event_date == date.max:
+            return jsonify({"error": "Invalid event_date; expected YYYY-MM-DD before 9999-12-31"}), 400
+        if on_date is not None or since_raw is not None:
+            return jsonify({"error": "Use event_date without date or since"}), 400
+        extra = {"since": event_date, "through": event_date}
+    visit = "visit" in request.args
+    if visit and (request.args.get("visit") != "1" or since_raw is not None or
+                  on_date is not None or event_date is not None):
+        return jsonify({"error": "Use visit=1 without date, since, or event_date"}), 400
+    today = datetime.now(timezone.utc).date()
+    since = None
+    if since_raw is not None:
+        since = _parse_iso_date(since_raw)
+        if on_date is not None or since is None:
+            return jsonify({"error": "Use since=YYYY-MM-DD without date"}), 400
+        if not today - timedelta(days=90) <= since <= today:
+            return jsonify({"error": "Checkpoint must be within the last 90 UTC days"}), 400
+        extra = {"since": since, "through": today}
+    snapshot = None
+    if visit:
+        # Always fetch the full bounded manifest; filters are display-only and
+        # must not acknowledge a partial product/status/removed selection.
+        snapshot = get_changelog_visit_snapshot(get_engine())
+        if not snapshot["complete"]:
+            return jsonify({"error": "Visit tracking exceeds the retained-history limit.", "complete": False}), 503
+        items = snapshot["items"]
+    else:
+        items = get_changelog_with_changes(
+            get_engine(), days=days, include_inactive=include_inactive,
+            product_name=product_name, release_type=release_type,
+            release_status=release_status, **extra,
+        )
 
     # Serialize dates for JSON output. release_date is rendered as
     # "Q# YYYY" to match the post-2026 source format and the public API
@@ -1555,8 +1681,31 @@ def api_changelog():
     days_list = [{"date": d, "count": len(itms), "items": itms}
                  for d, itms in sorted(grouped.items(), reverse=True)]
 
-    body = json.dumps({"days": days_list, "total_items": len(items)},
+    payload = {"days": days_list, "total_items": len(items)}
+    if snapshot is not None:
+        payload.update(
+            mode="visit", complete=True, cutoff=snapshot["cutoff"],
+            window_start=snapshot["window_start"],
+        )
+    if since is not None:
+        payload.update(
+            since=since.isoformat(), through=today.isoformat(),
+            total_events=len(items),
+            total_features=len({item["release_item_id"] for item in items}),
+            complete=True,
+        )
+    if event_date is not None:
+        payload.update(
+            mode="events", event_date=event_date.isoformat(), total_events=len(items),
+            total_features=len({item["release_item_id"] for item in items}),
+        )
+    body = json.dumps(payload,
                        separators=(",", ":"), sort_keys=True)
+    if since is not None or visit or event_date is not None:
+        # Exact temporal reads cannot reuse stale shared entries or day-only validators.
+        response = Response(body, mimetype="application/json")
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
     return _make_cached_response(body, last_modified=_max_last_modified(items))
 
 
@@ -1743,10 +1892,22 @@ def inject_nav():
     nav_items = [
         {"label": "Home", "url": "/"},
         {"label": "Changelog", "url": "/changelog"},
+        {"label": "Insights", "url": "/insights"},
         {"label": "API", "url": "/endpoints"},
         {"label": "Subscribe", "url": "/subscribe"},
         {"label": "About", "url": "/about"},
     ]
+    active_section = {
+        "release_detail": "/",
+        "changelog_day_page": "/changelog",
+        "verify_email_page": "/subscribe",
+        "unsubscribe_page": "/subscribe",
+        "preferences_page": "/subscribe",
+    }.get(request.endpoint, request.path)
+    for item in nav_items:
+        item["current"] = None
+        if item["url"] == active_section:
+            item["current"] = "page" if request.path == item["url"] else "location"
     return {"nav_items": nav_items, "current_year": datetime.utcnow().year, "canonical_base": EMAIL_BASE_URL}
 
 

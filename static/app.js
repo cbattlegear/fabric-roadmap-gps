@@ -40,12 +40,14 @@ class RecentChanges {
         this.observer = null;
         this.hasLoadedOnce = false;
         this.dataVersion = '';
+        this.failedLoad = null;
         this.init();
     }
 
     async init() {
         await this.fetchVersion();
         await this.loadFilterOptions();
+        this.views = new RoadmapViews.Controller('/', () => this.reloadView());
         this.restoreFiltersFromUrl();
         await this.loadRecentChanges({ reset: true });
         this.bindEvents();
@@ -100,20 +102,32 @@ class RecentChanges {
     }
 
     async loadRecentChanges(options = {}) {
-        const { reset = false } = options;
+        const { reset = false, retry = false } = options;
         const filters = this.getActiveFilters();
 
         if (reset) {
+            if (this.request) this.request.abort();
+            this.loadingMore = false;
             this.page = 1;
             this.currentData = [];
             this.allPagesLoaded = false;
+            this.failedLoad = null;
+            document.getElementById('load-error').hidden = true;
         }
 
-        if (this.loadingMore || this.allPagesLoaded) return;
+        if (this.loadingMore || this.allPagesLoaded || (this.failedLoad && !retry)) return;
 
         const isInitialLoad = this.page === 1 && !this.hasLoadedOnce;
+        const requestedPage = this.page;
+        const filterKey = JSON.stringify(filters);
+        const previousCount = this.currentData.length;
+        const retryButton = document.getElementById('retry-load');
+        const focusResults = retry && document.activeElement === retryButton;
 
         this.loadingMore = true;
+        retryButton.disabled = true;
+        const request = new AbortController();
+        this.request = request;
 
         if (this.page > 1) {
             this.toggleBottomLoading(true);
@@ -123,6 +137,7 @@ class RecentChanges {
             this.toggleBottomLoading(true);
         }
 
+        let focusDestination;
         try {
             const params = new URLSearchParams();
             if (filters.product_name) params.append('product_name', filters.product_name);
@@ -137,13 +152,16 @@ class RecentChanges {
             }
             params.append('page', String(this.page));
             params.append('page_size', String(this.pageSize));
-            params.append('include_inactive', 'true');
-            params.append('v', `${this.dataVersion || 'current'}-description-v1`);
+            params.append('include_inactive', filters.include_inactive);
+            params.append('v', `${this.dataVersion || 'current'}-description-v2`);
 
-            const response = await fetch(`/api/releases?${params.toString()}`);
+            const response = await fetch(`/api/releases?${params.toString()}`, { signal: request.signal });
 
+            if (!response.ok) throw new Error(`Roadmap request failed (${response.status}).`);
             const payload = await response.json();
-            const items = Array.isArray(payload) ? payload : (payload.data || []);
+            if (request !== this.request || JSON.stringify(this.getActiveFilters()) !== filterKey) return;
+            const items = Array.isArray(payload) ? payload : payload?.data;
+            if (!Array.isArray(items)) throw new Error('Invalid roadmap response.');
 
             if (this.page === 1) {
                 this.currentData = items;
@@ -163,7 +181,14 @@ class RecentChanges {
                 this.allPagesLoaded = true;
             }
 
+            this.failedLoad = null;
+            document.getElementById('load-error').hidden = true;
             this.renderChanges();
+            if (focusResults && (document.activeElement === retryButton || document.activeElement === document.body)) {
+                const links = document.querySelectorAll('#changes-grid .change-title a');
+                focusDestination = links[requestedPage > 1 ? previousCount : 0] ||
+                    document.getElementById('no-results');
+            }
 
             if (this.pagination && this.pagination.has_next) {
                 this.page += 1;
@@ -173,18 +198,23 @@ class RecentChanges {
                 this.hasLoadedOnce = true;
             }
         } catch (error) {
+            if (request !== this.request || error.name === 'AbortError' ||
+                JSON.stringify(this.getActiveFilters()) !== filterKey) return;
             console.error('Error loading recent changes:', error);
-            if (isInitialLoad) {
-                this.showError();
-            }
+            this.failedLoad = { filters: filterKey, page: requestedPage };
+            this.showError(requestedPage > 1);
         } finally {
-            this.toggleSearchSpinner(false);
-            if (isInitialLoad) {
-                this.showLoading(false);
+            if (request === this.request) {
+                this.toggleSearchSpinner(false);
+                if (isInitialLoad) {
+                    this.showLoading(false);
+                }
+                this.toggleBottomLoading(false);
+                this.loadingMore = false;
+                retryButton.disabled = false;
+                this.updateLoadMoreButton();
+                focusDestination?.focus();
             }
-            this.toggleBottomLoading(false);
-            this.loadingMore = false;
-            this.updateLoadMoreButton();
         }
     }
 
@@ -202,7 +232,7 @@ class RecentChanges {
         container.innerHTML = this.currentData.map(item => this.createChangeItem(item)).join('');
         container.querySelectorAll('.change-item').forEach(card => {
             card.addEventListener('click', (event) => {
-                if (event.target.closest('a')) return;
+                if (event.target.closest('a, button, .blog-feedback')) return;
                 const id = card.getAttribute('data-id');
                 window.location.href = `/release/${id}`;
             });
@@ -227,9 +257,9 @@ class RecentChanges {
         const removedBadge = isInactive ? '<span class="change-badge badge-removed">Removed</span>' : '';
 
         return `
-            <div class="change-item${inactiveClass}" data-id="${escapeHtml(item.release_item_id)}" role="button" tabindex="0" aria-label="View details for ${escapeHtml(item.feature_name || 'feature')}">
+            <div class="change-item${inactiveClass}" data-id="${escapeHtml(item.release_item_id)}">
                 <div class="change-header">
-                    <h3 class="change-title">${escapeHtml(item.feature_name || 'Unnamed Feature')}</h3>
+                    <h3 class="change-title"><a href="/release/${encodeURIComponent(item.release_item_id)}">${escapeHtml(item.feature_name || 'Unnamed Feature')}</a></h3>
                     <div class="change-badges">
                         ${removedBadge}
                         <span class="change-badge badge-product">${escapeHtml(item.product_name || 'Unknown')}</span>
@@ -242,10 +272,11 @@ class RecentChanges {
                     <span class="release-date">Release Date: ${releaseDate}</span>
                 </div>
                 <div class="change-description">${item.feature_description_html || escapeHtml(item.feature_description || 'No description available.')}</div>
-                <div style="margin-top:.5rem; font-size:.75rem; display: flex; justify-content: space-between; align-items: center;">
+                <div class="change-article-row">
                     <div class="change-link-inline" style="color: var(--fabric-primary);">Click for details ▸</div>
-                    ${item.blog_title && item.blog_url ? `<a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" style="color: var(--fabric-secondary); text-decoration: none; display: flex; align-items: center; gap: .25rem;" onclick="event.stopPropagation();" title="${escapeHtml(item.blog_title)}">📚 Related blog</a>` : ''}
+                    ${item.blog_title && window.BlogFeedback.validUrl(item.blog_url) ? `<a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" class="change-article-link" data-feedback-article data-release-id="${escapeHtml(item.release_item_id)}" data-blog-url="${escapeHtml(item.blog_url)}" title="${escapeHtml(item.blog_title)}" aria-label="Related blog: ${escapeHtml(item.blog_title)}"><span aria-hidden="true">📚</span> <span>Related blog</span></a>` : ''}
                 </div>
+                ${item.blog_title ? window.BlogFeedback.markup(item.release_item_id, item.blog_url) : ''}
             </div>`;
     }
 
@@ -253,20 +284,22 @@ class RecentChanges {
         const applyBtn = document.getElementById('apply-filters');
         const clearBtn = document.getElementById('clear-filters');
         const loadMoreBtn = document.getElementById('load-more-btn');
+        document.getElementById('retry-load').addEventListener('click', () => this.retryLoad());
 
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
             searchInput.addEventListener('input', (e) => {
+                this.syncFiltersToUrl();
                 this.debounceSearch();
             });
         }
 
-        const autoSelectIds = ['product-filter','type-filter','status-filter','days-filter','sort-select'];
+        const autoSelectIds = ['product-filter','type-filter','status-filter','days-filter','sort-select','include-inactive'];
         autoSelectIds.forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
             el.addEventListener('change', () => {
-                if (this.loadingMore) return;
+                this.syncFiltersToUrl();
                 if (this._filterChangeTimer) clearTimeout(this._filterChangeTimer);
                 this._filterChangeTimer = setTimeout(() => {
                     this.syncFiltersToUrl();
@@ -286,7 +319,7 @@ class RecentChanges {
             });
         }
 
-        document.querySelectorAll('.filter-select').forEach(select => {
+        document.querySelectorAll('.filters-container .filter-select').forEach(select => {
             select.addEventListener('keypress', (e) => {
                 if (e.key === 'Enter') {
                     this.loadRecentChanges({ reset: true });
@@ -296,14 +329,22 @@ class RecentChanges {
     }
 
     getActiveFilters() {
-        return {
-            product_name: document.getElementById('product-filter').value,
-            release_type: document.getElementById('type-filter').value,
-            release_status: document.getElementById('status-filter').value,
-            modified_within_days: document.getElementById('days-filter').value,
-            sort: document.getElementById('sort-select').value,
-            q: (document.getElementById('search-input') && document.getElementById('search-input').value) || ''
-        };
+        return this.views.capture();
+    }
+
+    reloadView() {
+        clearTimeout(this.debounceTimer);
+        clearTimeout(this._filterChangeTimer);
+        return this.loadRecentChanges({ reset: true });
+    }
+
+    retryLoad() {
+        if (!this.failedLoad || this.loadingMore) return;
+        clearTimeout(this.debounceTimer);
+        clearTimeout(this._filterChangeTimer);
+        const changed = JSON.stringify(this.getActiveFilters()) !== this.failedLoad.filters;
+        if (!changed) this.page = this.failedLoad.page;
+        return this.loadRecentChanges({ reset: changed, retry: true });
     }
 
     clearFilters() {
@@ -312,6 +353,7 @@ class RecentChanges {
         document.getElementById('status-filter').value = '';
         document.getElementById('days-filter').value = '';
         document.getElementById('sort-select').value = 'last_modified';
+        document.getElementById('include-inactive').checked = true;
         const si = document.getElementById('search-input');
         if (si) si.value = '';
         this.page = 1;
@@ -321,38 +363,20 @@ class RecentChanges {
     }
 
     syncFiltersToUrl() {
-        const filters = this.getActiveFilters();
-        const params = new URLSearchParams();
-        if (filters.product_name) params.set('product_name', filters.product_name);
-        if (filters.release_type) params.set('release_type', filters.release_type);
-        if (filters.release_status) params.set('release_status', filters.release_status);
-        if (filters.modified_within_days) params.set('modified_within_days', filters.modified_within_days);
-        if (filters.sort && filters.sort !== 'last_modified') params.set('sort', filters.sort);
-        if (filters.q && filters.q.trim().length >= this.minSearchLength) params.set('q', filters.q.trim());
-        const qs = params.toString();
-        history.replaceState(null, '', qs ? `/?${qs}` : '/');
+        this.views.sync();
     }
 
     restoreFiltersFromUrl() {
-        const params = new URLSearchParams(location.search);
-        const map = {
-            'product_name': 'product-filter',
-            'release_type': 'type-filter',
-            'release_status': 'status-filter',
-            'modified_within_days': 'days-filter',
-            'sort': 'sort-select',
-            'q': 'search-input'
-        };
-        for (const [param, elId] of Object.entries(map)) {
-            const val = params.get(param);
-            const el = document.getElementById(elId);
-            if (val && el) el.value = val;
-        }
+        this.views.restore(location.search);
     }
 
     updateLoadMoreButton() {
         const btn = document.getElementById('load-more-btn');
         if (!btn) return;
+        if (this.failedLoad) {
+            btn.style.display = 'none';
+            return;
+        }
         if (this.observer) {
             btn.style.display = this.allPagesLoaded ? 'none' : 'none';
         } else {
@@ -390,13 +414,11 @@ class RecentChanges {
         }
     }
 
-    showError() {
-        const container = document.getElementById('changes-grid');
-        const noResults = document.getElementById('no-results');
-
-        container.innerHTML = '';
-        noResults.innerHTML = '<p>Error loading changes. Please try again later.</p>';
-        noResults.style.display = 'block';
+    showError(more) {
+        document.getElementById('no-results').style.display = 'none';
+        document.getElementById('load-error-message').textContent = more ?
+            'Could not load more roadmap items.' : 'Could not load roadmap items.';
+        document.getElementById('load-error').hidden = false;
     }
 
     debounceSearch(delay = 300) {

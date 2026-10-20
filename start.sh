@@ -6,7 +6,7 @@ MODE="${APP_MODE:-web}"
 alembic upgrade head
 
 if [[ "$MODE" == "web" ]]; then
-  # Run the Flask app with Gunicorn
+  # Serve MCP and the existing Flask routes on one managed ASGI listener.
   exec gunicorn -c gunicorn.conf.py
 elif [[ "$MODE" == "refresh" ]]; then
   # Run the data fetcher pipeline followed by the email sending job

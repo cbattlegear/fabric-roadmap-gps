@@ -251,3 +251,76 @@ def test_html_comments_are_not_forwarded_to_pages_or_email():
     source = "<!--[if mso]><img src=x onerror=bad><![endif]--><p>Safe</p>"
     assert render_description_html(source) == "<p>Safe</p>"
     assert "<!--" not in render_description_html(source, email=True)
+
+
+@pytest.mark.parametrize("role,overview,capabilities", [
+    ("Publisher",
+     "Enable Eventstream to act as a native publisher of Business Events directly from Real-Time hub--simplifying event creation and allowing users to emit business signals from streaming data with minimal setup.",
+     [
+         "Native Eventstream Publishing from Real-Time Hub: Create and configure Eventstream publishers directly from the Business Events experience in Real-Time hub.",
+         "Seamless Stream-to-Event Mapping: Map incoming data streams to Business Event schemas using built-in mappers to transform raw signals into meaningful business events.",
+         "Low-Code Publisher Configuration: Configure publishing logic through UI-driven experiences without requiring custom code or complex infrastructure.",
+         "Real-time Event Emission: Continuously publish Business Events from live data streams, enabling downstream consumers to react instantly.",
+         "Integrated Publisher Lifecycle: Manage, update, and monitor Eventstream publishers alongside other Business Event producers in a unified experience.",
+     ]),
+    ("Consumer",
+     "Enable Eventstream to natively consume Business Events from Real-Time hub--unlocking real-time processing, transformation, and routing of business signals across Fabric.",
+     [
+         "Native Eventstream Consumption: Create Eventstream consumers directly from Business Events in Real-Time hub to start processing events in real time.",
+         "Real-time Event Processing Pipelines: Build pipelines to ingest, process, and route Business Events with low latency as they are published.",
+         "Flexible Transformations & Enrichment: Apply transformations, filtering, and enrichment to Business Events before routing them to downstream systems.",
+         "Seamless Routing to Destinations: Deliver processed events to multiple Fabric destinations (e.g., storage, analytics engines, downstream services) for further action.",
+         "Integration with Analytics & Actions: Enable scenarios such as real-time insights, anomaly detection, alerts, and automated workflows powered by event data.",
+     ]),
+])
+def test_stored_eventstream_bold_heading_boundaries(role, overview, capabilities):
+    title = f"Eventstream as a Business Events {role} from Real-Time Hub"
+    source = f"**{title}****Overview**{overview}**Key Capabilities**" + "".join(
+        f"* {item}" for item in capabilities
+    )
+    assert "****" not in BeautifulSoup(render_description_html(source), "html.parser").get_text()
+    html = BeautifulSoup(render_description_html(source, feature_name=title), "html.parser")
+    assert title not in html.get_text()
+    assert [p.get_text() for p in html.find_all("p")][:2] == [
+        "Overview",
+        overview,
+    ]
+    assert [li.get_text() for li in html.select("li")] == capabilities
+    assert "*" not in html.get_text()
+    assert "Overview\n\nEnable" in render_description_text(source, feature_name=title)
+
+
+@pytest.mark.parametrize("source", [
+    "**Exact & special &lt;name&gt;**\n\nBody.",
+    "<h2>Exact &amp; special &lt;name&gt;</h2><p>Body.</p>",
+])
+def test_only_a_complete_matching_leading_heading_is_deduplicated(source):
+    title = "Exact & special <name>"
+    html = render_description_html(source, feature_name=title)
+    assert BeautifulSoup(html, "html.parser").get_text(strip=True) == "Body."
+
+
+@pytest.mark.parametrize("source", [
+    "**Partial title plus context**\n\nBody.",
+    "Partial title\n\nBody.",
+    "Intro.\n\n**Partial title**\n\nBody.",
+    "**Partial title**",
+    "**Partial title** retains important context.",
+])
+def test_heading_deduplication_does_not_remove_prose_partial_or_only_content(source):
+    assert render_description_html(source, feature_name="Partial title") == render_description_html(source)
+
+
+def test_bold_repairs_preserve_literals_and_sanitize_untrusted_heading_content():
+    source = (
+        "**Feature****Overview**Enable **bold** and *emphasis*, `**a****b**`, "
+        "and literal **** markers.\n\n"
+        "<script>bad()</script><p onclick='bad()'>Safe &amp; sound.</p>"
+    )
+    html = BeautifulSoup(render_description_html(source, feature_name="Feature"), "html.parser")
+    assert html.code.get_text() == "**a****b**"
+    assert "literal **** markers." in html.get_text()
+    assert html.em.get_text() == "emphasis"
+    assert html.script is None
+    assert html.find(attrs={"onclick": True}) is None
+    assert "Safe & sound." in html.get_text()

@@ -17,6 +17,20 @@ Usage::
 import logging
 import random
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+_deadline: ContextVar[float | None] = ContextVar("db_retry_deadline", default=None)
+
+
+@contextmanager
+def retry_deadline(seconds: float):
+    """Limit retry work for latency-sensitive reads without changing batch jobs."""
+    token = _deadline.set(time.monotonic() + seconds)
+    try:
+        yield
+    finally:
+        _deadline.reset(token)
 
 # SQLAlchemy is optional for this module — pipeline scripts that use only
 # raw pyodbc don't need it. Guard the import so importing ``lib.db_retry``
@@ -122,20 +136,34 @@ def retry_on_transient_errors(
             attempt = 1
             delay = float(initial_delay)
             while True:
+                deadline = _deadline.get()
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise TimeoutError("Database read deadline exceeded")
                 try:
                     return func(*args, **kwargs)
                 except Exception as exc:  # noqa: BLE001 — classification handled below
                     if not is_transient_sql_azure_error(exc):
-                        logger.exception("Non-transient DB error encountered, not retrying.")
+                        if deadline is None:
+                            logger.exception("Non-transient DB error encountered, not retrying.")
+                        else:
+                            logger.warning("Bounded DB read failed; not retrying.")
                         raise
                     if attempt >= max_attempts:
-                        logger.exception("Transient DB error and max attempts reached (%d).", max_attempts)
+                        if deadline is None:
+                            logger.exception("Transient DB error and max attempts reached (%d).", max_attempts)
+                        else:
+                            logger.warning("Bounded DB read exhausted retry attempts.")
                         raise
-                    logger.warning(
-                        "Transient DB error detected; attempt %d/%d will retry after %.2fs: %s",
-                        attempt, max_attempts, delay, exc,
-                    )
+                    if deadline is None:
+                        logger.warning(
+                            "Transient DB error detected; attempt %d/%d will retry after %.2fs: %s",
+                            attempt, max_attempts, delay, exc,
+                        )
+                    else:
+                        logger.warning("Bounded DB read retry attempt=%d", attempt)
                     sleep_time = delay + (random.random() * 0.5)
+                    if deadline is not None and time.monotonic() + sleep_time >= deadline:
+                        raise TimeoutError("Database retry deadline exceeded") from exc
                     time.sleep(sleep_time)
                     delay = min(delay * backoff, max_delay)
                     attempt += 1

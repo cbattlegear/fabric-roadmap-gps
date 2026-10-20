@@ -1,0 +1,202 @@
+{% extends "base.html" %}
+{% block title %}Roadmap Insights - Fabric GPS{% endblock %}
+{% block herotitle %}Roadmap Insights{% endblock %}
+{% block herosubtitle %}What is changing across Fabric{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="/static/insights.css?v=touch-targets-v5">{% endblock %}
+{% block content %}
+<!-- DOM reading order stays activity, status, targets, then planned releases.
+The shorter panels stack independently beside the long product list. -->
+<div class="container insights">
+  {% if error %}
+  <section class="insights-panel" role="alert">
+    <h2>Insights could not be loaded</h2>
+    <p>{{ error }}</p>
+    <a href="/insights">Try again</a>
+  </section>
+  {% else %}
+  <form class="insights-filters" action="/insights" method="get" aria-label="Insights filters">
+    <input type="hidden" name="end" value="{{ query.end.isoformat() }}">
+    <label>Product
+      <select name="product_name">
+        <option value="">All products</option>
+        {% for product in data.products %}
+        <option value="{{ product.name }}" {% if query.product_name == product.name %}selected{% endif %}>{{ product.name }}</option>
+        {% endfor %}
+        {% if query.product_name and query.product_name not in data.products|map(attribute='name')|list %}
+        <option selected value="{{ query.product_name }}">{{ query.product_name }}</option>
+        {% endif %}
+      </select>
+    </label>
+    <label>Period
+      <select name="days">
+        <option value="30" {% if query.days == 30 %}selected{% endif %}>30 days</option>
+        <option value="90" {% if query.days == 90 %}selected{% endif %}>90 days</option>
+      </select>
+    </label>
+    <button type="submit">Apply</button>
+    <span class="insights-filter-context">{{ query.product_name or 'All Fabric products' }} &middot; {{ query.days }} days</span>
+    <span id="insights-loading" role="status" hidden>Loading...</span>
+  </form>
+
+  <div class="insights-grid">
+    <section class="insights-panel insights-activity" aria-labelledby="activity-title">
+      <div class="insights-panel-heading">
+        <div><h2 id="activity-title">Activity by product</h2><p>Observed roadmap changes</p></div>
+        <a class="insights-total" href="{{ query.url(metric='all', bucket=None, page=1) }}#evidence" aria-label="{{ data.visuals.events }} roadmap events">{{ data.visuals.events }}<span>events</span></a>
+      </div>
+      {% if data.activity %}
+      <div class="insights-legend" aria-label="Change types">
+        <span><i class="insights-kind-addition"></i>Additions</span>
+        <span><i class="insights-kind-edit"></i>Edits</span>
+        <span><i class="insights-kind-removal"></i>Removals</span>
+        <span><i class="insights-kind-restoration"></i>Restorations</span>
+      </div>
+      <div class="insights-product-chart" role="group" aria-label="Activity chart">
+        {% for product in data.visuals.products %}
+        <a class="insights-product-row" href="{{ product.url }}#evidence"
+           aria-label="{{ product.name }}, {{ product.events }} roadmap {{ 'event' if product.events == 1 else 'events' }}. View all changes.">
+          <span class="insights-product-label">{{ product.name }}</span>
+          <span class="insights-stacked-track" aria-hidden="true">
+            <span class="insights-stacked-bar" style="width:{{ product.width }}%">
+            {% for segment in product.segments %}
+              <span class="insights-segment insights-kind-{{ segment.kind }}" style="width:{{ segment.width }}%"></span>
+            {% endfor %}
+            </span>
+          </span>
+          <span class="insights-chart-value" aria-hidden="true">{{ product.events }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      <details class="insights-data">
+        <summary>View activity data</summary>
+        <div class="insights-table-wrap" tabindex="0" role="region" aria-label="Product activity data">
+        <table class="insights-table">
+          <caption>Observed events and distinct features</caption>
+          <thead><tr><th scope="col">Product</th><th scope="col">Change</th><th scope="col">Events</th><th scope="col">Features</th></tr></thead>
+          <tbody>{% for row in data.activity %}
+          <tr><th scope="row">{{ row.product_name }}</th>
+            <td class="insights-link-cell"><a class="insights-data-link" href="{{ row.url }}#evidence"
+              aria-label="{{ row.product_name }}, {{ row.kind }}. Events: {{ row.events }}; features: {{ row.features }}.">{{ row.kind|capitalize }}</a></td>
+            <td>{{ row.events }}</td><td>{{ row.features }}</td></tr>
+          {% endfor %}</tbody>
+        </table>
+        </div>
+      </details>
+      {% else %}<p class="insights-empty">No observed roadmap activity matches these filters.</p>{% endif %}
+    </section>
+
+    <div class="insights-stack">
+    <section class="insights-panel" aria-labelledby="transitions-title">
+      <div class="insights-panel-heading">
+        <div><h2 id="transitions-title">Status changes</h2><p>Published status and release-type transitions</p></div>
+        <a class="insights-total" href="{{ query.url(metric='status', bucket=None, page=1) }}#evidence" aria-label="{{ data.visuals.status_events }} status transition events">{{ data.visuals.status_events }}<span>events</span></a>
+      </div>
+      {% if data.transitions %}
+      <div class="insights-trend" role="img" aria-label="{{ data.visuals.status_events }} status changes over {{ query.days }} days. Daily values are available in View status data.">
+        <svg viewBox="0 0 600 180" aria-hidden="true">
+          <text x="8" y="13" class="insights-axis-label">{{ data.visuals.status_max }}</text>
+          <path class="insights-gridline" d="M8 20H592 M8 90H592 M8 160H592"></path>
+          <polygon class="insights-trend-fill" points="8,160 {{ data.visuals.status_points }} 592,160"></polygon>
+          <polyline class="insights-trend-line" points="{{ data.visuals.status_points }}"></polyline>
+          {% for point in data.visuals.status_days %}
+          <a href="{{ point.url }}#evidence" tabindex="-1"><circle cx="{{ point.x }}" cy="{{ point.y }}" r="4"><title>{{ point.day }}: {{ point.events }} events</title></circle></a>
+          {% endfor %}
+        </svg>
+        <div class="insights-axis"><span>{{ query.start.strftime('%b %d') }}</span><span>{{ data.visuals.status_end }}</span></div>
+      </div>
+      <details class="insights-data">
+        <summary>View status data</summary>
+        <div class="insights-table-wrap" tabindex="0" role="region" aria-label="Status transition data">
+        <table class="insights-table">
+          <caption>Status or release-type transitions by UTC day</caption>
+          <thead><tr><th scope="col">Day</th><th scope="col">Events</th><th scope="col">Features</th></tr></thead>
+          <tbody>{% for row in data.transitions %}
+          <tr><th scope="row" class="insights-link-cell"><a class="insights-data-link" href="{{ row.url }}#evidence"
+            aria-label="{{ row.day }}, status or release-type changes. Events: {{ row.events }}; features: {{ row.features }}.">{{ row.day }}</a></th>
+            <td>{{ row.events }}</td><td>{{ row.features }}</td></tr>
+          {% endfor %}</tbody>
+        </table>
+        </div>
+      </details>
+      {% else %}<p class="insights-empty">No observed status changes in this period.</p>{% endif %}
+    </section>
+
+    <section class="insights-panel" aria-labelledby="targets-title">
+      <div class="insights-panel-heading"><div><h2 id="targets-title">Release window changes</h2><p>Planned dates added, changed or removed</p></div></div>
+      <a class="insights-target-visual" href="{{ query.url(metric='target', bucket=None, page=1) }}#evidence"
+         aria-label="{{ data.target_changes }} release window change events, {{ data.visuals.target_percent }} percent of observed events">
+        <span class="insights-donut" style="--target-share:{{ data.visuals.target_percent }}%" aria-hidden="true">
+          <span>{{ data.target_changes }}<small>events</small></span>
+        </span>
+        <span class="insights-target-copy">
+          <strong>{{ data.visuals.target_percent }}%</strong>
+          <span>of observed events changed a planned release date</span>
+          <span class="insights-target-link">Explore release window changes &rarr;</span>
+        </span>
+      </a>
+    </section>
+
+    <section class="insights-panel" aria-labelledby="upcoming-title">
+      <div class="insights-panel-heading">
+        <div><h2 id="upcoming-title">Planned releases per quarter</h2><p>Current published quarters &middot; independent of period</p></div>
+        <a class="insights-total" href="{{ query.url(metric='upcoming', bucket=None, page=1) }}#evidence" aria-label="{{ data.visuals.upcoming_features }} features with planned releases">{{ data.visuals.upcoming_features }}<span>features</span></a>
+      </div>
+      {% if data.upcoming %}
+      <div class="insights-quarter-chart">
+        {% for row in data.upcoming %}
+        <a class="insights-quarter-row" href="{{ row.url }}#evidence"
+           aria-label="{{ row.features }} {{ 'feature' if row.features == 1 else 'features' }} with releases planned for {{ 'an unknown date' if row.bucket == 'unknown' else row.bucket }}">
+          <span class="insights-quarter-label">{{ 'Undated' if row.bucket == 'unknown' else row.bucket }}</span>
+          <span class="insights-quarter-track" aria-hidden="true">
+            <span style="width:{{ row.width }}%"></span>
+          </span>
+          <span class="insights-chart-value" aria-hidden="true">{{ row.features }}</span>
+        </a>
+        {% endfor %}
+      </div>
+      <details class="insights-data">
+        <summary>View planned release data</summary>
+        <table class="insights-table">
+          <caption>Planned releases by quarter: distinct active, not-Shipped features</caption>
+          <thead><tr><th scope="col">Quarter</th><th scope="col">Features</th></tr></thead>
+          <tbody>{% for row in data.upcoming %}
+          <tr><th scope="row" class="insights-link-cell"><a class="insights-data-link" href="{{ row.url }}#evidence"
+            aria-label="{{ 'Undated' if row.bucket == 'unknown' else row.bucket }}, planned features: {{ row.features }}.">{{ 'Undated' if row.bucket == 'unknown' else row.bucket }}</a></th><td>{{ row.features }}</td></tr>
+          {% endfor %}</tbody>
+        </table>
+      </details>
+      {% else %}<p class="insights-empty">No planned releases match this product.</p>{% endif %}
+    </section>
+    </div>
+  </div>
+
+  <details class="insights-panel insights-evidence-panel" id="evidence" {% if query.metric != 'all' or query.page > 1 %}open{% endif %}>
+    <summary><span>{{ 'Matching planned releases' if query.metric == 'upcoming' else 'Explore changes' }}</span><span class="insights-secondary">{{ data.details.total }} {{ 'features' if query.metric == 'upcoming' else 'events' }}{% if query.metric not in ('all', 'upcoming') %} &middot; {{ 'release window changes' if query.metric == 'target' else query.metric }}{% endif %}{% if query.bucket %} &middot; {{ query.bucket }}{% endif %}</span></summary>
+    <p class="insights-evidence-context">Select a feature to see its history. <a href="{{ query.url(metric='all', bucket=None, page=1) }}#evidence">All changes</a></p>
+    {% if data.details['items'] %}
+    <div class="insights-table-wrap" tabindex="0" role="region" aria-label="Matching observations">
+    <table class="insights-table insights-evidence">
+      <caption>{{ 'Planned releases' if query.metric == 'upcoming' else 'Matching observations' }} &middot; 50 per page</caption>
+      <thead><tr><th scope="col">Feature / product</th><th scope="col">Change (UTC)</th><th scope="col">Status / type</th><th scope="col">Planned release dates</th></tr></thead>
+      <tbody>{% for item in data.details['items'] %}
+      <tr>
+        <th scope="row"><a href="{{ url_for('release_detail', release_item_id=item.release_item_id) }}">{{ item.feature_name or 'Unnamed feature' }}</a><br><span class="insights-secondary">{{ item.product_name }}</span></th>
+        <td>{{ 'Planned release' if item.kind == 'upcoming' else item.kind|capitalize }}<br>{{ item.observed_at or 'Current snapshot' }}</td>
+        <td>{% if item.kind != 'upcoming' %}{{ item.previous_status or 'Unknown' }} / {{ item.previous_type or 'Unknown' }} &rarr; {% endif %}{{ item.release_status or 'Unknown' }} / {{ item.release_type or 'Unknown' }}</td>
+        <td>{% if item.kind != 'upcoming' %}{{ item.previous_target or 'Unknown' }} &rarr; {% endif %}{{ item.revised_target or 'Unknown' }}</td>
+      </tr>
+      {% endfor %}</tbody>
+    </table>
+    </div>
+    {% else %}<p class="insights-empty">No changes match this selection.</p>{% endif %}
+    <nav class="insights-pagination" aria-label="Evidence pages">
+      {% if data.details.previous_url %}<a href="{{ data.details.previous_url }}#evidence">Previous</a>{% endif %}
+      <span>Page {{ query.page }}</span>
+      {% if data.details.next_url %}<a href="{{ data.details.next_url }}#evidence">Next</a>{% endif %}
+    </nav>
+    {% if data.details.capped %}<p>Narrow your product or day to browse beyond 10,000 observations.</p>{% endif %}
+  </details>
+  {% endif %}
+</div>
+{% endblock %}
+{% block scripts %}<script src="/static/insights.js?v=2" defer></script>{% endblock %}

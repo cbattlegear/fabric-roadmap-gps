@@ -42,20 +42,28 @@
 
             <div class="modal-section" style="margin-top: var(--spacing-l);">
                 <h2 style="font-size: 1.1rem; margin-bottom: var(--spacing-s);">Description</h2>
-                <div class="change-description">{{ release.feature_description | description_html }}</div>
+                <div class="change-description">{{ release.feature_description | description_html(release.feature_name) }}</div>
             </div>
 
-            {% if release.blog_title and release.blog_url %}
+            {% if release.blog_title and blog_identity(release.blog_url) %}
             <div class="modal-section blog-related-section" style="margin-top: var(--spacing-l);">
                 <h3>📰 Related Blog Article</h3>
                 <div class="blog-article-card">
-                    <a href="{{ release.blog_url }}" target="_blank" rel="noopener noreferrer" class="blog-article-link">
+                    <a href="{{ release.blog_url }}" target="_blank" rel="noopener noreferrer" class="blog-article-link" data-feedback-article data-release-id="{{ release.release_item_id }}" data-blog-url="{{ release.blog_url }}" title="{{ release.blog_title }}">
                         <div class="blog-article-title">{{ release.blog_title }}</div>
                         <div class="blog-article-meta">
                             <span class="blog-article-icon">🔗</span>
                             <span class="blog-article-domain">{{ release.blog_url.split('/')[2] }}</span>
                         </div>
                     </a>
+                </div>
+                <div class="blog-feedback" hidden data-release-id="{{ release.release_item_id }}" data-blog-url="{{ release.blog_url }}" role="group" aria-label="Feedback on this related article">
+                    <span class="blog-feedback-label">Is this article related?</span>
+                    <div class="blog-feedback-actions">
+                        <button type="button" data-feedback-vote="helpful" aria-pressed="false">Helpful</button>
+                        <button type="button" data-feedback-vote="not_related" aria-pressed="false">Not related</button>
+                    </div>
+                    <span class="blog-feedback-status" role="status" aria-live="polite"></span>
                 </div>
             </div>
             {% endif %}

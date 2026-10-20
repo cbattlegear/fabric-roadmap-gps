@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 setup_env.sh
 .env
+release_notes.json

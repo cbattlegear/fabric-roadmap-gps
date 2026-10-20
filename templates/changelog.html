@@ -6,7 +6,7 @@
 {% block twitter_title %}Microsoft Fabric Change Log — Daily Roadmap Updates | Fabric GPS{% endblock %}
 {% block twitter_description %}Daily breakdown of every Microsoft Fabric roadmap change. See which features were added, updated, or removed each day, filtered by product, release type, and status.{% endblock %}
 
-{% block herotitle %}Change Log{% endblock %}
+{% block herotitle %}Changelog{% endblock %}
 {% block herosubtitle %}Daily breakdown of Microsoft Fabric roadmap changes{% endblock %}
 
 {% block content %}
@@ -41,9 +41,18 @@
                     <option value="">All Statuses</option>
                 </select>
             </div>
-            <a href="/changelog" id="clear-filters" class="button button-secondary">Clear</a>
+            <div class="filter-group">
+                <label for="include-inactive">Removed items</label>
+                <label><input id="include-inactive" type="checkbox" checked /> Include removed items</label>
+            </div>
+            <div class="filter-actions">
+                <a href="/changelog" id="clear-filters" class="button button-secondary">Clear</a>
+                {% include 'saved_views.html' %}
+            </div>
         </div>
+        <p id="filter-status" role="status"></p>
 
+        <p id="visit-status" role="status" aria-live="polite"></p>
         <div id="changelog-content">
             <div class="loading-indicator"><div class="spinner"></div><span>Loading changelog...</span></div>
         </div>
@@ -52,6 +61,8 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/changelog-render.js"></script>
-<script src="/static/changelog.js"></script>
+<script src="/static/changelog-render.js?v=automatic-visit-v2"></script>
+<script src="/static/checkpoint.js?v=automatic-visit-v2"></script>
+<script src="/static/saved-views.js?v=compact-views-v2"></script>
+<script src="/static/changelog.js?v=automatic-visit-v2"></script>
 {% endblock %}

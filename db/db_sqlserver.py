@@ -10,13 +10,17 @@ from typing import Iterable, Any, Tuple, Dict, Callable, Iterator
 import urllib.parse
 import secrets
 import logging
+import sys
+import pyodbc
 
 # ...existing code...
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete, update, text
+    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete, update, text,
+    CheckConstraint, UniqueConstraint
 )
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
+from sqlalchemy.exc import SQLAlchemyError
 
 # Retry decorator lives in lib/db_retry.py so raw-pyodbc pipeline scripts
 # can share the same Azure-SQL transient-error detection.
@@ -28,6 +32,8 @@ from lib.quarter_date import (
     parse_release_date_value as _parse_release_date_value,
     quarter_bounds as _quarter_bounds,
 )
+from lib.blog_feedback import blog_identity, valid_submission, FEEDBACK_RETENTION_DAYS
+from lib.insights import InsightsQuery, PAGE_SIZE
 
 naming_convention = {
     "ix": "ix_%(column_0_label)s",
@@ -69,6 +75,84 @@ class ReleaseItemModel(Base):
     release_vector = Column(Text, nullable=True)
     # Whether this release is still present on the Fabric roadmap
     active = Column(Boolean, nullable=False, server_default='1', default=True)
+
+
+class BlogMatchFeedbackModel(Base):
+    __tablename__ = "blog_match_feedback"
+    __table_args__ = (
+        UniqueConstraint("release_item_id", "blog_key", "voter_key", name="uq_blog_match_feedback_pair_voter"),
+        CheckConstraint("vote IN ('helpful', 'not_related')", name="vote"),
+    )
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    # Deliberately no FK: ingestion/removal must not delete feedback history.
+    release_item_id = Column(String(36), nullable=False)
+    blog_key = Column(String(64), nullable=False)
+    blog_url = Column(String(1000), nullable=False)
+    voter_key = Column(String(64), nullable=False)
+    vote = Column(String(11), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class FeedbackReleaseNotFound(ValueError):
+    pass
+
+
+class FeedbackStaleMatch(ValueError):
+    pass
+
+
+@retry_on_transient_errors()
+def record_blog_match_feedback(engine, release_id, blog_url, vote, voter_key):
+    """Verify and upsert a vote atomically, without changing matching data."""
+    if not valid_submission(release_id, blog_url, vote, voter_key):
+        raise ValueError("Invalid blog feedback")
+    identity = blog_identity(blog_url)
+    assert identity is not None
+    blog_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    voter_hash = hashlib.sha256(voter_key.encode("ascii")).hexdigest()
+    now = datetime.utcnow()
+    with session_scope(engine) as session:
+        with session.begin():
+            # Serialize votes for a release and hold its match stable until commit.
+            release = session.execute(
+                select(ReleaseItemModel)
+                .where(ReleaseItemModel.release_item_id == release_id)
+                .with_hint(ReleaseItemModel, "WITH (UPDLOCK, HOLDLOCK)", dialect_name="mssql")
+            ).scalar_one_or_none()
+            if release is None:
+                raise FeedbackReleaseNotFound()
+            if not release.blog_title or blog_identity(release.blog_url) != identity:
+                raise FeedbackStaleMatch()
+            previous = session.execute(
+                select(BlogMatchFeedbackModel).where(
+                    BlogMatchFeedbackModel.release_item_id == release_id,
+                    BlogMatchFeedbackModel.blog_key == blog_key,
+                    BlogMatchFeedbackModel.voter_key == voter_hash,
+                )
+            ).scalar_one_or_none()
+            if previous is None:
+                session.add(BlogMatchFeedbackModel(
+                    release_item_id=release_id, blog_key=blog_key, blog_url=blog_url,
+                    voter_key=voter_hash, vote=vote, created_at=now, updated_at=now,
+                ))
+                status = "recorded"
+            else:
+                status = "unchanged" if previous.vote == vote else "changed"
+                previous.vote = vote
+                if status == "changed":
+                    previous.updated_at = now
+        return status
+
+
+@retry_on_transient_errors()
+def prune_blog_match_feedback(engine):
+    """Remove feedback beyond the documented retention window."""
+    with session_scope(engine) as session:
+        with session.begin():
+            session.execute(delete(BlogMatchFeedbackModel).where(
+                BlogMatchFeedbackModel.updated_at < datetime.utcnow() - timedelta(days=FEEDBACK_RETENTION_DAYS)
+            ))
 
 
 class EmailSubscriptionModel(Base):
@@ -161,7 +245,7 @@ def _is_transient_sql_azure_error(exc: Exception) -> bool:
 # callers that still import these symbols from db.db_sqlserver.
 
 
-def make_engine(conn_str: str | None = None):
+def make_engine(conn_str: str | None = None, **engine_options):
     """
     Build a SQLAlchemy engine. Prefer to pass a DSN or set SQLSERVER_CONN env var.
     Example env value:
@@ -178,7 +262,9 @@ def make_engine(conn_str: str | None = None):
     logger.debug("SQLAlchemy connection string: %s", sanitized_conn)
     # fast_executemany helps bulk inserts with pyodbc; pool_pre_ping detects dead connections
     # pool_recycle ensures connections are periodically refreshed
-    return create_engine(sanitized_conn, fast_executemany=True, future=True, pool_pre_ping=True, pool_recycle=3600)
+    options = dict(fast_executemany=True, future=True, pool_pre_ping=True, pool_recycle=3600)
+    options.update(engine_options)
+    return create_engine(sanitized_conn, **options)
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +471,154 @@ def _map_to_model_kwargs(item: Any) -> Dict[str, Any]:
         _get(item, "ReleaseItemID", "release_item_id") or uuid.uuid4()
     )
     return kwargs
+
+
+def _binary_text_sql(column: str) -> str:
+    """Compare fixed-schema SQL expressions independently of database collation."""
+    return f"CAST({column} AS nvarchar(max)) COLLATE Latin1_General_100_BIN2"
+
+
+def _insights_sql():
+    # Identifiers come only from the application's fixed tracked-field schema.
+    fields = [spec.model_attr for spec in _RELEASE_FIELDS]
+    columns = ", ".join(fields)
+    lag = ",\n".join(
+        f"LAG({name}) OVER (PARTITION BY release_item_id ORDER BY ValidFrom, ValidTo) AS p_{name}"
+        for name in fields + ["active", "ValidFrom"]
+    )
+
+    def comparable(name, previous=False):
+        column = ("p_" if previous else "") + name
+        expression = _binary_text_sql(column)
+        return f"COALESCE({expression}, N'')" if name in ("feature_name", "feature_description") else expression
+
+    changed = ", ".join(comparable(name) for name in fields)
+    previous = ", ".join(comparable(name, True) for name in fields)
+    return text(f"""
+    WITH Versions AS (
+        SELECT release_item_id, {columns}, active, ValidFrom, ValidTo
+        FROM dbo.release_items FOR SYSTEM_TIME FROM :baseline TO :end
+    ), Diffs AS (
+        SELECT *, {lag} FROM Versions
+    ), Classified AS (
+        SELECT *,
+            COALESCE(NULLIF(product_name, ''), 'Unknown product') AS product,
+            CASE WHEN p_ValidFrom IS NULL THEN 'addition'
+                 WHEN active = 0 AND p_active = 1 THEN 'removal'
+                 WHEN active = 1 AND p_active = 0 THEN 'restoration'
+                 ELSE 'edit' END AS kind,
+            CASE WHEN p_ValidFrom IS NOT NULL AND EXISTS (
+                SELECT release_status, release_type, release_status_value, release_type_value
+                EXCEPT SELECT p_release_status, p_release_type, p_release_status_value, p_release_type_value
+            ) THEN 1 ELSE 0 END AS status_changed,
+            CASE WHEN p_ValidFrom IS NOT NULL AND EXISTS (
+                SELECT release_date EXCEPT SELECT p_release_date
+            ) THEN 1 ELSE 0 END AS target_changed
+        FROM Diffs
+        WHERE ValidFrom >= :start AND ValidFrom < :end
+          AND (p_ValidFrom IS NULL OR active <> p_active OR EXISTS (
+              SELECT {changed} EXCEPT SELECT {previous}
+          ))
+    ), Events AS (
+        SELECT * FROM Classified WHERE :product IS NULL OR product = :product
+    ), Upcoming AS (
+        SELECT release_item_id, feature_name,
+            COALESCE(NULLIF(product_name, ''), 'Unknown product') AS product_name,
+            release_status, release_type, release_date,
+            CASE WHEN release_date IS NULL THEN 'unknown'
+                 ELSE CONCAT(YEAR(release_date), '-Q', DATEPART(quarter, release_date)) END AS bucket
+        FROM dbo.release_items
+        WHERE active = 1 AND LOWER(COALESCE(release_status, '')) <> 'shipped'
+          AND (release_date IS NULL OR release_date >= :quarter_start)
+          AND (:product IS NULL OR COALESCE(NULLIF(product_name, ''), 'Unknown product') = :product)
+    ), Detail AS (
+        SELECT release_item_id, feature_name, product AS product_name, ValidFrom AS observed_at,
+            kind, p_release_status AS previous_status, release_status,
+            p_release_type AS previous_type, release_type,
+            p_release_date AS previous_target, release_date AS revised_target,
+            status_changed, target_changed, CAST(NULL AS varchar(10)) AS bucket
+        FROM Events
+        WHERE :metric <> 'upcoming'
+          AND (:metric = 'all' OR kind = :metric
+               OR (:metric = 'status' AND status_changed = 1)
+               OR (:metric = 'target' AND target_changed = 1))
+          AND (:bucket IS NULL OR CONVERT(char(10), ValidFrom, 23) = :bucket)
+        UNION ALL
+        SELECT release_item_id, feature_name, product_name, NULL, 'upcoming',
+            NULL, release_status, NULL, release_type, NULL, release_date, 0, 0, bucket
+        FROM Upcoming WHERE :metric = 'upcoming' AND (:bucket IS NULL OR bucket = :bucket)
+    )
+    SELECT
+        JSON_QUERY(ISNULL((SELECT product AS product_name, kind, COUNT_BIG(*) AS events,
+                    COUNT(DISTINCT release_item_id) AS features
+                    FROM Events GROUP BY product, kind ORDER BY product, kind
+                    FOR JSON PATH), N'[]')) AS activity,
+        JSON_QUERY(ISNULL((SELECT CONVERT(char(10), ValidFrom, 23) AS day,
+                    COUNT_BIG(*) AS events, COUNT(DISTINCT release_item_id) AS features
+                    FROM Events WHERE status_changed = 1
+                    GROUP BY CONVERT(char(10), ValidFrom, 23) ORDER BY day
+                    FOR JSON PATH), N'[]')) AS transitions,
+        (SELECT COUNT_BIG(*) FROM Events WHERE target_changed = 1) AS target_changes,
+        JSON_QUERY(ISNULL((SELECT bucket, COUNT_BIG(*) AS features FROM Upcoming
+                    GROUP BY bucket ORDER BY bucket FOR JSON PATH), N'[]')) AS upcoming,
+        JSON_QUERY(ISNULL((SELECT name FROM (
+                    SELECT COALESCE(NULLIF(product_name, ''), 'Unknown product') AS name
+                    FROM dbo.release_items FOR SYSTEM_TIME FROM :baseline TO :end
+                    UNION SELECT COALESCE(NULLIF(product_name, ''), 'Unknown product')
+                    FROM dbo.release_items) names ORDER BY name FOR JSON PATH), N'[]')) AS products,
+        JSON_QUERY((SELECT MIN(ValidFrom) AS earliest_version_in_query,
+                    (SELECT MAX(ValidFrom) FROM dbo.release_items) AS last_data_write
+                    FROM Versions FOR JSON PATH, INCLUDE_NULL_VALUES, WITHOUT_ARRAY_WRAPPER)) AS coverage,
+        JSON_QUERY((SELECT (SELECT COUNT_BIG(*) FROM Detail) AS total,
+                    JSON_QUERY(ISNULL((SELECT * FROM Detail
+                        ORDER BY observed_at DESC, release_item_id, kind
+                        OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+                        FOR JSON PATH, INCLUDE_NULL_VALUES), N'[]')) AS items
+                    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)) AS details
+    FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
+    OPTION (MAXDOP 2)
+    """)
+
+
+@retry_on_transient_errors(max_attempts=2, initial_delay=0.5, max_delay=1.0)
+def get_insights(engine, query: InsightsQuery):
+    """Aggregate every retained content transition, with bounded detail pagination.
+
+    One overlapping baseline version per feature supplies the predecessor at the
+    UTC start boundary. Filtering products happens *after* LAG so moves retain
+    their real predecessor. Pipeline-only columns are deliberately never diffed.
+    """
+    if query.days not in (30, 90) or query.end - query.start != timedelta(days=query.days):
+        raise ValueError("Insights requires a 30- or 90-day window")
+    if not 1 <= query.page <= 200:
+        raise ValueError("Insights page is out of bounds")
+    today = datetime.utcnow().date()
+    params = {
+        "baseline": datetime.combine(query.start, datetime.min.time()) - timedelta(microseconds=1),
+        "start": datetime.combine(query.start, datetime.min.time()),
+        "end": datetime.combine(query.end, datetime.min.time()),
+        "quarter_start": date(today.year, ((today.month - 1) // 3) * 3 + 1, 1),
+        "product": query.product_name, "metric": query.metric, "bucket": query.bucket,
+        "offset": (query.page - 1) * PAGE_SIZE, "limit": PAGE_SIZE,
+    }
+    with engine.connect() as conn:
+        driver = conn.connection.driver_connection
+        old_timeout = driver.timeout
+        driver.timeout = 15
+        try:
+            # FOR JSON can split a large result into multiple rows.
+            payload = "".join(row[0] for row in conn.execute(_insights_sql(), params))
+            return json.loads(payload)
+        finally:
+            original_error = sys.exception()
+            if not conn.invalidated:
+                try:
+                    driver.timeout = old_timeout
+                except pyodbc.Error as exc:
+                    logger.exception("Unable to restore insights query timeout")
+                    conn.invalidate(exc)
+                    if original_error is None:
+                        raise SQLAlchemyError("Unable to restore insights connection timeout") from exc
 
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
@@ -699,6 +933,9 @@ def get_changelog_with_changes(
     release_type: Optional[str] = None,
     release_status: Optional[str] = None,
     on_date: Optional[date] = None,
+    since: Optional[date] = None,
+    through: Optional[date] = None,
+    event_before: Optional[str] = None,
 ) -> List[Dict]:
     """Return changelog items with changed-column annotations in a single temporal-table query.
 
@@ -706,12 +943,12 @@ def get_changelog_with_changes(
     across ALL items modified within the window, returning one row per item
     with its most-recent change summary.
 
-    Two modes:
+    Display modes:
       * Window mode (default): items whose *current* ``last_modified`` falls
         within the trailing ``days`` window. The change summary describes each
         item's most recent content change.
-      * Exact-date mode (``on_date`` set): a **permanent, historical** view of
-        every content change that happened on that specific calendar day. This
+      * Legacy exact-date mode (``on_date`` set): the first matching content
+        version per feature for that specific ``last_modified`` day. This
         queries the temporal history (``FOR SYSTEM_TIME ALL``) for versions
         whose ``last_modified`` equals ``on_date``, so a given day's link keeps
         showing that day's changes even after the same items change again on a
@@ -723,7 +960,20 @@ def get_changelog_with_changes(
     filters is a closed whitelist (``_OPTIONAL_FILTERS``); callers cannot
     introduce new column names or SQL fragments. The static "active = 1"
     fragment carries no caller value.
+
+    Catch-up mode (since/through): all tracked-field temporal transitions in
+    the inclusive UTC ValidFrom date range, including multiple refreshes on
+    one day. Returned last_modified is the observed event day in this mode.
+    Filters apply to each event's values, not the feature's current state.
+    Vector/blog-only writes are excluded. Version 1 means first recorded
+    appearance, which may be the start of historical coverage.
     """
+    if since is not None and (through is None or through < since or on_date is not None):
+        raise ValueError("Catch-up requires an ordered since/through range without on_date")
+    if event_before is not None and (since is not None or on_date is not None):
+        raise ValueError("A visit snapshot cannot be combined with date/since")
+    events = since is not None or event_before is not None
+
     # Closed whitelist of (kwarg_name -> SQL fragment using a named bind
     # param). Every entry is a literal string defined here, never derived
     # from caller input. To add a filter, add an entry; never splice values.
@@ -754,7 +1004,27 @@ def get_changelog_with_changes(
     # Mode-dependent fragments. Both branches use only literal SQL plus named
     # bind params (never spliced caller values), preserving the parameterized
     # contract documented above.
-    if on_date is not None:
+    if event_before is not None:
+        bind_values["event_before"] = event_before
+        item_source = "dbo.release_items FOR SYSTEM_TIME ALL"
+        date_predicate = """ValidFrom >= DATEADD(day, -90, CONVERT(datetime2(7), :event_before, 126))
+                           AND ValidFrom < CONVERT(datetime2(7), :event_before, 126)"""
+        selection_cte = f"""
+    Selected AS (
+        SELECT h.release_item_id, h.VersionNum AS ContentVer
+        FROM Hist h WHERE {date_predicate}
+    ),"""
+    elif since is not None:
+        bind_values.update(since=since, through=through)
+        item_source = "dbo.release_items FOR SYSTEM_TIME ALL"
+        date_predicate = "ValidFrom >= :since AND ValidFrom < DATEADD(day, 1, :through)"
+        selection_cte = """
+    Selected AS (
+        SELECT h.release_item_id, h.VersionNum AS ContentVer
+        FROM Hist h
+        WHERE h.ValidFrom >= :since AND h.ValidFrom < DATEADD(day, 1, :through)
+    ),"""
+    elif on_date is not None:
         # Exact-date / historical mode: select the item set from temporal
         # history so items that later change again still appear for this day,
         # and pick each item's content-change version *for that day*.
@@ -791,12 +1061,40 @@ def get_changelog_with_changes(
         GROUP BY h.release_item_id
     ),"""
 
+    # EXCEPT compares NULLs safely and ignores vector/blog-only versions.
+    text_fields = (
+        "release_date", "release_type", "release_status", "feature_description",
+        "feature_name", "product_name", "release_semester",
+    )
+    current_text = ", ".join(_binary_text_sql(f"d.{name}") for name in text_fields)
+    previous_text = ", ".join(_binary_text_sql(f"d.p_{name}") for name in text_fields)
+    text_diffs = {
+        name: f"{_binary_text_sql(f'd.{name}')} <> {_binary_text_sql(f'd.p_{name}')}"
+        for name in text_fields
+    }
+    event_predicate = f"""
+    WHERE (d.VersionNum = 1 OR EXISTS (
+        SELECT {current_text}, d.active
+        EXCEPT
+        SELECT {previous_text}, d.p_active
+    ))
+    """ if events else ""
+    event_filters = f" {filter_clause}" if events else ""
+    # Legacy removal suppression can preserve last_modified. Temporal UTC
+    # transition dates must drive catch-up without changing normal feeds.
+    event_day = "CAST(d.ValidFrom AS date)" if events else "d.last_modified"
+    event_time = "CONVERT(varchar(33), d.ValidFrom, 126) AS observed_at," if event_before else ""
+    event_limit = " TOP (10001)" if event_before else ""
+    # Keep the version overlapping the lower boundary as LAG's predecessor,
+    # rather than processing every historical version of the selected features.
+    history_bound = """AND ValidTo >= DATEADD(day, -90, CONVERT(datetime2(7), :event_before, 126))
+                       AND ValidFrom < CONVERT(datetime2(7), :event_before, 126)""" if event_before else ""
     sql = text(f"""
     WITH Hist AS (
         SELECT
             release_item_id, release_date, release_type, release_status,
             feature_description, feature_name, product_name, last_modified, active,
-            release_semester, vso_item, row_hash,
+            release_semester, vso_item, row_hash, ValidFrom,
             ROW_NUMBER() OVER (PARTITION BY release_item_id ORDER BY ValidFrom) AS VersionNum
         FROM dbo.release_items FOR SYSTEM_TIME ALL
         WHERE release_item_id IN (
@@ -804,6 +1102,7 @@ def get_changelog_with_changes(
             WHERE {date_predicate}
             {filter_clause}
         )
+        {history_bound}
     ),{selection_cte}
     Diffs AS (
         SELECT h.*,
@@ -818,14 +1117,15 @@ def get_changelog_with_changes(
             LAG(row_hash)            OVER (PARTITION BY h.release_item_id ORDER BY h.VersionNum) AS p_row_hash
         FROM Hist h
     )
-    SELECT
+    SELECT{event_limit}
         d.release_item_id,
         d.feature_name,
         d.product_name,
         d.release_type,
         d.release_status,
         d.release_date,
-        d.last_modified,
+        {event_day} AS last_modified,
+        {event_time}
         d.active,
         ChangedColumns = CASE
             WHEN d.VersionNum = 1 THEN 'Added to roadmap'
@@ -833,7 +1133,7 @@ def get_changelog_with_changes(
                 (SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
                 FROM (
                     SELECT 1 AS ColOrder,
-                           CASE WHEN (d.release_date <> d.p_release_date)
+                           CASE WHEN ({text_diffs["release_date"]})
                                  OR (d.release_date IS NULL AND d.p_release_date IS NOT NULL)
                                  OR (d.release_date IS NOT NULL AND d.p_release_date IS NULL)
                                 THEN CONCAT('Release Date ',
@@ -843,7 +1143,7 @@ def get_changelog_with_changes(
                            END AS ColName
                     UNION ALL
                     SELECT 2,
-                           CASE WHEN (d.release_type <> d.p_release_type)
+                           CASE WHEN ({text_diffs["release_type"]})
                                  OR (d.release_type IS NULL AND d.p_release_type IS NOT NULL)
                                  OR (d.release_type IS NOT NULL AND d.p_release_type IS NULL)
                                 THEN CONCAT('Release Type ',
@@ -853,7 +1153,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 3,
-                           CASE WHEN (d.release_status <> d.p_release_status)
+                           CASE WHEN ({text_diffs["release_status"]})
                                  OR (d.release_status IS NULL AND d.p_release_status IS NOT NULL)
                                  OR (d.release_status IS NOT NULL AND d.p_release_status IS NULL)
                                 THEN CONCAT('Release Status ',
@@ -863,7 +1163,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 4,
-                           CASE WHEN (d.feature_description <> d.p_feature_description)
+                           CASE WHEN ({text_diffs["feature_description"]})
                                  OR (d.feature_description IS NULL AND d.p_feature_description IS NOT NULL)
                                  OR (d.feature_description IS NOT NULL AND d.p_feature_description IS NULL)
                                 THEN 'Description updated'
@@ -881,7 +1181,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 6,
-                           CASE WHEN (d.feature_name <> d.p_feature_name)
+                           CASE WHEN ({text_diffs["feature_name"]})
                                  OR (d.feature_name IS NULL AND d.p_feature_name IS NOT NULL)
                                  OR (d.feature_name IS NOT NULL AND d.p_feature_name IS NULL)
                                 THEN CONCAT('Name ',
@@ -891,7 +1191,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 7,
-                           CASE WHEN (d.product_name <> d.p_product_name)
+                           CASE WHEN ({text_diffs["product_name"]})
                                  OR (d.product_name IS NULL AND d.p_product_name IS NOT NULL)
                                  OR (d.product_name IS NOT NULL AND d.p_product_name IS NULL)
                                 THEN CONCAT('Workload ',
@@ -901,7 +1201,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 8,
-                           CASE WHEN (d.release_semester <> d.p_release_semester)
+                           CASE WHEN ({text_diffs["release_semester"]})
                                  OR (d.release_semester IS NULL AND d.p_release_semester IS NOT NULL)
                                  OR (d.release_semester IS NOT NULL AND d.p_release_semester IS NULL)
                                 THEN CONCAT('Semester ',
@@ -917,7 +1217,8 @@ def get_changelog_with_changes(
         END
     FROM Diffs d
     INNER JOIN Selected l ON d.release_item_id = l.release_item_id AND d.VersionNum = l.ContentVer
-    ORDER BY d.last_modified DESC, d.product_name, d.feature_name
+    {event_predicate}{event_filters}
+    ORDER BY {event_day} DESC, d.product_name, d.feature_name, d.release_item_id, d.VersionNum
     """)
 
     with engine.connect() as conn:
@@ -939,7 +1240,38 @@ def get_changelog_with_changes(
             "active": row.get("active"),
             "changed_columns": changed_list,
         })
+        if event_before:
+            # Keep all seven datetime2 fractional digits; Python/JS dates would
+            # otherwise collapse distinct SQL Server temporal event times.
+            observed = row["observed_at"]
+            items[-1]["observed_at"] = observed + "Z"
+            identity = json.dumps([row["release_item_id"], observed], separators=(",", ":"))
+            items[-1]["event_id"] = hashlib.sha256(identity.encode("utf-8")).hexdigest()
     return items
+
+
+@retry_on_transient_errors()
+def get_changelog_visit_snapshot(engine) -> Dict:
+    """Bounded committed-event manifest, not a visitor record or timestamp-only cursor.
+
+    SQL Server temporal periods use transaction BEGIN time. Comparing event IDs
+    across complete snapshots also catches older-started transactions that commit
+    after an earlier visit. The server cutoff is exclusive and never client-clock
+    derived. Overflow is explicitly incomplete and must never be acknowledged.
+    """
+    with engine.connect() as conn:
+        bounds = conn.execute(text("""
+            DECLARE @cutoff datetime2(7) = SYSUTCDATETIME();
+            SELECT CONVERT(varchar(33), @cutoff, 126) AS cutoff,
+                   CONVERT(varchar(33), DATEADD(day, -90, @cutoff), 126) AS window_start
+        """)).mappings().one()
+    items = get_changelog_with_changes(engine, event_before=bounds["cutoff"])
+    return {
+        "cutoff": bounds["cutoff"] + "Z",
+        "window_start": bounds["window_start"] + "Z",
+        "complete": len(items) <= 10000,
+        "items": items,
+    }
 
 
 def generate_secure_token() -> str:
@@ -1707,7 +2039,7 @@ def get_subscriptions_with_changed_watches(engine) -> List[Tuple[EmailSubscripti
     ]
 
 @retry_on_transient_errors(max_attempts=5, initial_delay=1.0, backoff=2.0, max_delay=60.0)
-def fetch_history_rows(engine, release_item_id: str):
+def fetch_history_rows(engine, release_item_id: str, limit: Optional[int] = None):
     """Call stored procedure to retrieve history rows and shape output.
     Exposed fields: changed_columns (array) and last_modified for each version.
     We attempt to split ChangedColumns on comma, trimming whitespace.
@@ -1721,7 +2053,14 @@ def fetch_history_rows(engine, release_item_id: str):
         cursor.execute("EXEC [dbo].[GetReleaseItemHistoryById] @ReleaseItemId = ?", (release_item_id,))
         # Expect: VersionNum, release_item_id, ChangedColumns, last_modified
         out = []
-        for row_dict in _rows_to_dicts(cursor):
+        if limit is None:
+            history_rows = _rows_to_dicts(cursor)
+        else:
+            if not 1 <= limit <= 51:
+                raise ValueError("History limit must be between 1 and 51")
+            columns = [column[0] for column in cursor.description]
+            history_rows = [dict(zip(columns, row)) for row in cursor.fetchmany(limit)]
+        for row_dict in history_rows:
             changed_raw = row_dict.get("ChangedColumns") or ""
             # Convert comma separated to list (ignore empty) preserving order
             changed_list = [c.strip() for c in changed_raw.split(',') if c and c.strip()]
