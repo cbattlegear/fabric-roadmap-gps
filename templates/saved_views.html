@@ -1,0 +1,27 @@
+<div class="saved-views" aria-label="Saved views">
+    <div class="saved-view-controls">
+        <div class="filter-group">
+            <label for="saved-view-select">Saved views</label>
+            <select id="saved-view-select" class="filter-select" aria-describedby="view-help">
+                <option value="">Choose a saved view</option>
+            </select>
+        </div>
+        <div class="filter-group">
+            <label for="view-name">View name</label>
+            <input id="view-name" class="filter-select" type="text" maxlength="80" placeholder="e.g. Weekly data engineering" />
+        </div>
+        <button id="save-view" class="button button-secondary" type="button">Save view</button>
+        <button id="rename-view" class="button button-secondary" type="button" disabled>Rename</button>
+        <button id="delete-view" class="button button-secondary" type="button" disabled>Delete</button>
+        <button id="copy-view-link" class="button button-primary" type="button">Copy view link</button>
+    </div>
+    <p id="view-help">Names and saved views stay in this browser. Share a live filtered view, not a snapshot: “Last N days” moves with the date. No account needed.</p>
+    <p id="filter-status" role="status"></p>
+    <p id="view-status" role="status" aria-live="polite"></p>
+    <p id="view-error" role="alert"></p>
+    <button id="reset-saved-views" class="button button-secondary" type="button" hidden>Reset saved views</button>
+    <div id="copy-view-recovery" hidden>
+        <label for="copy-view-url">Copy this view link manually</label>
+        <input id="copy-view-url" class="filter-select" type="text" readonly />
+    </div>
+</div>

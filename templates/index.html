@@ -93,9 +93,13 @@ Get real-time feeds and explore what's coming next.
                                 <div class="search-spinner" id="search-spinner"></div>
                             </div>
                         </div>
-                        <!-- <button id="apply-filters" class="button button-primary">Apply Filters</button> -->
+                        <div class="filter-group">
+                            <label for="include-inactive">Removed items</label>
+                            <label><input id="include-inactive" type="checkbox" checked /> Include removed items</label>
+                        </div>
                         <button id="clear-filters" class="button button-secondary">Clear</button>
                     </div>
+                    {% include 'saved_views.html' %}
                     
                     <div class="loading-indicator" id="loading-indicator" style="display: none;">
                         <div class="spinner"></div>
@@ -119,5 +123,6 @@ Get real-time feeds and explore what's coming next.
         </div>
 {% endblock %}
 {% block scripts %}
-<script src="/static/app.js?v=description-v1"></script>
+<script src="/static/saved-views.js?v=1"></script>
+<script src="/static/app.js?v=saved-views-v1"></script>
 {% endblock %}

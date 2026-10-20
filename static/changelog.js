@@ -7,6 +7,7 @@ class Changelog {
     async init() {
         await this.fetchVersion();
         await this.loadFilterOptions();
+        this.views = new RoadmapViews.Controller('/changelog', () => this.loadChangelog());
         this.restoreFiltersFromUrl();
         this.bindEvents();
         await this.loadChangelog();
@@ -29,7 +30,6 @@ class Changelog {
             this.populateSelect('product-filter', data.product_names);
             this.populateSelect('type-filter', data.release_types);
             this.populateSelect('status-filter', data.release_statuses);
-            this.restoreFiltersFromUrl();
         } catch (e) {
             console.error('Error loading filter options:', e);
         }
@@ -47,42 +47,19 @@ class Changelog {
     }
 
     getActiveFilters() {
-        return {
-            days: document.getElementById('days-select').value,
-            product_name: document.getElementById('product-filter').value,
-            release_type: document.getElementById('type-filter').value,
-            release_status: document.getElementById('status-filter').value,
-        };
+        return this.views.capture();
     }
 
     syncFiltersToUrl() {
-        const filters = this.getActiveFilters();
-        const params = new URLSearchParams();
-        if (filters.days && filters.days !== '30') params.set('days', filters.days);
-        if (filters.product_name) params.set('product_name', filters.product_name);
-        if (filters.release_type) params.set('release_type', filters.release_type);
-        if (filters.release_status) params.set('release_status', filters.release_status);
-        const qs = params.toString();
-        history.replaceState(null, '', qs ? `/changelog?${qs}` : '/changelog');
+        this.views.sync();
     }
 
     restoreFiltersFromUrl() {
-        const params = new URLSearchParams(location.search);
-        const map = {
-            'days': 'days-select',
-            'product_name': 'product-filter',
-            'release_type': 'type-filter',
-            'release_status': 'status-filter',
-        };
-        for (const [param, elId] of Object.entries(map)) {
-            const val = params.get(param);
-            const el = document.getElementById(elId);
-            if (val && el) el.value = val;
-        }
+        this.views.restore(location.search);
     }
 
     bindEvents() {
-        const selects = ['days-select', 'product-filter', 'type-filter', 'status-filter'];
+        const selects = ['days-select', 'product-filter', 'type-filter', 'status-filter', 'include-inactive'];
         selects.forEach(id => {
             const el = document.getElementById(id);
             if (!el) return;
@@ -100,6 +77,7 @@ class Changelog {
                 document.getElementById('product-filter').value = '';
                 document.getElementById('type-filter').value = '';
                 document.getElementById('status-filter').value = '';
+                document.getElementById('include-inactive').checked = true;
                 this.syncFiltersToUrl();
                 this.loadChangelog();
             });
@@ -107,23 +85,28 @@ class Changelog {
     }
 
     async loadChangelog() {
+        if (this.request) this.request.abort();
+        const request = new AbortController();
+        this.request = request;
         const container = document.getElementById('changelog-content');
         container.innerHTML = '<div class="loading-indicator"><div class="spinner"></div><span>Loading changelog...</span></div>';
 
         const filters = this.getActiveFilters();
         const params = new URLSearchParams();
         params.set('days', filters.days || '30');
-        params.set('include_inactive', 'true');
+        params.set('include_inactive', filters.include_inactive);
         if (filters.product_name) params.set('product_name', filters.product_name);
         if (filters.release_type) params.set('release_type', filters.release_type);
         if (filters.release_status) params.set('release_status', filters.release_status);
         if (this.dataVersion) params.set('v', this.dataVersion);
 
         try {
-            const response = await fetch(`/api/changelog?${params.toString()}`);
+            const response = await fetch(`/api/changelog?${params.toString()}`, { signal: request.signal });
             const data = await response.json();
+            if (request !== this.request) return;
             this.render(data.days || []);
         } catch (e) {
+            if (request !== this.request || e.name === 'AbortError') return;
             container.innerHTML = '<div class="no-results"><p>Error loading changelog. Please try again later.</p></div>';
         }
     }
