@@ -112,6 +112,18 @@ function setup(page = '/') {
 }
 
 function record(views) { return JSON.stringify({ version: 1, views }); }
+
+test('storage errors reveal the compact Views panel instead of hiding recovery', () => {
+    const env = setup();
+    let opened = 0;
+    env.elements['saved-views-panel'] = { showPopover() { opened++; } };
+    env.sandbox.localStorage.getItem = () => { throw new Error('denied'); };
+    env.controller();
+    assert.equal(opened, 1);
+    assert.match(env.elements['view-error'].textContent, /could not be read or written/);
+    assert.equal(env.elements['reset-saved-views'].hidden, false);
+});
+
 function view(overrides = {}) {
     return { id: 'one', name: 'A view', path: '/', filters: { q: 'lake' }, ...overrides };
 }

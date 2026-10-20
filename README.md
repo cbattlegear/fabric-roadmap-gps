@@ -111,6 +111,11 @@ saved view adds a history entry; ordinary filter edits replace the current entry
 as before. Editing filters clears the saved-view selection so the same view can
 be reopened directly. Reopening a saved roadmap view also resets pagination.
 
+Saved views are managed from the compact **Views** disclosure beside Clear on
+the roadmap and full changelog. Its native popover keeps save/open/rename/delete
+and link-copy controls out of the closed filter layout, with Escape and outside
+click dismissal. Storage errors reveal recovery controls when needed.
+
 Frontend behavior checks use Node.js 22's built-in test runner, launched by
 pytest (`tests/test_saved_views.py`). No npm dependencies, network, browser, or
 credentials are required. Install Node.js 22+ alongside Python to run them;

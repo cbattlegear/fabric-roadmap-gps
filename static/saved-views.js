@@ -100,6 +100,7 @@
         storageError() {
             this.error.textContent = 'Saved views could not be read or written. Allow browser storage, or reset saved views if the data is damaged. Copy view link still works.';
             document.getElementById('reset-saved-views').hidden = false;
+            document.getElementById('saved-views-panel')?.showPopover?.();
         }
 
         refresh() {

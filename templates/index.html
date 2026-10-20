@@ -48,8 +48,7 @@ Get real-time feeds and explore what's coming next.
                 </div>
             </section>
 
-            <section class="recent-changes-section">
-                <h2 class="section-title">Recent Changes</h2>
+            <section class="recent-changes-section" aria-label="Recent roadmap changes">
                 <div class="recent-changes-content">
                     <div class="filters-container">
                         <div class="filter-group">
@@ -97,9 +96,12 @@ Get real-time feeds and explore what's coming next.
                             <label for="include-inactive">Removed items</label>
                             <label><input id="include-inactive" type="checkbox" checked /> Include removed items</label>
                         </div>
-                        <button id="clear-filters" class="button button-secondary">Clear</button>
+                        <div class="filter-actions">
+                            <button id="clear-filters" class="button button-secondary">Clear</button>
+                            {% include 'saved_views.html' %}
+                        </div>
                     </div>
-                    {% include 'saved_views.html' %}
+                    <p id="filter-status" role="status"></p>
                     
                     <div class="loading-indicator" id="loading-indicator" style="display: none;">
                         <div class="spinner"></div>
@@ -123,6 +125,6 @@ Get real-time feeds and explore what's coming next.
         </div>
 {% endblock %}
 {% block scripts %}
-<script src="/static/saved-views.js?v=1"></script>
+<script src="/static/saved-views.js?v=compact-views-v1"></script>
 <script defer src="/static/app.js?v=integration-v1"></script>
 {% endblock %}
