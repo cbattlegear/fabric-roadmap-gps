@@ -1931,6 +1931,17 @@ def inject_nav():
         {"label": "Subscribe", "url": "/subscribe"},
         {"label": "About", "url": "/about"},
     ]
+    active_section = {
+        "release_detail": "/",
+        "changelog_day_page": "/changelog",
+        "verify_email_page": "/subscribe",
+        "unsubscribe_page": "/subscribe",
+        "preferences_page": "/subscribe",
+    }.get(request.endpoint, request.path)
+    for item in nav_items:
+        item["current"] = None
+        if item["url"] == active_section:
+            item["current"] = "page" if request.path == item["url"] else "location"
     return {"nav_items": nav_items, "current_year": datetime.utcnow().year, "canonical_base": EMAIL_BASE_URL}
 
 

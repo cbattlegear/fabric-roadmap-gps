@@ -1220,6 +1220,11 @@ a:focus-visible {
 code { background: var(--fabric-neutral-grey-30); padding: 2px 4px; border-radius: 3px; font-size: 0.9em; }
 .nav-link { color: var(--fabric-primary); text-decoration: none; font-weight: 500; }
 .nav-link:hover { text-decoration: underline; }
+.header-nav .nav-link[aria-current] {
+  text-decoration-line: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: .2em;
+}
 
 .header h1 a {
   text-decoration: none;
