@@ -8,6 +8,9 @@ from typing import Optional, List
 
 from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory, url_for, abort
 from flask_limiter import Limiter
+from flask_limiter.errors import RateLimitExceeded
+from sqlalchemy.exc import SQLAlchemyError
+from werkzeug.exceptions import RequestEntityTooLarge
 from html import escape
 from markupsafe import Markup
 from email.utils import format_datetime
@@ -44,7 +47,9 @@ from db.db_sqlserver import (
     get_verify_email_context,
     EmailRateLimitExceeded,
     rotate_unsubscribe_token,
+    record_blog_match_feedback, FeedbackReleaseNotFound, FeedbackStaleMatch,
 )
+from lib.blog_feedback import blog_identity, valid_submission
 from lib.embeddings import get_embedding, is_available as embeddings_available
 from lib.description_format import render_description_html
 from lib.quarter_date import format_as_quarter
@@ -59,6 +64,7 @@ from lib.releases_api import (
 os.environ['OTEL_SERVICE_NAME'] = 'fabric-gps-web-frontend'
 
 app = Flask(__name__)
+app.jinja_env.globals["blog_identity"] = blog_identity
 
 
 @app.template_filter('description_html')
@@ -139,7 +145,7 @@ if os.getenv("CURRENT_ENVIRONMENT") != "development" and not EMAIL_BASE_URL.star
         "Set CANONICAL_HOST or BASE_URL to an https:// URL."
     )
 
-_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/watch/", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch", "/api/send-preferences-link", "/dev/")
+_NO_CACHE_PATHS = ("/subscribe", "/verify-email", "/unsubscribe", "/preferences", "/watch/", "/api/subscribe", "/api/verify-email", "/api/preferences", "/api/watch", "/api/send-preferences-link", "/api/blog-feedback", "/dev/")
 
 
 # ---------------------------------------------------------------------------
@@ -686,6 +692,63 @@ def get_engine():
         ENGINE = make_engine()
         init_db(ENGINE)
     return ENGINE
+
+
+@app.post("/api/blog-feedback")
+@limiter.limit("20 per minute;100 per hour")
+def blog_feedback():
+    """Record anonymous evidence for review, never alter the match."""
+    origin = request.headers.get("Origin", "")
+    allowed_origins = {
+        f"{parts.scheme}://{parts.netloc}"
+        for parts in map(urllib.parse.urlsplit, (BASE_URL, EMAIL_BASE_URL))
+    }
+    if origin not in allowed_origins or request.headers.get("Sec-Fetch-Site") == "cross-site":
+        return jsonify(error="Cross-origin feedback is not allowed."), 403
+    if request.content_length is not None and request.content_length > 4096:
+        return jsonify(error="Feedback request is too large."), 413
+    if not request.is_json:
+        return jsonify(error="Feedback requires application/json."), 415
+    try:
+        raw_body = request.stream.read(4097)
+        if len(raw_body) > 4096:
+            return jsonify(error="Feedback request is too large."), 413
+        payload = json.loads(raw_body)
+    except RequestEntityTooLarge:
+        return jsonify(error="Feedback request is too large."), 413
+    except (ValueError, RecursionError):
+        return jsonify(error="Invalid feedback JSON."), 400
+    voter_key = request.headers.get("X-Feedback-Voter", "")
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"release_item_id", "blog_url", "vote"}
+        or not valid_submission(
+            payload.get("release_item_id"), payload.get("blog_url"), payload.get("vote"), voter_key
+        )
+    ):
+        return jsonify(error="Invalid release, blog URL, vote, or browser identifier."), 400
+    try:
+        status = record_blog_match_feedback(
+            get_engine(), payload["release_item_id"], payload["blog_url"], payload["vote"], voter_key
+        )
+    except FeedbackReleaseNotFound:
+        return jsonify(error="This release no longer exists. Refresh the page."), 404
+    except FeedbackStaleMatch:
+        return jsonify(error="This article match has changed. Refresh the page before voting."), 409
+    except SQLAlchemyError:
+        otelLogger.error("Blog feedback database operation failed.")
+        return jsonify(error="Feedback could not be saved. Please try again later."), 503
+    return jsonify(status=status, vote=payload["vote"])
+
+
+@app.errorhandler(RateLimitExceeded)
+def handle_rate_limit(error):
+    if request.path == "/api/blog-feedback":
+        response = jsonify(error="Too many votes. Please wait before trying again.")
+        response.status_code = 429
+        response.headers["Retry-After"] = "3600"
+        return response
+    return error.get_response()
 
 
 def _to_rfc2822(dt_or_date: Optional[date]) -> Optional[str]:

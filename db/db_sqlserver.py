@@ -13,7 +13,8 @@ import logging
 
 # ...existing code...
 from sqlalchemy import (
-    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete, update, text
+    create_engine, Column, String, Integer, Date, DateTime, Boolean, Text, MetaData, func, select, or_, delete, update, text,
+    CheckConstraint, UniqueConstraint
 )
 from typing import Iterable, Any, Tuple, Dict, Optional, List
 from sqlalchemy.orm import declarative_base, sessionmaker, Session
@@ -28,6 +29,7 @@ from lib.quarter_date import (
     parse_release_date_value as _parse_release_date_value,
     quarter_bounds as _quarter_bounds,
 )
+from lib.blog_feedback import blog_identity, valid_submission, FEEDBACK_RETENTION_DAYS
 
 naming_convention = {
     "ix": "ix_%(column_0_label)s",
@@ -69,6 +71,84 @@ class ReleaseItemModel(Base):
     release_vector = Column(Text, nullable=True)
     # Whether this release is still present on the Fabric roadmap
     active = Column(Boolean, nullable=False, server_default='1', default=True)
+
+
+class BlogMatchFeedbackModel(Base):
+    __tablename__ = "blog_match_feedback"
+    __table_args__ = (
+        UniqueConstraint("release_item_id", "blog_key", "voter_key", name="uq_blog_match_feedback_pair_voter"),
+        CheckConstraint("vote IN ('helpful', 'not_related')", name="vote"),
+    )
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    # Deliberately no FK: ingestion/removal must not delete feedback history.
+    release_item_id = Column(String(36), nullable=False)
+    blog_key = Column(String(64), nullable=False)
+    blog_url = Column(String(1000), nullable=False)
+    voter_key = Column(String(64), nullable=False)
+    vote = Column(String(11), nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+
+class FeedbackReleaseNotFound(ValueError):
+    pass
+
+
+class FeedbackStaleMatch(ValueError):
+    pass
+
+
+@retry_on_transient_errors()
+def record_blog_match_feedback(engine, release_id, blog_url, vote, voter_key):
+    """Verify and upsert a vote atomically, without changing matching data."""
+    if not valid_submission(release_id, blog_url, vote, voter_key):
+        raise ValueError("Invalid blog feedback")
+    identity = blog_identity(blog_url)
+    assert identity is not None
+    blog_key = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+    voter_hash = hashlib.sha256(voter_key.encode("ascii")).hexdigest()
+    now = datetime.utcnow()
+    with session_scope(engine) as session:
+        with session.begin():
+            # Serialize votes for a release and hold its match stable until commit.
+            release = session.execute(
+                select(ReleaseItemModel)
+                .where(ReleaseItemModel.release_item_id == release_id)
+                .with_hint(ReleaseItemModel, "WITH (UPDLOCK, HOLDLOCK)", dialect_name="mssql")
+            ).scalar_one_or_none()
+            if release is None:
+                raise FeedbackReleaseNotFound()
+            if not release.blog_title or blog_identity(release.blog_url) != identity:
+                raise FeedbackStaleMatch()
+            previous = session.execute(
+                select(BlogMatchFeedbackModel).where(
+                    BlogMatchFeedbackModel.release_item_id == release_id,
+                    BlogMatchFeedbackModel.blog_key == blog_key,
+                    BlogMatchFeedbackModel.voter_key == voter_hash,
+                )
+            ).scalar_one_or_none()
+            if previous is None:
+                session.add(BlogMatchFeedbackModel(
+                    release_item_id=release_id, blog_key=blog_key, blog_url=blog_url,
+                    voter_key=voter_hash, vote=vote, created_at=now, updated_at=now,
+                ))
+                status = "recorded"
+            else:
+                status = "unchanged" if previous.vote == vote else "changed"
+                previous.vote = vote
+                if status == "changed":
+                    previous.updated_at = now
+        return status
+
+
+@retry_on_transient_errors()
+def prune_blog_match_feedback(engine):
+    """Remove feedback beyond the documented retention window."""
+    with session_scope(engine) as session:
+        with session.begin():
+            session.execute(delete(BlogMatchFeedbackModel).where(
+                BlogMatchFeedbackModel.updated_at < datetime.utcnow() - timedelta(days=FEEDBACK_RETENTION_DAYS)
+            ))
 
 
 class EmailSubscriptionModel(Base):

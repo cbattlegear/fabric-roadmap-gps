@@ -45,7 +45,7 @@
                 <div class="change-description">{{ release.feature_description | description_html }}</div>
             </div>
 
-            {% if release.blog_title and release.blog_url %}
+            {% if release.blog_title and blog_identity(release.blog_url) %}
             <div class="modal-section blog-related-section" style="margin-top: var(--spacing-l);">
                 <h3>📰 Related Blog Article</h3>
                 <div class="blog-article-card">
@@ -57,6 +57,16 @@
                         </div>
                     </a>
                 </div>
+                <div class="blog-feedback" data-release-id="{{ release.release_item_id }}" data-blog-url="{{ release.blog_url }}" role="group" aria-label="Feedback on this related article">
+                    <span class="blog-feedback-label">Is this article related?</span>
+                    <div class="blog-feedback-actions">
+                        <button type="button" data-feedback-vote="helpful" aria-pressed="false">Helpful</button>
+                        <button type="button" data-feedback-vote="not_related" aria-pressed="false">Not related</button>
+                        <a href="/about#blog-feedback-privacy" class="blog-feedback-privacy">Privacy</a>
+                    </div>
+                    <span class="blog-feedback-status" role="status" aria-live="polite"></span>
+                </div>
+                <noscript>Enable JavaScript to send feedback about this article match.</noscript>
             </div>
             {% endif %}
 

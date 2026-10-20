@@ -7,7 +7,7 @@ import os
 from unidecode import unidecode
 
 from lib.release_item import ReleaseItem
-from db.db_sqlserver import make_engine, init_db, save_releases, deactivate_missing_releases
+from db.db_sqlserver import make_engine, init_db, save_releases, deactivate_missing_releases, prune_blog_match_feedback
 from lib.indexnow import submit_urls
 from lib.telemetry import init_telemetry
 
@@ -32,6 +32,7 @@ if __name__ == '__main__':
     engine = make_engine()
     # create table if missing
     init_db(engine)
+    prune_blog_match_feedback(engine)
 
     r = requests.get('https://roadmap.fabric.microsoft.com')
     r.raise_for_status()
