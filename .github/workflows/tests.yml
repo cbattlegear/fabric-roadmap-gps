@@ -23,6 +23,11 @@ jobs:
             requirements.txt
             requirements-dev.txt
 
+      - name: Set up Node for frontend behavior tests
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
       - name: Install ODBC system deps
         # pyodbc is in requirements.txt and links against unixodbc at install
         # time. We don't run any tests that hit SQL Server, but the wheel

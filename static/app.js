@@ -202,7 +202,7 @@ class RecentChanges {
         container.innerHTML = this.currentData.map(item => this.createChangeItem(item)).join('');
         container.querySelectorAll('.change-item').forEach(card => {
             card.addEventListener('click', (event) => {
-                if (event.target.closest('a')) return;
+                if (event.target.closest('a, button, .blog-feedback')) return;
                 const id = card.getAttribute('data-id');
                 window.location.href = `/release/${id}`;
             });
@@ -227,9 +227,9 @@ class RecentChanges {
         const removedBadge = isInactive ? '<span class="change-badge badge-removed">Removed</span>' : '';
 
         return `
-            <div class="change-item${inactiveClass}" data-id="${escapeHtml(item.release_item_id)}" role="button" tabindex="0" aria-label="View details for ${escapeHtml(item.feature_name || 'feature')}">
+            <div class="change-item${inactiveClass}" data-id="${escapeHtml(item.release_item_id)}">
                 <div class="change-header">
-                    <h3 class="change-title">${escapeHtml(item.feature_name || 'Unnamed Feature')}</h3>
+                    <h3 class="change-title"><a href="/release/${encodeURIComponent(item.release_item_id)}">${escapeHtml(item.feature_name || 'Unnamed Feature')}</a></h3>
                     <div class="change-badges">
                         ${removedBadge}
                         <span class="change-badge badge-product">${escapeHtml(item.product_name || 'Unknown')}</span>
@@ -244,8 +244,9 @@ class RecentChanges {
                 <div class="change-description">${item.feature_description_html || escapeHtml(item.feature_description || 'No description available.')}</div>
                 <div style="margin-top:.5rem; font-size:.75rem; display: flex; justify-content: space-between; align-items: center;">
                     <div class="change-link-inline" style="color: var(--fabric-primary);">Click for details ▸</div>
-                    ${item.blog_title && item.blog_url ? `<a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" style="color: var(--fabric-secondary); text-decoration: none; display: flex; align-items: center; gap: .25rem;" onclick="event.stopPropagation();" title="${escapeHtml(item.blog_title)}">📚 Related blog</a>` : ''}
+                    ${item.blog_title && window.BlogFeedback.validUrl(item.blog_url) ? `<a href="${escapeHtml(item.blog_url)}" target="_blank" rel="noopener noreferrer" style="color: var(--fabric-secondary); text-decoration: none; display: flex; align-items: center; gap: .25rem;" onclick="event.stopPropagation();" title="${escapeHtml(item.blog_title)}">📚 Related blog</a>` : ''}
                 </div>
+                ${item.blog_title ? window.BlogFeedback.markup(item.release_item_id, item.blog_url) : ''}
             </div>`;
     }
 

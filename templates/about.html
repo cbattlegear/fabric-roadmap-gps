@@ -58,6 +58,8 @@ Fabric GPS helps you track Microsoft Fabric roadmap changes quickly via filtered
                 <strong>AI-powered blog connections.</strong> We use Azure OpenAI embeddings and cosine similarity to automatically match 
                 releases with related articles from the <a href="https://community.fabric.microsoft.com/t5/Fabric-Updates-Blog/bg-p/fbc_fabricupdatesblogs" target="_blank">Microsoft Fabric Blog</a>. 
                 The semantic matching is pretty smart, but occasionally makes creative connections — treat it as a helpful suggestion rather than gospel.
+                Helpful / Not related feedback is now available beside related articles on roadmap cards and release pages.
+                Votes are evidence for human review, not automatic instructions to hide articles or change the matching model.
 
                 <a href="https://github.com/cbattlegear/fabric-roadmap-gps/blob/main/VECTOR_MATCHING.md" target="_blank">You can read more about how we built that over on Github.</a>
               </p>
@@ -97,6 +99,19 @@ Fabric GPS helps you track Microsoft Fabric roadmap changes quickly via filtered
             </div>
           </div>
         </div>
+        <section id="blog-feedback-privacy" class="why-build-section" aria-labelledby="blog-feedback-privacy-title">
+          <h2 id="blog-feedback-privacy-title" class="section-title">Article Feedback &amp; Privacy</h2>
+          <p>When you vote, this browser stores a random identifier in local storage for up to 180 days.
+            We send it only when you submit feedback and store its hash with the exact release/article pair,
+            your choice, and timestamps. We do not use your IP address, email, subscription token, or browser
+            user-agent as your feedback identity. Feedback is removed after 180 days without a changed vote
+            by the hourly refresh job; backups follow the database backup retention policy.</p>
+          <p>You can change your choice without adding another vote. Clearing browser storage, using a different
+            browser, or identifier expiry can allow another vote, so totals are not verified people counts.
+            Clearing site storage removes your local identifier but does not delete previously submitted feedback.
+            Existing operational logging and IP-based abuse limits still apply; feedback does not set a cookie.
+            No public voter list or score leaderboard is published.</p>
+        </section>
         <div class="coming-soon-section">
           <h3 class="coming-soon-title">Coming Soon</h3>
           <div class="roadmap-items">
