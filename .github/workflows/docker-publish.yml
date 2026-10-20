@@ -6,6 +6,11 @@ name: Docker
 # documentation.
 
 on:
+  workflow_dispatch:
+  # Events run the workflow from the release tag. Historical tags without this
+  # trigger are reconciled by the daily default-branch build or a manual run.
+  release:
+    types: [published, edited, unpublished, deleted]
   schedule:
     - cron: '38 14 * * *'
   push:
@@ -36,6 +41,19 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Release edits/deletions must rebuild current code, not an old tag.
+          ref: ${{ github.event_name == 'release' && github.event.repository.default_branch || github.ref }}
+
+      - name: Set up Python for release snapshot
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Snapshot published application releases
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python -m lib.github_releases
 
       # Set up BuildKit Docker container builder to be able to build
       # multi-platform images and export cache
@@ -60,6 +78,13 @@ jobs:
         uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}},enable=${{ github.event_name != 'release' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name != 'release' }}
+            type=raw,value=latest,enable=${{ github.event_name == 'release' || github.event_name == 'schedule' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
 
       # Build and push Docker image with Buildx (don't push on PR)
       # https://github.com/docker/build-push-action

@@ -181,6 +181,49 @@ threshold changes, reranking, retraining, public leaderboard, or new admin UI.
 Frontend state/navigation tests are invoked by pytest using Node.js (22 in CI),
 with no npm packages, live database, network, or secrets.
 
+## Application release notes
+
+The bottom of `/about` shows the three most recently published stable
+[GitHub Releases](https://github.com/cbattlegear/fabric-roadmap-gps/releases),
+ordered by publication time (not tag spelling). These are application updates;
+`/changelog` continues to track Microsoft's Fabric roadmap only.
+
+The Docker workflow generates `release_notes.json` before building the image,
+using a read-only contents token supplied only to that step. The token is never
+written into the snapshot or passed to Docker. Each successful daily
+default-branch build reconciles publication, edits, and removals in the
+published image; a manual run on the default branch can rebuild sooner. Release events also
+rebuild the default branch's `latest` image when the release's tagged commit
+contains this workflow trigger. Historical tags without the trigger cannot
+start that event-driven build and use the daily/manual path instead.
+The repository workflow only builds and publishes image tags: it does **not**
+deploy the image, pull it into running containers, or restart the app. Publishing
+`latest` does not update an already running container. Notes on the live site
+refresh on the next deployment of the updated image and restart of web workers,
+not automatically every day. Any external deployment automation must be verified
+separately; none is configured in this repository. This does not rely on files
+shared with the refresh-job container. The About response uses
+`Cache-Control: no-cache` so edge caches revalidate after deployment.
+
+The snapshot records the last successful synchronization in UTC. Updates fail
+the workflow explicitly on timeouts, rate limits, invalid data, or other GitHub
+errors; no new image is published on failure. An already deployed image retains
+its last-known-good snapshot. Snapshots older than 48 hours are labeled as
+possibly out of date; missing/invalid snapshots show an unavailable message and
+log an error. A successful empty snapshot shows an explicit no-stable-releases
+message. No About-page request calls GitHub, and release Markdown has raw HTML
+and remote images disabled and links restricted to HTTP(S).
+
+For a local image, run `python -m lib.github_releases` before `docker build`
+(optionally provide `GITHUB_TOKEN` in the shell to avoid anonymous rate limits).
+Without that step, local About pages show the unavailable state. The generated
+snapshot is intentionally ignored by Git.
+
+Maintainers should publish user-facing notes using **Added**, **Improved**, and
+**Fixed** sections where useful; historical notes need no reformatting. Drafts
+and prereleases are never displayed. Edit the original GitHub release to correct
+notes, and use the Docker workflow's manual run to retry a failed synchronization.
+
 ## Caching
 
 Caching is handled by Azure Front Door at the CDN edge. The server sets HTTP cache headers on all API and RSS responses:
