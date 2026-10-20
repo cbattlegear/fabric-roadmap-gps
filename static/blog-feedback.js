@@ -36,6 +36,7 @@
     function refreshControls(group, state) {
         const key = pairKey(group.dataset.releaseId, group.dataset.blogUrl);
         const render = target => {
+            target.hidden = !state.revealed;
             target.setAttribute('aria-busy', String(state.pending));
             target.dataset.state = state.phase;
             target.dataset.stale = String(state.stale);
@@ -57,12 +58,11 @@
         if (!validUrl(blogUrl)) return '';
         const state = states.get(pairKey(releaseId, blogUrl));
         const disabled = state?.pending || state?.stale ? ' disabled' : '';
-        return `<div class="blog-feedback" data-release-id="${attribute(releaseId)}" data-blog-url="${attribute(blogUrl)}" role="group" aria-label="Feedback on this related article" aria-busy="${Boolean(state?.pending)}" data-state="${attribute(state?.phase || '')}" data-stale="${Boolean(state?.stale)}">
+        return `<div class="blog-feedback"${state?.revealed ? '' : ' hidden'} data-release-id="${attribute(releaseId)}" data-blog-url="${attribute(blogUrl)}" role="group" aria-label="Feedback on this related article" aria-busy="${Boolean(state?.pending)}" data-state="${attribute(state?.phase || '')}" data-stale="${Boolean(state?.stale)}">
             <span class="blog-feedback-label">Is this article related?</span>
             <div class="blog-feedback-actions">
                 <button type="button" data-feedback-vote="helpful" aria-pressed="${state?.vote === 'helpful'}"${disabled}>Helpful</button>
                 <button type="button" data-feedback-vote="not_related" aria-pressed="${state?.vote === 'not_related'}"${disabled}>Not related</button>
-                <a href="/about#blog-feedback-privacy" class="blog-feedback-privacy">Privacy</a>
             </div>
             <span class="blog-feedback-status" role="status" aria-live="polite">${attribute(state?.message || '')}</span>
         </div>`;
@@ -81,12 +81,29 @@
         return key;
     }
 
+    function revealArticle(event) {
+        const link = event.target.closest('[data-feedback-article]');
+        if (!link || !validUrl(link.dataset.blogUrl)) return;
+        const identity = pairKey(link.dataset.releaseId, link.dataset.blogUrl);
+        const state = states.get(identity) || {
+            pending: false, stale: false, vote: null, phase: '', message: ''
+        };
+        state.revealed = true;
+        states.set(identity, state);
+        document.querySelectorAll('.blog-feedback').forEach(group => {
+            if (pairKey(group.dataset.releaseId, group.dataset.blogUrl) === identity) {
+                refreshControls(group, state);
+            }
+        });
+    }
+
     async function submit(group, vote) {
         const identity = pairKey(group.dataset.releaseId, group.dataset.blogUrl);
         const state = states.get(identity) || {
             pending: false, stale: false, vote: null, phase: '', message: ''
         };
         states.set(identity, state);
+        if (!state.revealed) return;
         if (state.pending || state.stale) {
             refreshControls(group, state);
             return;
@@ -147,12 +164,16 @@
     }
 
     document.addEventListener('click', event => {
+        revealArticle(event);
         const button = event.target.closest('[data-feedback-vote]');
         if (!button) return;
         const group = button.closest('.blog-feedback');
         if (!group) return;
         event.stopPropagation();
         submit(group, button.dataset.feedbackVote);
+    });
+    document.addEventListener('auxclick', event => {
+        if (event.button === 1) revealArticle(event);
     });
 
     window.BlogFeedback = { markup, validUrl };

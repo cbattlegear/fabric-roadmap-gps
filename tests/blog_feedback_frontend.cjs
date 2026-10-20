@@ -55,7 +55,7 @@ function group(releaseId = `test-${++groupId}`, blogUrl = url) {
     }));
     const status = { textContent: '' };
     return {
-        dataset: { releaseId, blogUrl }, buttons, status, attributes,
+        dataset: { releaseId, blogUrl }, buttons, status, attributes, hidden: true,
         getAttribute: name => attributes[name],
         setAttribute: (name, value) => { attributes[name] = value; },
         querySelectorAll: () => buttons,
@@ -63,11 +63,24 @@ function group(releaseId = `test-${++groupId}`, blogUrl = url) {
     };
 }
 
+function activate(target, type = 'click', button = 0, modifiers = {}) {
+    const link = { dataset: target.dataset };
+    const event = {
+        button,
+        ...modifiers,
+        target: { closest: selector => selector === '[data-feedback-article]' ? link : null },
+        preventDefault: () => assert.fail('Article navigation must not be prevented'),
+        stopPropagation: () => assert.fail('Article activation must not be swallowed'),
+    };
+    listeners[type].forEach(listener => listener(event));
+}
+
 function click(target, choice = 'helpful') {
+    activate(target);
     let stopped = false;
     const button = { dataset: { feedbackVote: choice }, closest: () => target };
     listeners.click[0]({
-        target: { closest: () => button },
+        target: { closest: selector => selector === '[data-feedback-vote]' ? button : null },
         stopPropagation: () => { stopped = true; }
     });
     assert.equal(stopped, true);
@@ -80,10 +93,40 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
     assert.equal(calls.length, 0);
     assert.match(BlogFeedback.markup('r"1', url), /data-release-id="r&quot;1"/);
     assert.match(BlogFeedback.markup('r1', url), /aria-live="polite"/);
+    assert.match(BlogFeedback.markup('r1', url), /class="blog-feedback" hidden/);
+    const visited = group('visited');
+    const rematch = group('visited', 'https://example.com/rematch');
+    mountedGroups = [visited, rematch];
+    activate(visited);
+    assert.equal(visited.hidden, false);
+    assert.equal(rematch.hidden, true);
+    assert.equal(storage.size, 0, 'Article activation must not create persistent click tracking or voter identity');
+    assert.equal(calls.length, 0, 'Article activation must not call API or analytics');
+    assert.doesNotMatch(BlogFeedback.markup('visited', url), /class="blog-feedback" hidden/);
+    assert.match(BlogFeedback.markup('visited', rematch.dataset.blogUrl), /class="blog-feedback" hidden/);
+    const middle = group('middle');
+    mountedGroups = [middle];
+    activate(middle, 'auxclick', 2);
+    assert.equal(middle.hidden, true);
+    activate(middle, 'auxclick', 1);
+    assert.equal(middle.hidden, false);
+    for (const modifiers of [{ ctrlKey: true }, { metaKey: true }, { shiftKey: true }, { detail: 0 }]) {
+        const modified = group();
+        mountedGroups = [modified];
+        activate(modified, 'click', 0, modifiers);
+        assert.equal(modified.hidden, false, 'Modified and keyboard clicks reveal without swallowing navigation');
+    }
+    mountedGroups = [];
     for (const invalid of [null, '', 'javascript:alert(1)', 'https://user:pw@example.com', 'https://[bad', 'https:example.com', 'https://example.com\\bad']) {
         assert.equal(BlogFeedback.markup('r1', invalid), '');
     }
     assert.match(card.createChangeItem(item), /blog-feedback/);
+    assert.match(card.createChangeItem(item), />Article<\/span>/);
+    assert.match(card.createChangeItem(item), /target="_blank" rel="noopener noreferrer"/);
+    assert.doesNotMatch(card.createChangeItem(item), /onclick=|Related blog/);
+    const hostile = card.createChangeItem({ ...item, blog_title: '<img src=x onerror="bad">' });
+    assert.match(hostile, /&lt;img src=x onerror=&quot;bad&quot;&gt;/);
+    assert.doesNotMatch(hostile, /<img src=x/);
     assert.match(card.createChangeItem(item), /<a href="\/release\/r1">Feature<\/a>/);
     assert.doesNotMatch(card.createChangeItem(item), /role="button"/);
     assert.doesNotMatch(card.createChangeItem({ ...item, blog_title: null }), /blog-feedback/);
@@ -102,6 +145,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
     assert.match(rerendered, /aria-busy="true"/);
     assert.match(rerendered, /data-feedback-vote="not_related"[^>]*disabled/);
     assert.doesNotMatch(card.createChangeItem({ ...item, blog_url: 'https://example.com/other' }), /aria-busy="true"/);
+    assert.match(card.createChangeItem({ ...item, blog_url: 'https://example.com/other' }), /class="blog-feedback" hidden/);
     const replacement = group('r1');
     mountedGroups = [replacement];
     click(replacement, 'not_related');

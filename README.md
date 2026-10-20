@@ -267,7 +267,11 @@ The refresh job (`APP_MODE=refresh`) runs the data fetch pipeline (roadmap, blog
 ## Related-article feedback
 
 Roadmap cards and release details offer **Helpful / Not related** for a valid
-related article. `POST /api/blog-feedback` accepts only
+related article after its titled link is activated. The article opens normally
+in a new tab; a compact prompt appears in the original card without taking
+focus or claiming that the article was read. Reveal state stays in page memory
+for that release/article pair across rerenders, not in persistent click tracking.
+`POST /api/blog-feedback` accepts only
 `{"release_item_id":"...","blog_url":"...","vote":"helpful"}` (or `not_related`).
 It requires an exact configured `BASE_URL` / canonical origin, JSON content type,
 and an `X-Feedback-Voter` header containing a browser-generated 64-character

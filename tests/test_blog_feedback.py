@@ -336,9 +336,32 @@ def test_release_controls_conditional_accessible_and_anonymous(web, engine, monk
         assert group["data-release-id"] == "r1"
         assert group["data-blog-url"] == URL
         assert group["role"] == "group"
+        assert group.has_attr("hidden")
         assert len(group.select('button[type="button"][aria-pressed="false"]')) == 2
         assert group.select_one('[role="status"][aria-live="polite"]')
         assert not group.find_parent("a")
+        article = page.select_one("a[data-feedback-article]")
+        assert article["data-release-id"] == "r1"
+        assert article["data-blog-url"] == URL
+        assert article["target"] == "_blank"
+        assert article["title"] == title
+        assert article.select_one(".blog-article-title").get_text() == title
+
+
+def test_release_article_title_is_escaped_and_privacy_navigation_stays_footer_only(web, engine, monkeypatch):
+    server, client = web
+    title = '<img src=x onerror="alert(1)"> A detailed article'
+    with db.session_scope(engine) as session, session.begin():
+        session.get(db.ReleaseItemModel, "r1").blog_title = title
+    monkeypatch.setattr(server, "fetch_history_rows", lambda *_: [])
+    page = BeautifulSoup(client.get("/release/r1").data, "html.parser")
+    link = page.select_one("a[data-feedback-article]")
+    assert link["title"] == title
+    assert link.select_one(".blog-article-title").get_text() == title
+    assert link.select_one("img") is None
+    assert len(page.select('a[href="/privacy"]')) == 1
+    assert page.select_one('a[href="/privacy"]').find_parent("footer")
+    assert page.select_one('a[href="/about#blog-feedback-privacy"]') is None
 
 
 def test_migration_matches_model_and_chain():
