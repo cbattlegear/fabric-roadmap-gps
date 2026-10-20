@@ -30,6 +30,47 @@ docker run --rm -v "${PWD}:/app" fabric-gps \
 (On PowerShell, use `-v "${PWD}:/app"` as written; on `cmd.exe`, use `-v "%cd%:/app"`.)
 
 The tests don't need `SQLSERVER_CONN` or any other env var — they run entirely in-memory.
+Node.js 22+ is also required: pytest invokes the dependency-free browser-logic
+checks with `node --test tests/checkpoint.test.cjs`.
+
+## Browser-local changelog catch-up
+
+The `/changelog` catch-up panel stores a versioned UTC calendar day in
+`localStorage` only after **Start from today** or **Mark all changes as seen**.
+It snapshots the prior baseline in per-tab `sessionStorage`; reloads and
+acknowledgements in another tab cannot move an existing tab's baseline.
+Closing the tab starts a fresh session. Reset clears this tab's snapshot and
+the browser's saved checkpoint; other open tabs retain their snapshots.
+
+The baseline day is **inclusive**. This intentionally repeats same-day changes:
+`last_modified` is a date, not an exact timestamp, and later hourly refreshes
+on the same day must not be silently skipped. Catch-up retrieves the complete
+range before enabling acknowledgement. Product/type/status filters change
+what is displayed, not what **Mark all changes as seen** acknowledges.
+Failed loads, incomplete responses and browsing alone never save a checkpoint.
+First visits do not label the whole roadmap as new. Invalid, future-dated or
+expired checkpoints require reset; unavailable storage leaves the normal
+changelog usable.
+
+`GET /api/changelog?since=YYYY-MM-DD` accepts a canonical date from today
+through 90 days ago, inclusive, and cannot be combined with `date`.
+The existing product/type/status and `include_inactive` filters apply to event
+values. `days` is ignored in this mode. Temporal tracked-field transitions
+include additions, edits, removals and restorations, even when later edits
+occur, and exclude embedding/blog-only writes. Catch-up dates each transition
+by the UTC day of SQL Server's temporal `ValidFrom`, not the legacy feed's
+`last_modified` date, which can intentionally remain unchanged for removals.
+In this mode the returned `last_modified` is that observed event day.
+Each result item is one change
+event (possibly with several changed fields), not a unique feature.
+`total_events`, `total_features`, `since`, `through` and `complete` accompany
+the existing daily groups. Historical coverage begins August 27, 2025;
+first recorded versions are not proof of an earlier original announcement.
+
+Catch-up responses are `private, no-store` with no date-only conditional
+validator. Personal checkpoints never enter server-rendered HTML, cookies or
+server-side visitor records. The normal changelog and permanent daily links
+retain their existing caching and read paths.
 
 ## Email Subscriptions
 

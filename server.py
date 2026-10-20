@@ -3,7 +3,7 @@ import os
 import urllib.parse
 import threading
 import logging
-from datetime import datetime, date, time, timezone
+from datetime import datetime, date, time, timezone, timedelta
 from typing import Optional, List
 
 from flask import Flask, request, Response, jsonify, render_template, redirect, send_from_directory, url_for, abort
@@ -206,6 +206,10 @@ def prevent_caching_sensitive_pages(response):
     """Prevent Front Door / browsers from caching pages with user tokens."""
     if request.path.startswith(_NO_CACHE_PATHS):
         response.headers['Cache-Control'] = 'no-store'
+    if request.path == "/api/changelog" and "since" in request.args:
+        response.headers['Cache-Control'] = 'private, no-store'
+        response.headers.pop('ETag', None)
+        response.headers.pop('Last-Modified', None)
     return response
 
 
@@ -1510,6 +1514,11 @@ def api_changelog():
       date: YYYY-MM-DD — return only that single day's changes (historical,
             permanent view). When supplied, ``days`` is ignored.
       days: look-back window (default 30, max 90)
+      since: inclusive UTC YYYY-MM-DD checkpoint (at most 90 days old).
+             Returns all recorded tracked-field change events through today,
+             including inactive items by default; incompatible with date.
+             last_modified denotes the observed UTC temporal event day.
+             These responses are private/no-store, without date-only validators.
       include_inactive: include removed items (default true)
       product_name, release_type, release_status: filter by field
     """
@@ -1534,6 +1543,16 @@ def api_changelog():
     # Pass on_date only when set so default callers keep the window-mode
     # signature (and the existing query plan) unchanged.
     extra = {"on_date": on_date} if on_date is not None else {}
+    since_raw = request.args.get("since")
+    today = datetime.now(timezone.utc).date()
+    since = None
+    if since_raw is not None:
+        since = _parse_iso_date(since_raw)
+        if on_date is not None or since is None:
+            return jsonify({"error": "Use since=YYYY-MM-DD without date"}), 400
+        if not today - timedelta(days=90) <= since <= today:
+            return jsonify({"error": "Checkpoint must be within the last 90 UTC days"}), 400
+        extra = {"since": since, "through": today}
     items = get_changelog_with_changes(
         get_engine(), days=days, include_inactive=include_inactive,
         product_name=product_name, release_type=release_type,
@@ -1556,8 +1575,21 @@ def api_changelog():
     days_list = [{"date": d, "count": len(itms), "items": itms}
                  for d, itms in sorted(grouped.items(), reverse=True)]
 
-    body = json.dumps({"days": days_list, "total_items": len(items)},
+    payload = {"days": days_list, "total_items": len(items)}
+    if since is not None:
+        payload.update(
+            since=since.isoformat(), through=today.isoformat(),
+            total_events=len(items),
+            total_features=len({item["release_item_id"] for item in items}),
+            complete=True,
+        )
+    body = json.dumps(payload,
                        separators=(",", ":"), sort_keys=True)
+    if since is not None:
+        # Personal query values never share an edge-cache entry or validator.
+        response = Response(body, mimetype="application/json")
+        response.headers["Cache-Control"] = "private, no-store"
+        return response
     return _make_cached_response(body, last_modified=_max_last_modified(items))
 
 

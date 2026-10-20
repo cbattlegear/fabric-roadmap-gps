@@ -47,7 +47,7 @@ function renderChangelogDays(days, opts) {
     for (const day of days) {
         const dateObj = parseRoadmapDate(day.date);
         const dateStr = dateObj.toLocaleDateString('en-US', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-        const countLabel = `· ${day.count} change${day.count !== 1 ? 's' : ''}`;
+        const countLabel = `· ${day.count} ${opts.events ? 'change event' : 'change'}${day.count !== 1 ? 's' : ''}`;
 
         let header;
         if (dayLinks) {

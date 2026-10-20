@@ -701,6 +701,8 @@ def get_changelog_with_changes(
     release_type: Optional[str] = None,
     release_status: Optional[str] = None,
     on_date: Optional[date] = None,
+    since: Optional[date] = None,
+    through: Optional[date] = None,
 ) -> List[Dict]:
     """Return changelog items with changed-column annotations in a single temporal-table query.
 
@@ -725,7 +727,17 @@ def get_changelog_with_changes(
     filters is a closed whitelist (``_OPTIONAL_FILTERS``); callers cannot
     introduce new column names or SQL fragments. The static "active = 1"
     fragment carries no caller value.
+
+    Catch-up mode (since/through): all tracked-field temporal transitions in
+    the inclusive UTC ValidFrom date range, including multiple refreshes on
+    one day. Returned last_modified is the observed event day in this mode.
+    Filters apply to each event's values, not the feature's current state.
+    Vector/blog-only writes are excluded. Version 1 means first recorded
+    appearance, which may be the start of historical coverage.
     """
+    if since is not None and (through is None or through < since or on_date is not None):
+        raise ValueError("Catch-up requires an ordered since/through range without on_date")
+
     # Closed whitelist of (kwarg_name -> SQL fragment using a named bind
     # param). Every entry is a literal string defined here, never derived
     # from caller input. To add a filter, add an entry; never splice values.
@@ -756,7 +768,17 @@ def get_changelog_with_changes(
     # Mode-dependent fragments. Both branches use only literal SQL plus named
     # bind params (never spliced caller values), preserving the parameterized
     # contract documented above.
-    if on_date is not None:
+    if since is not None:
+        bind_values.update(since=since, through=through)
+        item_source = "dbo.release_items FOR SYSTEM_TIME ALL"
+        date_predicate = "ValidFrom >= :since AND ValidFrom < DATEADD(day, 1, :through)"
+        selection_cte = """
+    Selected AS (
+        SELECT h.release_item_id, h.VersionNum AS ContentVer
+        FROM Hist h
+        WHERE h.ValidFrom >= :since AND h.ValidFrom < DATEADD(day, 1, :through)
+    ),"""
+    elif on_date is not None:
         # Exact-date / historical mode: select the item set from temporal
         # history so items that later change again still appear for this day,
         # and pick each item's content-change version *for that day*.
@@ -793,12 +815,28 @@ def get_changelog_with_changes(
         GROUP BY h.release_item_id
     ),"""
 
+    # EXCEPT compares NULLs safely and ignores vector/blog-only versions.
+    event_predicate = """
+    WHERE (d.VersionNum = 1 OR EXISTS (
+        SELECT d.release_date, d.release_type, d.release_status,
+               d.feature_description, d.feature_name, d.product_name,
+               d.release_semester, d.active
+        EXCEPT
+        SELECT d.p_release_date, d.p_release_type, d.p_release_status,
+               d.p_feature_description, d.p_feature_name, d.p_product_name,
+               d.p_release_semester, d.p_active
+    ))
+    """ if since is not None else ""
+    event_filters = f" {filter_clause}" if since is not None else ""
+    # Legacy removal suppression can preserve last_modified. Temporal UTC
+    # transition dates must drive catch-up without changing normal feeds.
+    event_day = "CAST(d.ValidFrom AS date)" if since is not None else "d.last_modified"
     sql = text(f"""
     WITH Hist AS (
         SELECT
             release_item_id, release_date, release_type, release_status,
             feature_description, feature_name, product_name, last_modified, active,
-            release_semester, vso_item, row_hash,
+            release_semester, vso_item, row_hash, ValidFrom,
             ROW_NUMBER() OVER (PARTITION BY release_item_id ORDER BY ValidFrom) AS VersionNum
         FROM dbo.release_items FOR SYSTEM_TIME ALL
         WHERE release_item_id IN (
@@ -827,7 +865,7 @@ def get_changelog_with_changes(
         d.release_type,
         d.release_status,
         d.release_date,
-        d.last_modified,
+        {event_day} AS last_modified,
         d.active,
         ChangedColumns = CASE
             WHEN d.VersionNum = 1 THEN 'Added to roadmap'
@@ -919,7 +957,8 @@ def get_changelog_with_changes(
         END
     FROM Diffs d
     INNER JOIN Selected l ON d.release_item_id = l.release_item_id AND d.VersionNum = l.ContentVer
-    ORDER BY d.last_modified DESC, d.product_name, d.feature_name
+    {event_predicate}{event_filters}
+    ORDER BY {event_day} DESC, d.product_name, d.feature_name, d.release_item_id, d.VersionNum
     """)
 
     with engine.connect() as conn:
