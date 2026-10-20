@@ -80,6 +80,13 @@ def test_native_temporal_aggregates_and_exact_evidence():
         assert fetch(metric="removal")["details"]["total"] == 1
         assert fetch(metric="restoration")["details"]["total"] == 1
         assert fetch(metric="upcoming")["details"]["total"] == 0  # currently Shipped
+        assert fetch(metric="upcoming")["details"]["items"] == []
+        assert fetch(metric="target", offset=50)["details"]["items"] == []
+        empty = fetch(product="No matching fixture product")
+        assert empty["activity"] == []
+        assert empty["transitions"] == []
+        assert empty["upcoming"] == []
+        assert empty["details"] == {"total": 0, "items": []}
     finally:
         if created:
             with engine.begin() as conn:

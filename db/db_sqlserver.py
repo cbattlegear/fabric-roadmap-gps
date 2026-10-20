@@ -544,31 +544,31 @@ def _insights_sql():
         FROM Upcoming WHERE :metric = 'upcoming' AND (:bucket IS NULL OR bucket = :bucket)
     )
     SELECT
-        JSON_QUERY((SELECT product AS product_name, kind, COUNT_BIG(*) AS events,
+        JSON_QUERY(ISNULL((SELECT product AS product_name, kind, COUNT_BIG(*) AS events,
                     COUNT(DISTINCT release_item_id) AS features
                     FROM Events GROUP BY product, kind ORDER BY product, kind
-                    FOR JSON PATH)) AS activity,
-        JSON_QUERY((SELECT CONVERT(char(10), ValidFrom, 23) AS day,
+                    FOR JSON PATH), N'[]')) AS activity,
+        JSON_QUERY(ISNULL((SELECT CONVERT(char(10), ValidFrom, 23) AS day,
                     COUNT_BIG(*) AS events, COUNT(DISTINCT release_item_id) AS features
                     FROM Events WHERE status_changed = 1
                     GROUP BY CONVERT(char(10), ValidFrom, 23) ORDER BY day
-                    FOR JSON PATH)) AS transitions,
+                    FOR JSON PATH), N'[]')) AS transitions,
         (SELECT COUNT_BIG(*) FROM Events WHERE target_changed = 1) AS target_changes,
-        JSON_QUERY((SELECT bucket, COUNT_BIG(*) AS features FROM Upcoming
-                    GROUP BY bucket ORDER BY bucket FOR JSON PATH)) AS upcoming,
-        JSON_QUERY((SELECT name FROM (
+        JSON_QUERY(ISNULL((SELECT bucket, COUNT_BIG(*) AS features FROM Upcoming
+                    GROUP BY bucket ORDER BY bucket FOR JSON PATH), N'[]')) AS upcoming,
+        JSON_QUERY(ISNULL((SELECT name FROM (
                     SELECT COALESCE(NULLIF(product_name, ''), 'Unknown product') AS name
                     FROM dbo.release_items FOR SYSTEM_TIME FROM :baseline TO :end
                     UNION SELECT COALESCE(NULLIF(product_name, ''), 'Unknown product')
-                    FROM dbo.release_items) names ORDER BY name FOR JSON PATH)) AS products,
+                    FROM dbo.release_items) names ORDER BY name FOR JSON PATH), N'[]')) AS products,
         JSON_QUERY((SELECT MIN(ValidFrom) AS earliest_version_in_query,
                     (SELECT MAX(ValidFrom) FROM dbo.release_items) AS last_data_write
                     FROM Versions FOR JSON PATH, INCLUDE_NULL_VALUES, WITHOUT_ARRAY_WRAPPER)) AS coverage,
         JSON_QUERY((SELECT (SELECT COUNT_BIG(*) FROM Detail) AS total,
-                    JSON_QUERY((SELECT * FROM Detail
+                    JSON_QUERY(ISNULL((SELECT * FROM Detail
                         ORDER BY observed_at DESC, release_item_id, kind
                         OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
-                        FOR JSON PATH, INCLUDE_NULL_VALUES)) AS items
+                        FOR JSON PATH, INCLUDE_NULL_VALUES), N'[]')) AS items
                     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)) AS details
     FOR JSON PATH, WITHOUT_ARRAY_WRAPPER
     OPTION (MAXDOP 2)
