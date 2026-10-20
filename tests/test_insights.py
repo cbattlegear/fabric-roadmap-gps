@@ -377,6 +377,7 @@ def test_api_shape_filter_forwarding_and_html_tables(payload):
         assert 'class="insights-trend"' in html
         soup = BeautifulSoup(html, "html.parser")
         assert soup.select_one(".hero-section .hero-title").get_text(strip=True) == "Roadmap Insights"
+        assert soup.select_one(".hero-home") is None
         assert "/static/insights.css?v=shared-hero-v3" in html
         assert [section["aria-labelledby"] for section in soup.select(".insights-grid section")] == [
             "activity-title", "transitions-title", "targets-title", "upcoming-title"]
@@ -515,7 +516,7 @@ def test_shared_navigation_wraps_without_dashboard_stylesheet():
     assert nav_rule is not None
     assert "flex-wrap: wrap" in nav_rule.group(1)
     html = client.get("/changelog").get_data(as_text=True)
-    assert "/static/styles.css?v=automatic-visit-v2" in html
+    assert "/static/styles.css?v=task-first-home-v1" in html
     assert "/static/insights.css" not in html
     soup = BeautifulSoup(html, "html.parser")
     assert soup.select_one('.header-nav a[href="/insights"]') is not None

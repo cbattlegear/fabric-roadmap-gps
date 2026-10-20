@@ -134,9 +134,60 @@ def test_homepage_versions_changed_immutable_assets(client):
     page = BeautifulSoup(client.get("/").data, "html.parser")
     assert page.select_one('script[src="/static/app.js?v=related-label-v3"][defer]')
     assert page.select_one('script[src="/static/blog-feedback.js?v=article-activation-v2"][defer]')
-    assert page.select_one('link[href="/static/styles.css?v=automatic-visit-v2"]')
+    assert page.select_one('link[href="/static/styles.css?v=task-first-home-v1"]')
     assert not page.select_one('script[src="/static/app.js"]')
     assert not page.select_one('script[src="/static/markdown-it.min.js"]')
+
+
+def test_homepage_places_filters_directly_after_compact_hero(client):
+    response = client.get("/")
+    assert response.status_code == 200
+    page = BeautifulSoup(response.data, "html.parser")
+    main = page.select_one("main")
+    hero = main.select_one(".hero-section.hero-home")
+    assert hero is not None
+    assert hero.h1.get_text(strip=True) == "Microsoft Fabric Roadmap Tracker"
+    assert hero.select_one(".hero-subtitle").get_text(strip=True) == (
+        "Track features, release dates, and recent changes."
+    )
+    assert [link.get_text(strip=True) for link in hero.select("a")] == ["Get email updates"]
+    assert hero.a["href"] == "/subscribe"
+    assert hero.select_one(".home-hero-copy") is not None
+    assert [child.name for child in main.children if child.name] == ["section", "div"]
+    content = hero.find_next_sibling("div")
+    assert content.select_one(":scope > .recent-changes-section") is not None
+    assert main.select(".card-grid, .card, form, input[type=email]") == []
+    assert not main.select('a[href="/rss"], a[href="/rss.xml"], a[href="/api/releases"]')
+    assert [node.get("id") for node in main.select(
+        ".filters-container, #changes-grid, #load-more-btn, #infinite-scroll-sentinel"
+    )] == [None, "changes-grid", "load-more-btn", "infinite-scroll-sentinel"]
+    for control in (
+        "product-filter", "type-filter", "status-filter", "days-filter",
+        "sort-select", "search-input", "include-inactive", "clear-filters",
+        "views-toggle", "saved-views-panel",
+    ):
+        assert main.select_one(f"#{control}") is not None
+    assert [link["href"] for link in page.select("footer a")] == [
+        "/rss", "/endpoints", "/subscribe", "/privacy",
+    ]
+
+
+@pytest.mark.parametrize("path", ["/changelog", "/subscribe", "/endpoints"])
+def test_compact_homepage_hero_does_not_replace_other_page_heroes(client, server_module, path):
+    with patch.object(server_module, "get_engine", return_value=object()), \
+         patch.object(server_module, "get_distinct_values", return_value=[]):
+        response = client.get(path)
+    assert response.status_code == 200
+    page = BeautifulSoup(response.data, "html.parser")
+    assert page.select_one(".hero-section") is not None
+    assert not page.select(".hero-home, .home-hero-content, .home-email-cta")
+    if path == "/subscribe":
+        assert page.select_one('input[type="email"]') is not None
+        assert page.select_one('input[name="cadence"][value="daily"]') is not None
+        assert page.select_one('input[name="cadence"][value="weekly"]') is not None
+        assert page.select_one("#manage") is not None
+    if path == "/endpoints":
+        assert "/api/releases" in response.get_data(as_text=True)
 
 
 def test_api_releases_single_item_not_found_returns_404(client, server_module):

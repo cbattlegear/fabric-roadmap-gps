@@ -2,6 +2,10 @@
 
 Small Flask server that exposes an RSS 2.0 feed and basic REST API for the Fabric Roadmap
 
+The homepage puts roadmap filters, saved Views, and results directly below a
+compact header. **Get email updates** opens the existing subscription page for
+frequency and preference choices. RSS and API documentation remain in the footer.
+
 ## Tests
 
 Unit tests live in `tests/` and run with pytest. They cover pure-Python helpers (no live SQL Server or network needed) — currently the Azure SQL retry decorator, the daily/weekly email-cadence filter, and the `ReleaseItem` parsing helpers.

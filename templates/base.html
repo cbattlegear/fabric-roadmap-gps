@@ -22,7 +22,7 @@
     <meta name="twitter:image" content="{{ canonical_base }}/static/fabric_gps_logo.png" />
 
     <link rel="alternate" type="application/rss+xml" title="Fabric GPS — Microsoft Fabric Roadmap Updates" href="/rss" />
-    <link rel="stylesheet" href="/static/styles.css?v=automatic-visit-v2" />
+    <link rel="stylesheet" href="/static/styles.css?v=task-first-home-v1" />
     <link rel="stylesheet" href="/static/blog-feedback.css?v=related-label-v3" />
     <script defer src="/static/blog-feedback.js?v=article-activation-v2"></script>
     <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
@@ -80,10 +80,12 @@
         </div>
     </header>
     <main>
-        <section class="hero-section">
+        <section class="hero-section{% block hero_class %}{% endblock %}">
             <div class="container">
+                {% block hero_content %}
                 <h1 class="hero-title">{% block herotitle %}Fabric Roadmap GPS{% endblock %}</h1>
                 <p class="hero-subtitle">{% block herosubtitle %}Fabric Roadmap GPS helps you track Microsoft Fabric roadmap changes quickly via filtered APIs, RSS feeds, and a weekly curated email summary.{% endblock %}</p>
+                {% endblock %}
             </div>
         </section>
         {% block content %}{% endblock %}

@@ -5,49 +5,19 @@
 
     
 {% block herotitle%}Microsoft Fabric Roadmap Tracker{% endblock %}
-{% block herosubtitle%}
-Stay up-to-date with the latest Microsoft Fabric roadmap updates.
-Get real-time feeds and explore what's coming next.
+{% block herosubtitle %}Track features, release dates, and recent changes.{% endblock %}
+{% block hero_class %} hero-home{% endblock %}
+{% block hero_content %}
+    <div class="home-hero-content">
+        <div class="home-hero-copy">
+            <h1 class="hero-title">{{ self.herotitle() }}</h1>
+            <p class="hero-subtitle">{{ self.herosubtitle() }}</p>
+        </div>
+        <a href="/subscribe" class="button home-email-cta">Get email updates</a>
+    </div>
 {% endblock %}
 {% block content %}
         <div class="container">
-            <section class="card-grid">
-                <div class="card">
-                    <h2 class="card-title">📡 RSS Feed</h2>
-                    <p class="card-description">
-                        Subscribe to our RSS feed to get the latest roadmap updates delivered directly to your feed reader.
-                        Perfect for staying informed about new features and release dates.
-                    </p>
-                    <div class="card-actions">
-                        <a href="/rss" class="button button-primary">View RSS Feed</a>
-                        <a href="/rss.xml" class="button button-secondary">Download XML</a>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h2 class="card-title">🔌 JSON API</h2>
-                    <p class="card-description">
-                        Access structured roadmap data through our REST API. Filter by product, release type, status,
-                        or recent changes. Perfect for integrations and custom applications.
-                    </p>
-                    <div class="card-actions">
-                        <a href="/api/releases" class="button button-primary">Explore API</a>
-                        <a href="/endpoints" class="button button-secondary">Documentation</a>
-                    </div>
-                </div>
-
-                <div class="card">
-                    <h2 class="card-title">📨 Email Updates</h2>
-                    <p class="card-description">
-                        Get one concise Monday email summarizing the week's Microsoft Fabric roadmap changes—focused
-                        highlights that prep you for the week without noise or inbox clutter.
-                    </p>
-                    <div class="card-actions">
-                        <a href="/subscribe" class="button button-primary">Subscribe Now</a>
-                    </div>
-                </div>
-            </section>
-
             <section class="recent-changes-section" aria-label="Recent roadmap changes">
                 <div class="recent-changes-content">
                     <div class="filters-container">
