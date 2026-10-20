@@ -47,6 +47,7 @@ from db.db_sqlserver import (
 )
 from lib.embeddings import get_embedding, is_available as embeddings_available
 from lib.description_format import render_description_html
+from lib.github_releases import release_notes_context
 from lib.quarter_date import format_as_quarter
 from lib.releases_api import (
     ReleasesQuery,
@@ -1404,7 +1405,9 @@ def api_release_history(release_item_id: str):
 
 @app.get("/about")
 def about_page():
-    return render_template('about.html')
+    response = app.make_response(render_template('about.html', release_notes=release_notes_context()))
+    response.headers["Cache-Control"] = "no-cache"
+    return response
 
 
 @app.get("/release/<release_item_id>")

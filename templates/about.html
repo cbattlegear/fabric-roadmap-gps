@@ -30,6 +30,14 @@
     .roadmap-item.subscription-item .roadmap-content h4 {color:#fff;} 
     .roadmap-item.subscription-item .roadmap-content p {color:rgba(255,255,255,0.92);} 
     .roadmap-status {display:inline-block;background:#19433c;color:#fff;font-size:.65rem;font-weight:600;letter-spacing:.5px;padding:.25rem .55rem;border-radius:999px;text-transform:uppercase;} 
+    .app-release-notes {margin-top:3.5rem;overflow-wrap:anywhere;}
+    .app-release {padding:1.5rem 0;border-top:1px solid #e1e5e9;}
+    .app-release h3 {margin:0 0 .5rem;font-size:1.25rem;}
+    .app-release-meta,.app-release-status {color:var(--fabric-neutral-grey-140);font-size:.9rem;line-height:1.5;}
+    .app-release-body {max-width:72ch;line-height:1.65;color:var(--fabric-neutral-grey-160);}
+    .app-release-body h4,.app-release-body h5,.app-release-body h6 {font-size:1rem;margin:1.5rem 0 .5rem;}
+    .app-release-body pre {overflow-x:auto;padding:1rem;background:#f8f9fa;}
+    .app-release-body blockquote {margin:1rem 0;padding-left:1rem;border-left:1px solid #e1e5e9;}
     @media (max-width:760px){.why-build-content{flex-direction:column;}.about-hero{padding:1.75rem 1.25rem;}.benefits-grid{grid-template-columns:repeat(auto-fill,minmax(140px,1fr));}}
   </style>
 {% endblock %}
@@ -119,6 +127,33 @@ Fabric GPS helps you track Microsoft Fabric roadmap changes quickly via filtered
             </div>
           </div>
         </div>
+        <section class="app-release-notes" aria-labelledby="app-release-title">
+          <h2 class="section-title" id="app-release-title">What's New in Fabric GPS</h2>
+          <p>Application updates from our published GitHub releases, separate from Microsoft's Fabric roadmap changes.</p>
+          {% if release_notes.available %}
+          <p class="app-release-status">
+            {% if release_notes.stale %}This release snapshot may be out of date. {% endif %}
+            Last synchronized: <time datetime="{{ release_notes.refreshed_at }}">{{ release_notes.refreshed_label }}</time>.
+            Check GitHub for the latest updates.
+          </p>
+          {% for release in release_notes.releases %}
+          <article class="app-release">
+            <h3><a href="{{ release.html_url }}" rel="noopener noreferrer">{{ release.name }}</a></h3>
+            <p class="app-release-meta">{{ release.tag_name }} &middot; Published <time datetime="{{ release.published_at }}">{{ release.publication_date }} UTC</time></p>
+            {% if release.body.strip() %}
+            <div class="app-release-body">{{ release.notes_html | safe }}</div>
+            {% else %}
+            <p>No release notes were provided for this version.</p>
+            {% endif %}
+          </article>
+          {% else %}
+          <p>No stable releases have been published yet.</p>
+          {% endfor %}
+          {% else %}
+          <p>Release notes are temporarily unavailable here. Read the published notes on GitHub.</p>
+          {% endif %}
+          <p><a href="{{ release_notes.url }}" rel="noopener noreferrer">View all releases on GitHub</a></p>
+        </section>
       </section>
 
 {% endblock %}
