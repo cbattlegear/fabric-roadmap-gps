@@ -217,7 +217,9 @@ def prevent_caching_sensitive_pages(response):
     """Prevent Front Door / browsers from caching pages with user tokens."""
     if request.path.startswith(_NO_CACHE_PATHS):
         response.headers['Cache-Control'] = 'no-store'
-    if request.path == "/api/changelog" and ("since" in request.args or "visit" in request.args):
+    if request.path == "/api/changelog" and any(
+        mode in request.args for mode in ("since", "visit", "event_date")
+    ):
         response.headers['Cache-Control'] = 'private, no-store'
         response.headers.pop('ETag', None)
         response.headers.pop('Last-Modified', None)
@@ -1568,7 +1570,7 @@ def _parse_iso_date(date_str):
 def changelog_day_page(date_str):
     """Permanent, shareable page for a single day's roadmap changes.
 
-    Content loads client-side via ``/api/changelog?date=<date_str>``; only the
+    Content loads client-side via ``/api/changelog?event_date=<date_str>``; only the
     date-specific title/meta is server-rendered (good enough for human-shared
     link previews). Invalid dates 404 rather than rendering an empty shell.
     """
@@ -1587,7 +1589,10 @@ def api_changelog():
 
     Query Params:
       date: YYYY-MM-DD — return only that single day's changes (historical,
-            permanent view). When supplied, ``days`` is ignored.
+            first matching last_modified version per feature). Ignores days.
+      event_date: YYYY-MM-DD — all substantive UTC temporal events on that
+                  day, including repeated edits and removals. Ignores days;
+                  private/no-store; incompatible with date/since/visit.
       days: look-back window (default 30, max 90)
       since: inclusive UTC YYYY-MM-DD checkpoint (at most 90 days old).
              Returns all recorded tracked-field change events through today,
@@ -1596,7 +1601,7 @@ def api_changelog():
              These responses are private/no-store, without date-only validators.
       visit=1: complete unfiltered 90-day temporal-event snapshot with exact
                server UTC cutoff and stable event IDs (10,000-event maximum).
-               Private/no-store; incompatible with date/since. Filters apply
+               Private/no-store; incompatible with date/since/event_date. Filters apply
                client-side only, after the full snapshot has loaded.
       include_inactive: include removed items (default true)
       product_name, release_type, release_status: filter by field
@@ -1623,9 +1628,19 @@ def api_changelog():
     # signature (and the existing query plan) unchanged.
     extra = {"on_date": on_date} if on_date is not None else {}
     since_raw = request.args.get("since")
+    event_date_raw = request.args.get("event_date")
+    event_date = None
+    if event_date_raw is not None:
+        event_date = _parse_iso_date(event_date_raw)
+        if event_date is None or event_date == date.max:
+            return jsonify({"error": "Invalid event_date; expected YYYY-MM-DD before 9999-12-31"}), 400
+        if on_date is not None or since_raw is not None:
+            return jsonify({"error": "Use event_date without date or since"}), 400
+        extra = {"since": event_date, "through": event_date}
     visit = "visit" in request.args
-    if visit and (request.args.get("visit") != "1" or since_raw is not None or on_date is not None):
-        return jsonify({"error": "Use visit=1 without date or since"}), 400
+    if visit and (request.args.get("visit") != "1" or since_raw is not None or
+                  on_date is not None or event_date is not None):
+        return jsonify({"error": "Use visit=1 without date, since, or event_date"}), 400
     today = datetime.now(timezone.utc).date()
     since = None
     if since_raw is not None:
@@ -1679,10 +1694,15 @@ def api_changelog():
             total_features=len({item["release_item_id"] for item in items}),
             complete=True,
         )
+    if event_date is not None:
+        payload.update(
+            mode="events", event_date=event_date.isoformat(), total_events=len(items),
+            total_features=len({item["release_item_id"] for item in items}),
+        )
     body = json.dumps(payload,
                        separators=(",", ":"), sort_keys=True)
-    if since is not None or visit:
-        # Personal query values never share an edge-cache entry or validator.
+    if since is not None or visit or event_date is not None:
+        # Exact temporal reads cannot reuse stale shared entries or day-only validators.
         response = Response(body, mimetype="application/json")
         response.headers["Cache-Control"] = "private, no-store"
         return response

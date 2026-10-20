@@ -322,3 +322,63 @@ test('unread badge is escaped and confined to new temporal events', () => {
     assert.match(html, /&lt;unsafe&gt;/);
     assert.doesNotMatch(html, /<unsafe>/);
 });
+
+test('daily permalink requests exact UTC events, retains repeated edits/removal and never accesses checkpoints', async () => {
+    const requests = [];
+    const container = { innerHTML: '' };
+    const data = {
+        mode: 'events', event_date: '2026-10-19',
+        days: [{ date: '2026-10-19', count: 3, items: [
+            { release_item_id: 'one', feature_name: 'Feature', changed_columns: ['Description updated'] },
+            { release_item_id: 'one', feature_name: 'Feature', changed_columns: ['Name old -> new'] },
+            { release_item_id: 'removed', feature_name: 'Removed feature', active: false,
+                changed_columns: ['Removed from Roadmap'] },
+        ] }],
+    };
+    const sandbox = vm.createContext({
+        URLSearchParams,
+        localStorage: { getItem: () => assert.fail('daily read checkpoint'),
+            setItem: () => assert.fail('daily acknowledged checkpoint') },
+        document: {
+            addEventListener() {},
+            createElement: () => ({
+                set textContent(value) { this.innerHTML = String(value).replaceAll('<', '&lt;').replaceAll('>', '&gt;'); },
+            }),
+        },
+        fetch: async (url, options) => {
+            requests.push({ url, options });
+            return { ok: true, json: async () => data };
+        },
+    });
+    vm.runInContext(source('changelog-render.js'), sandbox);
+    vm.runInContext(source('changelog-day.js'), sandbox);
+    const proto = vm.runInContext('ChangelogDay.prototype', sandbox);
+    const view = Object.assign(Object.create(proto), { container, date: '2026-10-19' });
+    await view.load('fixture-version');
+    const query = new URL(requests[0].url, 'https://example.test').searchParams;
+    assert.equal(query.get('event_date'), '2026-10-19');
+    assert.equal(query.get('include_inactive'), 'true');
+    assert.equal(query.get('v'), 'fixture-version');
+    assert.equal(query.has('date'), false);
+    assert.equal(query.has('visit'), false);
+    assert.equal(requests[0].options.cache, 'no-store');
+    assert.equal(requests[0].options.credentials, 'omit');
+    assert.match(container.innerHTML, /3 change events/);
+    assert.equal((container.innerHTML.match(/href="\/release\/one"/g) || []).length, 2);
+    assert.match(container.innerHTML, /Removed from Roadmap/);
+    assert.doesNotMatch(container.innerHTML, /changelog-new-badge|changelog-copy-link/);
+
+    for (const bad of [
+        { ok: false, json: async () => ({ error: 'failed' }) },
+        { ok: true, json: async () => { throw new SyntaxError('invalid JSON'); } },
+        { ok: true, json: async () => ({ days: [] }) },  // Old API ignoring event_date.
+        { ok: true, json: async () => ({ mode: 'events', event_date: '2026-10-18', days: [] }) },
+        { ok: true, json: async () => ({ ...data, days: {} }) },
+        { ok: true, json: async () => ({ ...data, days: [{ date: '2026-10-18', items: [] }] }) },
+    ]) {
+        sandbox.fetch = async () => bad;
+        await view.load('');
+        assert.match(container.innerHTML, /Error loading changes/);
+        assert.doesNotMatch(container.innerHTML, /No roadmap changes/);
+    }
+});

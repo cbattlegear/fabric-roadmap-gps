@@ -473,6 +473,11 @@ def _map_to_model_kwargs(item: Any) -> Dict[str, Any]:
     return kwargs
 
 
+def _binary_text_sql(column: str) -> str:
+    """Compare fixed-schema SQL expressions independently of database collation."""
+    return f"CAST({column} AS nvarchar(max)) COLLATE Latin1_General_100_BIN2"
+
+
 def _insights_sql():
     # Identifiers come only from the application's fixed tracked-field schema.
     fields = [spec.model_attr for spec in _RELEASE_FIELDS]
@@ -484,7 +489,7 @@ def _insights_sql():
 
     def comparable(name, previous=False):
         column = ("p_" if previous else "") + name
-        expression = f"CAST({column} AS nvarchar(max)) COLLATE Latin1_General_100_BIN2"
+        expression = _binary_text_sql(column)
         return f"COALESCE({expression}, N'')" if name in ("feature_name", "feature_description") else expression
 
     changed = ", ".join(comparable(name) for name in fields)
@@ -942,8 +947,8 @@ def get_changelog_with_changes(
       * Window mode (default): items whose *current* ``last_modified`` falls
         within the trailing ``days`` window. The change summary describes each
         item's most recent content change.
-      * Exact-date mode (``on_date`` set): a **permanent, historical** view of
-        every content change that happened on that specific calendar day. This
+      * Legacy exact-date mode (``on_date`` set): the first matching content
+        version per feature for that specific ``last_modified`` day. This
         queries the temporal history (``FOR SYSTEM_TIME ALL``) for versions
         whose ``last_modified`` equals ``on_date``, so a given day's link keeps
         showing that day's changes even after the same items change again on a
@@ -1057,15 +1062,21 @@ def get_changelog_with_changes(
     ),"""
 
     # EXCEPT compares NULLs safely and ignores vector/blog-only versions.
-    event_predicate = """
+    text_fields = (
+        "release_date", "release_type", "release_status", "feature_description",
+        "feature_name", "product_name", "release_semester",
+    )
+    current_text = ", ".join(_binary_text_sql(f"d.{name}") for name in text_fields)
+    previous_text = ", ".join(_binary_text_sql(f"d.p_{name}") for name in text_fields)
+    text_diffs = {
+        name: f"{_binary_text_sql(f'd.{name}')} <> {_binary_text_sql(f'd.p_{name}')}"
+        for name in text_fields
+    }
+    event_predicate = f"""
     WHERE (d.VersionNum = 1 OR EXISTS (
-        SELECT d.release_date, d.release_type, d.release_status,
-               d.feature_description, d.feature_name, d.product_name,
-               d.release_semester, d.active
+        SELECT {current_text}, d.active
         EXCEPT
-        SELECT d.p_release_date, d.p_release_type, d.p_release_status,
-               d.p_feature_description, d.p_feature_name, d.p_product_name,
-               d.p_release_semester, d.p_active
+        SELECT {previous_text}, d.p_active
     ))
     """ if events else ""
     event_filters = f" {filter_clause}" if events else ""
@@ -1122,7 +1133,7 @@ def get_changelog_with_changes(
                 (SELECT STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)
                 FROM (
                     SELECT 1 AS ColOrder,
-                           CASE WHEN (d.release_date <> d.p_release_date)
+                           CASE WHEN ({text_diffs["release_date"]})
                                  OR (d.release_date IS NULL AND d.p_release_date IS NOT NULL)
                                  OR (d.release_date IS NOT NULL AND d.p_release_date IS NULL)
                                 THEN CONCAT('Release Date ',
@@ -1132,7 +1143,7 @@ def get_changelog_with_changes(
                            END AS ColName
                     UNION ALL
                     SELECT 2,
-                           CASE WHEN (d.release_type <> d.p_release_type)
+                           CASE WHEN ({text_diffs["release_type"]})
                                  OR (d.release_type IS NULL AND d.p_release_type IS NOT NULL)
                                  OR (d.release_type IS NOT NULL AND d.p_release_type IS NULL)
                                 THEN CONCAT('Release Type ',
@@ -1142,7 +1153,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 3,
-                           CASE WHEN (d.release_status <> d.p_release_status)
+                           CASE WHEN ({text_diffs["release_status"]})
                                  OR (d.release_status IS NULL AND d.p_release_status IS NOT NULL)
                                  OR (d.release_status IS NOT NULL AND d.p_release_status IS NULL)
                                 THEN CONCAT('Release Status ',
@@ -1152,7 +1163,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 4,
-                           CASE WHEN (d.feature_description <> d.p_feature_description)
+                           CASE WHEN ({text_diffs["feature_description"]})
                                  OR (d.feature_description IS NULL AND d.p_feature_description IS NOT NULL)
                                  OR (d.feature_description IS NOT NULL AND d.p_feature_description IS NULL)
                                 THEN 'Description updated'
@@ -1170,7 +1181,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 6,
-                           CASE WHEN (d.feature_name <> d.p_feature_name)
+                           CASE WHEN ({text_diffs["feature_name"]})
                                  OR (d.feature_name IS NULL AND d.p_feature_name IS NOT NULL)
                                  OR (d.feature_name IS NOT NULL AND d.p_feature_name IS NULL)
                                 THEN CONCAT('Name ',
@@ -1180,7 +1191,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 7,
-                           CASE WHEN (d.product_name <> d.p_product_name)
+                           CASE WHEN ({text_diffs["product_name"]})
                                  OR (d.product_name IS NULL AND d.p_product_name IS NOT NULL)
                                  OR (d.product_name IS NOT NULL AND d.p_product_name IS NULL)
                                 THEN CONCAT('Workload ',
@@ -1190,7 +1201,7 @@ def get_changelog_with_changes(
                            END
                     UNION ALL
                     SELECT 8,
-                           CASE WHEN (d.release_semester <> d.p_release_semester)
+                           CASE WHEN ({text_diffs["release_semester"]})
                                  OR (d.release_semester IS NULL AND d.p_release_semester IS NOT NULL)
                                  OR (d.release_semester IS NOT NULL AND d.p_release_semester IS NULL)
                                 THEN CONCAT('Semester ',

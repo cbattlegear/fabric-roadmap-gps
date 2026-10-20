@@ -103,7 +103,7 @@ manifest acknowledgement.
 ### Legacy inclusive-day API compatibility
 
 `GET /api/changelog?since=YYYY-MM-DD` accepts a canonical date from today
-through 90 days ago, inclusive, and cannot be combined with `date`.
+through 90 days ago, inclusive, and cannot be combined with `date` or `event_date`.
 The existing product/type/status and `include_inactive` filters apply to event
 values. `days` is ignored in this mode. Temporal tracked-field transitions
 include additions, edits, removals and restorations, even when later edits
@@ -119,7 +119,21 @@ first recorded versions are not proof of an earlier original announcement.
 
 Legacy `since` responses remain `private, no-store` with no date-only
 conditional validator. They are no longer used for browser visit tracking.
-The ordinary API and permanent daily links retain their existing caching/read paths.
+The ordinary window and legacy `date=YYYY-MM-DD` API retain their existing
+selection/caching contracts; `date` selects the first matching content version
+per feature, not every temporal event.
+
+Permanent `/changelog/YYYY-MM-DD` pages instead request
+`/api/changelog?event_date=YYYY-MM-DD`: every substantive transition in that UTC
+day, including repeated edits and removals retaining an older `last_modified`.
+This mode ignores `days`, supports the existing event-value filters, and cannot
+combine with `date`, `since`, or `visit`. It returns `mode: "events"`,
+`event_date`, `total_events`, and `total_features`, without visit/cutoff metadata.
+Responses are private/no-store without validators so a previously cached day
+cannot hide later same-day or late-committed changes. Daily pages remain
+checkpoint-free. Tracked-text event comparisons and change annotations use the
+same binary collation policy as Insights, independent of database collation;
+case-only edits are not silently dropped.
 
 ## Saved and shared views
 

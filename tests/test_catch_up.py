@@ -1,9 +1,10 @@
 """Legacy date API compatibility and automatic exact-time visit regressions."""
 
 import shutil
+import re
 import sqlite3
 import subprocess
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,6 +13,143 @@ from freezegun import freeze_time
 
 import server
 from db.db_sqlserver import get_changelog_with_changes, get_changelog_visit_snapshot
+
+
+@pytest.fixture
+def temporal_changelog():
+    """Execute the production query, adapting only SQL Server syntax/functions."""
+    history = sqlite3.connect(":memory:")
+    history.row_factory = sqlite3.Row
+    history.execute("ATTACH DATABASE ':memory:' AS dbo")
+    history.create_collation("Latin1_General_100_BIN2", lambda a, b: (a > b) - (a < b))
+    history.create_function("CONCAT", -1, lambda *values: "".join(str(v) for v in values if v is not None))
+    history.create_function("dateadd_days", 2, lambda days, value:
+                            (date.fromisoformat(value[:10]) + timedelta(days=days)).isoformat() + value[10:])
+    columns = (
+        "release_item_id", "release_date", "release_type", "release_status",
+        "feature_description", "feature_name", "product_name", "last_modified",
+        "active", "release_semester", "vso_item", "row_hash", "ValidFrom", "ValidTo",
+    )
+    for table in ("release_items", "release_item_versions"):
+        history.execute(f"CREATE TABLE dbo.{table} (" +
+                        ", ".join(f"{column} TEXT COLLATE NOCASE" for column in columns) + ")")
+    cutoff = "2026-10-20T00:00:00.0000000"
+    engine = MagicMock()
+
+    def execute(statement, params=None):
+        sql = str(statement)
+        result = MagicMock()
+        if "DECLARE @cutoff" in sql:
+            result.mappings.return_value.one.return_value = {
+                "cutoff": cutoff, "window_start": "2026-07-22T00:00:00.0000000",
+            }
+            return result
+        sql = sql.replace("dbo.release_items FOR SYSTEM_TIME ALL", "dbo.release_item_versions")
+        sql = sql.replace("CAST(d.ValidFrom AS date)", "date(d.ValidFrom)")
+        sql = sql.replace("CAST(GETUTCDATE() AS DATE)", "'2026-10-20'")
+        sql = sql.replace("DATEADD(day, -:days, '2026-10-20')", "dateadd_days(-:days, '2026-10-20')")
+        sql = sql.replace("CONVERT(datetime2(7), :event_before, 126)", ":event_before")
+        sql = sql.replace("DATEADD(day, -90, :event_before)", "dateadd_days(-90, :event_before)")
+        sql = sql.replace("DATEADD(day, 1, :through)", "dateadd_days(1, :through)")
+        sql = sql.replace("CONVERT(varchar(33), d.ValidFrom, 126)", "d.ValidFrom")
+        sql = re.sub(r"CONVERT\(varchar\(30\), (d\.\w+), 23\)", r"CAST(\1 AS TEXT)", sql)
+        sql = sql.replace("nvarchar(max)", "TEXT")
+        sql = sql.replace("STRING_AGG(v.ColName, ',') WITHIN GROUP (ORDER BY v.ColOrder)",
+                          "group_concat(v.ColName, ',')")
+        sql = sql.replace("ChangedColumns = CASE", "CASE")
+        sql = sql.replace("END\n    FROM Diffs d", "END AS ChangedColumns\n    FROM Diffs d")
+        if "TOP (10001)" in sql:
+            sql = sql.replace("TOP (10001)", "") + " LIMIT 10001"
+        bindings = {key: value.isoformat() if isinstance(value, date) else value
+                    for key, value in (params or {}).items()}
+        rows = [dict(row) for row in history.execute(sql, bindings)]
+        for row in rows:
+            row["active"] = row["active"] == "1"
+            row["last_modified"] = date.fromisoformat(row["last_modified"])
+        result.mappings.return_value.all.return_value = rows
+        return result
+
+    engine.connect.return_value.__enter__.return_value.execute.side_effect = execute
+
+    def append(timestamp, **changes):
+        values = dict(
+            release_item_id="one", release_date="q4 2026", release_type="preview",
+            release_status="planned", feature_description="original", feature_name="original",
+            product_name="original", last_modified="2026-10-18", active=1,
+            release_semester="semester", vso_item=None, row_hash="fixture",
+            ValidFrom=timestamp, ValidTo="9999-12-31T23:59:59.9999999",
+        )
+        values.update(changes)
+        history.execute("""
+            UPDATE dbo.release_item_versions SET ValidTo = ?
+            WHERE release_item_id = ? AND ValidTo = '9999-12-31T23:59:59.9999999'
+        """, (timestamp, values["release_item_id"]))
+        history.execute("DELETE FROM dbo.release_items WHERE release_item_id = ?", (values["release_item_id"],))
+        for table in ("release_items", "release_item_versions"):
+            history.execute(f"INSERT INTO dbo.{table} VALUES ({','.join('?' for _ in columns)})",
+                            [values[column] for column in columns])
+
+    yield engine, append, history
+    history.close()
+
+
+def test_event_day_permalink_matches_overview_edits_removals_and_utc_bounds(temporal_changelog):
+    engine, append, _ = temporal_changelog
+    append("2026-10-18T00:00:00.0000000")
+    append("2026-10-18T23:59:59.9999999", release_item_id="removed")
+    append("2026-10-19T00:00:00.0000000", feature_description="first edit", last_modified="2026-10-19")
+    append("2026-10-19T01:00:00.0000000", feature_description="second edit", last_modified="2026-10-19")
+    append("2026-10-19T02:00:00.0000000", feature_description="second edit",
+           last_modified="2026-10-19", row_hash="pipeline only")
+    append("2026-10-19T03:00:00.0000000", release_item_id="removed", active=0)
+    append("2026-10-20T00:00:00.0000000", feature_description="next day", last_modified="2026-10-20")
+    client = server.app.test_client()
+    with patch.object(server, "get_engine", return_value=engine):
+        overview = client.get("/api/changelog?visit=1").json
+        daily = client.get("/api/changelog?event_date=2026-10-19&days=1",
+                           headers={"If-None-Match": "*",
+                                    "If-Modified-Since": "Mon, 19 Oct 2026 00:00:00 GMT"})
+        legacy = client.get("/api/changelog?date=2026-10-19").json
+    assert daily.status_code == 200
+    assert daily.json["total_items"] == 3
+    assert daily.headers["Cache-Control"] == "private, no-store"
+    assert "ETag" not in daily.headers and "Last-Modified" not in daily.headers
+    assert daily.json["mode"] == "events"
+    assert daily.json["event_date"] == "2026-10-19"
+    assert daily.json["total_events"] == 3
+    assert daily.json["total_features"] == 2
+    assert "cutoff" not in daily.json and "complete" not in daily.json
+    day = next(day for day in overview["days"] if day["date"] == "2026-10-19")
+    fields = lambda item: (item["release_item_id"], item["active"], tuple(item["changed_columns"]))
+    assert sorted(map(fields, daily.json["days"][0]["items"])) == sorted(map(fields, day["items"]))
+    assert day["count"] == 3
+    assert sorted(change for item in day["items"] for change in item["changed_columns"]) == [
+        "Description updated", "Description updated", "Removed from Roadmap",
+    ]
+    assert legacy["total_items"] == 1  # Existing date= selection is intentionally preserved.
+
+
+@pytest.mark.parametrize("field,value,annotation", [
+    ("release_date", "Q4 2026", "Release Date q4 2026 -> Q4 2026"),
+    ("release_type", "PREVIEW", "Release Type preview -> PREVIEW"),
+    ("release_status", "PLANNED", "Release Status planned -> PLANNED"),
+    ("feature_description", "ORIGINAL", "Description updated"),
+    ("feature_name", "ORIGINAL", "Name original -> ORIGINAL"),
+    ("product_name", "ORIGINAL", "Workload original -> ORIGINAL"),
+    ("release_semester", "SEMESTER", "Semester semester -> SEMESTER"),
+])
+def test_ci_columns_keep_case_only_events_and_matching_annotations(temporal_changelog, field, value, annotation):
+    engine, append, history = temporal_changelog
+    assert history.execute("SELECT 'original' = 'ORIGINAL' COLLATE NOCASE").fetchone()[0] == 1
+    append("2026-01-01T00:00:00.0000000")
+    append("2026-10-19T01:00:00.0000000", **{field: value})
+    append("2026-10-19T02:00:00.0000000", row_hash="pipeline only", **{field: value})
+    result = get_changelog_visit_snapshot(engine)
+    assert result["complete"] is True
+    assert len(result["items"]) == 1  # Retained predecessor is not an addition in this window.
+    assert result["items"][0]["changed_columns"] == [annotation]
+    assert result["items"][0]["observed_at"] == "2026-10-19T01:00:00.0000000Z"
+    assert len(result["items"][0]["event_id"]) == 64
 
 
 @freeze_time("2026-10-19 00:00:01+00:00")
@@ -153,7 +291,9 @@ def test_catch_up_reads_removal_despite_legacy_feed_suppression_and_later_edits(
     query = query.replace(" FOR SYSTEM_TIME ALL", "")
     query = query.replace("DATEADD(day, 1, :through)", "date(:through, '+1 day')")
     query = query.replace("CAST(d.ValidFrom AS date)", "date(d.ValidFrom)")
+    query = query.replace("nvarchar(max)", "TEXT")
     with sqlite3.connect(":memory:") as history:
+        history.create_collation("Latin1_General_100_BIN2", lambda a, b: (a > b) - (a < b))
         history.execute("ATTACH DATABASE ':memory:' AS dbo")
         history.execute("""
             CREATE TABLE dbo.release_items (

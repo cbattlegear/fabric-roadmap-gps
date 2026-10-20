@@ -23,14 +23,19 @@ class ChangelogDay {
 
     async load(version) {
         const params = new URLSearchParams();
-        params.set('date', this.date);
+        params.set('event_date', this.date);
         params.set('include_inactive', 'true');
         if (version) params.set('v', version);
 
         try {
-            const response = await fetch(`/api/changelog?${params.toString()}`);
+            const response = await fetch(`/api/changelog?${params.toString()}`, { cache: 'no-store', credentials: 'omit' });
+            if (!response.ok) throw new Error('Daily changelog request failed.');
             const data = await response.json();
-            this.render(data.days || []);
+            if (data.mode !== 'events' || data.event_date !== this.date || !Array.isArray(data.days) ||
+                data.days.some(day => day.date !== this.date)) {
+                throw new Error('Invalid daily event response.');
+            }
+            this.render(data.days);
         } catch (e) {
             this.container.innerHTML = '<div class="no-results"><p>Error loading changes for this day. Please try again later.</p></div>';
         }
@@ -41,7 +46,7 @@ class ChangelogDay {
             this.container.innerHTML = '<div class="no-results"><p>No roadmap changes were recorded on this day.</p></div>';
             return;
         }
-        this.container.innerHTML = renderChangelogDays(days, { dayLinks: false });
+        this.container.innerHTML = renderChangelogDays(days, { dayLinks: false, events: true });
     }
 }
 

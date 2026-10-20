@@ -73,6 +73,7 @@ class TestChangelogDayPage:
         assert "June 3, 2026" in body
         # The ISO date is handed to the client script via a data attribute.
         assert 'data-date="2026-06-03"' in body
+        assert "/static/changelog-day.js?v=utc-events-v2" in body
         mock_engine.assert_not_called()
 
     @pytest.mark.parametrize(
@@ -160,3 +161,31 @@ class TestApiChangelogDateMode:
         assert len(data["days"]) == 1
         assert data["days"][0]["date"] == "2026-06-03"
         assert data["days"][0]["count"] == 1
+
+
+@pytest.mark.parametrize("query", [
+    "event_date=", "event_date=2026-6-3", "event_date=2026-02-30", "event_date=9999-12-31",
+    "event_date=2026-06-03&date=2026-06-03", "event_date=2026-06-03&since=2026-06-03",
+    "event_date=2026-06-03&visit=1",
+])
+def test_event_day_invalid_or_conflicting_modes_do_not_query_database(query):
+    with patch.object(server, "get_engine") as engine:
+        response = server.app.test_client().get("/api/changelog?" + query)
+    assert response.status_code == 400
+    assert response.headers["Cache-Control"] == "private, no-store"
+    engine.assert_not_called()
+
+
+def test_event_day_filters_are_bound_to_event_values_not_visit_state():
+    with patch.object(server, "get_engine", return_value=object()), \
+         patch.object(server, "get_changelog_with_changes", return_value=[]) as query, \
+         patch.object(server, "get_changelog_visit_snapshot") as visit:
+        response = server.app.test_client().get(
+            "/api/changelog?event_date=2026-06-03&product_name=Power+BI&include_inactive=false&days=90")
+    assert response.status_code == 200
+    assert query.call_args.kwargs == dict(
+        since=date(2026, 6, 3), through=date(2026, 6, 3), days=90,
+        include_inactive=False, product_name="Power BI", release_type=None, release_status=None,
+    )
+    assert response.json["total_events"] == response.json["total_features"] == 0
+    visit.assert_not_called()
