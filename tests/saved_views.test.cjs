@@ -123,6 +123,40 @@ test('storage errors reveal the compact Views panel instead of hiding recovery',
     assert.equal(env.elements['reset-saved-views'].hidden, false);
 });
 
+test('mobile active criteria refresh after restore, saved open, back/forward and clear', () => {
+    const env = setup();
+    let count = -1;
+    const keys = ['type-filter', 'status-filter', 'days-filter'];
+    env.sandbox.RoadmapFilters = { create: () => ({
+        update() {
+            count = keys.filter(id => env.elements[id].value !== '').length +
+                Number(env.elements['sort-select'].value !== 'last_modified') +
+                Number(!env.elements['include-inactive'].checked);
+        },
+    }) };
+    const ctl = env.controller();
+    ctl.restore('?release_type=Preview&sort=release_date&include_inactive=false');
+    assert.equal(count, 3);
+    env.elements['view-name'].value = 'Mobile';
+    env.elements['save-view'].emit('click');
+    const saved = ctl.selected;
+    ctl.restore('');
+    ctl.sync();
+    assert.equal(count, 0);
+    env.elements['saved-view-select'].value = saved;
+    env.elements['saved-view-select'].emit('change');
+    assert.equal(count, 3);
+    env.sandbox.history.back();
+    assert.equal(count, 0);
+    env.sandbox.history.forward();
+    assert.equal(count, 3);
+    ctl.restore('');
+    ctl.sync();
+    assert.equal(count, 0);
+    ctl.restore('?release_type=unsupported&sort=bad&include_inactive=bad');
+    assert.equal(count, 0);
+});
+
 function view(overrides = {}) {
     return { id: 'one', name: 'A view', path: '/', filters: { q: 'lake' }, ...overrides };
 }

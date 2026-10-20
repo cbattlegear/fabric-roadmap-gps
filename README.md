@@ -5,6 +5,11 @@ Small Flask server that exposes an RSS 2.0 feed and basic REST API for the Fabri
 The homepage puts roadmap filters, saved Views, and results directly below a
 compact header. **Get email updates** opens the existing subscription page for
 frequency and preference choices. RSS and API documentation remain in the footer.
+On mobile, Product and Search stay visible; **More filters** reveals the existing
+type/status/window/sort/removed controls and shows how many secondary criteria
+are active. Saved views, URL/history restoration, and Clear update that count.
+Desktop retains the original expanded fields and ordering. Without JavaScript,
+all fields remain visible.
 
 ## Tests
 

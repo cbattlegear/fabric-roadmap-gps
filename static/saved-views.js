@@ -88,6 +88,7 @@
             this.status = document.getElementById('view-status');
             this.error = document.getElementById('view-error');
             this.recovery = document.getElementById('copy-view-recovery');
+            this.disclosure = root.RoadmapFilters?.create();
             this.refresh();
             this.bindEvents();
         }
@@ -159,9 +160,11 @@
             }
             document.getElementById('filter-status').textContent = invalid.length ?
                 `Some filters are no longer supported and were reset: ${invalid.join(', ')}.` : '';
+            this.disclosure?.update();
         }
 
         sync() {
+            this.disclosure?.update();
             const filters = this.capture();
             root.history.replaceState(null, '', serialize(this.path, filters));
             const selected = this.views.find(view => view.id === this.selected);

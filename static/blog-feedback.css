@@ -25,6 +25,13 @@
   text-decoration: none;
 }
 
+@media (max-width: 768px) {
+  .change-article-link {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
 .blog-feedback {
   margin-top: var(--spacing-m);
   padding-top: var(--spacing-s);

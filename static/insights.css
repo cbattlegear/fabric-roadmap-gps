@@ -71,6 +71,11 @@
 .insights-evidence-context { font-size: .8rem; }
 .insights-pagination { display: flex; gap: 1.5rem; align-items: center; flex-wrap: wrap; margin-top: 1rem; font-size: .8rem; }
 @media (max-width: 760px) {
+  .insights-data > summary, .insights-evidence-panel > summary {
+    min-height: 44px;
+    padding-top: .75rem;
+    padding-bottom: .75rem;
+  }
   .insights-grid { grid-template-columns: 1fr; }
   .insights-filter-context { display: none; }
   .insights-filters label:first-of-type { flex: 1; min-width: 140px; }

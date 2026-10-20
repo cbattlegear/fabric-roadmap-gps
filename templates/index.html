@@ -18,28 +18,28 @@
 {% endblock %}
 {% block content %}
         <div class="container">
-            <section class="recent-changes-section" aria-label="Recent roadmap changes">
+            <section class="recent-changes-section roadmap-results" aria-label="Recent roadmap changes">
                 <div class="recent-changes-content">
-                    <div class="filters-container">
+                    <div class="filters-container" data-mobile-filters>
                         <div class="filter-group">
                             <label for="product-filter">Product:</label>
                             <select id="product-filter" class="filter-select">
                                 <option value="">All Products</option>
                             </select>
                         </div>
-                        <div class="filter-group">
+                        <div class="filter-group" data-secondary-filter>
                             <label for="type-filter">Release Type:</label>
                             <select id="type-filter" class="filter-select">
                                 <option value="">All Types</option>
                             </select>
                         </div>
-                        <div class="filter-group">
+                        <div class="filter-group" data-secondary-filter>
                             <label for="status-filter">Status:</label>
                             <select id="status-filter" class="filter-select">
                                 <option value="">All Statuses</option>
                             </select>
                         </div>
-                        <div class="filter-group">
+                        <div class="filter-group" data-secondary-filter>
                             <label for="days-filter">Modified Within:</label>
                             <select id="days-filter" class="filter-select">
                                 <option value="">All Time</option>
@@ -48,7 +48,7 @@
                                 <option value="30">Last 30 days</option>
                             </select>
                         </div>
-                        <div class="filter-group">
+                        <div class="filter-group" data-secondary-filter>
                             <label for="sort-select">Sort By:</label>
                             <select id="sort-select" class="filter-select">
                                 <option value="last_modified">Last Modified</option>
@@ -62,7 +62,7 @@
                                 <div class="search-spinner" id="search-spinner"></div>
                             </div>
                         </div>
-                        <div class="filter-group">
+                        <div class="filter-group" data-secondary-filter>
                             <label for="include-inactive">Removed items</label>
                             <label><input id="include-inactive" type="checkbox" checked /> Include removed items</label>
                         </div>
@@ -95,6 +95,7 @@
         </div>
 {% endblock %}
 {% block scripts %}
-<script src="/static/saved-views.js?v=compact-views-v1"></script>
+<script src="/static/saved-views.js?v=compact-views-v2"></script>
+<script defer src="/static/mobile-filters.js?v=mobile-facets-v1"></script>
 <script defer src="/static/app.js?v=description-boundaries-v4"></script>
 {% endblock %}
