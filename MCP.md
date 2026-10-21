@@ -137,11 +137,86 @@ an application feature gate: web startup always serves MCP. If anonymous usage
 proves unaffordable, apply an explicit edge policy and plan the SDK's supported
 MCP OAuth authorization flow; do not add a bespoke API-key scheme.
 
-Telemetry logs only tool operation/outcome/duration and transport rejection code.
-Bounded DB retry logs omit SQL, parameter values, credentials and traceback text.
-Do not enable SDK HTTP/body debug logging or proxy POST-body capture. Existing
-Flask telemetry continues for Flask routes. Collect aggregate 429/503, latency,
-timeouts and DB pool pressure; do not record user query bodies.
+## Usage and diagnostic telemetry
+
+MCP uses the existing web Azure Monitor setup, service name
+`fabric-gps-web-frontend`, and logger `server.opentelemetry.mcp` (a child of the
+configured `server.opentelemetry` logger). Configuration runs once at web startup,
+not per request. Azure export remains disabled in development or without
+`APPLICATIONINSIGHTS_CONNECTION_STRING`. Refresh service names/setup, Flask
+instrumentation and its healthcheck exclusion are unchanged. No analytics
+database, browser tracking, user identity measurement or new dependency is added.
+
+Each handled MCP HTTP request emits one `mcp_request` log and `mcp.request`
+server span, including initialization, discovery, notification acknowledgments,
+invalid requests, Host/Origin rejections, throttling, disconnects and cancellations.
+Each SDK-dispatched `tools/call` request additionally emits one `mcp_tool` log
+and child `mcp.tool` span, including rejected arguments, unknown tools, BUSY,
+timeouts and errors. Polls, discovery and notifications are not executed tools.
+The pinned SDK's default inbound telemetry middleware is replaced, not stacked:
+its raw IDs/names/exception details are unsuitable for anonymous public traffic.
+SDK protocol parsing, validation and security middleware remain in place.
+
+Logs and spans carry these fixed fields:
+
+| Field | Meaning |
+| --- | --- |
+| `mcp.kind` | `request` or `tool` |
+| `mcp.method` | Allowlisted MCP operation, otherwise `unknown` |
+| `mcp.tool` | One of the four public tools, `unknown`, or `none` |
+| `mcp.outcome` | `ok`, `validation_error`, `protocol_error`, `tool_error`, `unavailable`, `busy`, `timeout`, `cancelled`, `error`, or a fixed transport rejection outcome |
+| `mcp.executed` | Whether the call entered bounded tool execution; false for validation failures/BUSY and non-tool requests |
+| `mcp.duration_ms` | Elapsed milliseconds through completion, rejection or cancellation, not background SQL lifetime |
+| `http.response.status_code` | Request logs/spans only; zero if no response was started |
+
+HTTP 200 with SDK `isError=true` has a failure outcome and error span status,
+not `ok`. Notification success means acknowledgment, not tool execution or a
+promise that background notification handling completed. Body identification
+only labels the already-bounded body with allowlisted names; it does not validate
+or replace SDK parsing. Rejections before body reading have `unknown` method.
+Ambient OTel context parents request spans, tool spans and logs; no request IDs,
+headers or client metadata are copied to telemetry. Deadline/cancellation
+observations do not release a still-running SQL job's slot.
+
+No bodies, arguments, filters, results, IDs, query URLs, Origin/Host values,
+clientInfo, IPs, auth/cookies/headers, exception messages or tracebacks are added
+to these records. Bounded DB retry logs also omit SQL, parameter values,
+credentials and traceback text. Do not enable root/SDK HTTP/body debug export,
+access logging or proxy POST-body capture.
+
+After deployment, use **Application Insights > Logs** (Application Insights
+table names below; workspace equivalents are `AppTraces`, `Message`,
+`Properties`, `TimeGenerated`, `AppRoleName` and `ItemCount`):
+
+```kusto
+traces
+| where timestamp > ago(24h) and cloud_RoleName == "fabric-gps-web-frontend"
+| where message == "mcp_request"
+| summarize requests = sum(itemCount),
+    p95_ms = percentile(todouble(customDimensions["mcp.duration_ms"]), 95)
+    by method = tostring(customDimensions["mcp.method"]),
+       outcome = tostring(customDimensions["mcp.outcome"]),
+       status = toint(customDimensions["http.response.status_code"])
+```
+
+```kusto
+traces
+| where timestamp > ago(24h) and cloud_RoleName == "fabric-gps-web-frontend"
+| where message == "mcp_tool"
+| summarize attempts = sum(itemCount),
+    p95_ms = percentile(todouble(customDimensions["mcp.duration_ms"]), 95)
+    by tool = tostring(customDimensions["mcp.tool"]),
+       outcome = tostring(customDimensions["mcp.outcome"]),
+       executed = tobool(customDimensions["mcp.executed"])
+```
+
+Use `operation_Id` to correlate logs with the `mcp.request` span in `requests`
+and `mcp.tool` spans in `dependencies`. Do not sum request and tool observations
+as a single usage count. These are operational observations subject to existing
+export/sampling/retention policy, not billing-grade or unique-user analytics.
+Offline tests use in-memory log/span exporters with no Azure credentials or
+network export; actual deployed ingestion/dashboard validation remains unverified
+until deployment.
 
 ## Azure Front Door / reverse proxy
 

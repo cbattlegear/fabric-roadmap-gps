@@ -16,9 +16,7 @@ from markupsafe import Markup
 from email.utils import format_datetime
 import hashlib
 
-# Import the `configure_azure_monitor()` function from the
-# `azure.monitor.opentelemetry` package.
-from azure.monitor.opentelemetry import configure_azure_monitor
+from lib.telemetry import init_telemetry
 from opentelemetry import trace
 from opentelemetry.instrumentation.flask import FlaskInstrumentor
 
@@ -88,16 +86,9 @@ FlaskInstrumentor().instrument_app(app, excluded_urls="healthcheck")
 logger_name = __name__
 opentelemetery_logger_name = f'{logger_name}.opentelemetry'
 
-if os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING") and os.getenv("CURRENT_ENVIRONMENT") != "development":
-    configure_azure_monitor(
-        logger_name=opentelemetery_logger_name,
-        enable_live_metrics=True 
-    )
-
-otelLogger= logging.getLogger(opentelemetery_logger_name)
-stream = logging.StreamHandler()
-otelLogger.addHandler(stream)
-otelLogger.setLevel(logging.INFO)
+otelLogger = init_telemetry(
+    'fabric-gps-web-frontend', logger_name=opentelemetery_logger_name,
+)
 otelLogger.info('Fabric-GPS Website started')
 
 if os.getenv("CURRENT_ENVIRONMENT") == "development":

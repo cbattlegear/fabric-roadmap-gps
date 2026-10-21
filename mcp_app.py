@@ -1,7 +1,6 @@
 """Standard web host: one managed ASGI listener for MCP and existing Flask."""
 
 import asyncio
-import logging
 import os
 import time
 from urllib.parse import urlsplit
@@ -13,8 +12,8 @@ from starlette.responses import JSONResponse
 
 from db.db_sqlserver import make_engine
 from lib.roadmap_mcp import create_roadmap_server
+from lib.mcp_telemetry import Observation, identify_message, observe, request_observation
 
-logger = logging.getLogger(__name__)
 MAX_BODY = 16 * 1024
 BODY_TIMEOUT_SECONDS = 5
 
@@ -37,8 +36,23 @@ class RoadmapApplication:
         ):
             return await self.flask_app(scope, receive, send)
 
+        observation = Observation()
+        token = request_observation.set(observation)
+        try:
+            with observe("request", observation):
+                return await self.handle_mcp(scope, receive, send, observation)
+        finally:
+            request_observation.reset(token)
+
+    async def handle_mcp(self, scope, receive, send, observation):
         async def no_cache(message):
             if message["type"] == "http.response.start":
+                observation.status = message["status"]
+                if observation.status >= 400 and observation.outcome == "ok":
+                    observation.outcome = {
+                        400: "invalid_request", 403: "origin_rejected",
+                        421: "host_rejected",
+                    }.get(observation.status, "transport_error")
                 message["headers"] = [
                     (k, v) for k, v in message.get("headers", [])
                     if k.lower() not in (b"cache-control", b"x-content-type-options")
@@ -46,7 +60,10 @@ class RoadmapApplication:
             await send(message)
 
         async def reject(status, code):
-            logger.info("mcp_transport status=%d code=%s", status, code)
+            observation.outcome = {
+                404: "path_rejected", 429: "rate_limit", 405: "method_rejected",
+                503: "concurrency_limit", 413: "request_too_large", 408: "body_timeout",
+            }[status]
             response = JSONResponse(
                 {"error": code}, status_code=status,
                 headers=(
@@ -76,6 +93,7 @@ class RoadmapApplication:
                     while True:
                         message = await receive()
                         if message["type"] == "http.disconnect":
+                            observation.outcome = "disconnected"
                             return
                         body.extend(message.get("body", b""))
                         if len(body) > MAX_BODY:
@@ -85,6 +103,7 @@ class RoadmapApplication:
             except TimeoutError:
                 return await reject(408, "body_timeout")
 
+            identify_message(body, observation)
             delivered = False
 
             async def buffered_receive():

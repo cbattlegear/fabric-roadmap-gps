@@ -3,6 +3,9 @@
 import logging
 import os
 import sys
+import runpy
+from pathlib import Path
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -126,3 +129,36 @@ def test_init_telemetry_does_not_duplicate_stream_handler():
 
     stream_handlers = [h for h in logger.handlers if isinstance(h, logging.StreamHandler)]
     assert len(stream_handlers) == 1
+
+
+@pytest.mark.parametrize("environment,connection,enabled", [
+    ("production", "Endpoint=https://unused", True),
+    ("production", "", False),
+    ("development", "Endpoint=https://unused", False),
+])
+def test_web_uses_shared_setup_once_and_preserves_flask_exclusions(
+    monkeypatch, environment, connection, enabled,
+):
+    monkeypatch.setenv("CURRENT_ENVIRONMENT", environment)
+    monkeypatch.setenv("APPLICATIONINSIGHTS_CONNECTION_STRING", connection)
+    monkeypatch.setenv("ACS_RESOURCE_ID", "test-only")
+    monkeypatch.setenv("BASE_URL", "https://gps.example")
+    fake_module = type(sys)("azure.monitor.opentelemetry")
+    configure = Mock()
+    fake_module.configure_azure_monitor = configure
+    monkeypatch.setitem(sys.modules, "azure.monitor.opentelemetry", fake_module)
+    with patch("opentelemetry.instrumentation.flask.FlaskInstrumentor") as instrument, \
+         patch("opentelemetry.trace.set_tracer_provider"), \
+         patch("opentelemetry.sdk.trace.export.BatchSpanProcessor"):
+        namespace = runpy.run_path(str(Path(__file__).resolve().parents[1] / "server.py"), run_name="server")
+    assert os.environ["OTEL_SERVICE_NAME"] == "fabric-gps-web-frontend"
+    assert namespace["otelLogger"].name == "server.opentelemetry"
+    instrument.return_value.instrument_app.assert_called_once_with(
+        namespace["app"], excluded_urls="healthcheck",
+    )
+    if enabled:
+        configure.assert_called_once_with(
+            logger_name="server.opentelemetry", enable_live_metrics=True,
+        )
+    else:
+        configure.assert_not_called()

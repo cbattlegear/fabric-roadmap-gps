@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import runpy
 import threading
 from contextlib import asynccontextmanager
@@ -16,6 +17,7 @@ from starlette.testclient import TestClient
 from flask import Flask
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared import _otel as sdk_otel
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
@@ -25,11 +27,66 @@ from lib.db_retry import retry_deadline, retry_on_transient_errors
 from lib.release_reads import read_release_page
 from lib.releases_api import ReleasesQuery, _format_release_row
 from mcp_app import MAX_BODY, create_app
+from lib import mcp_telemetry
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
+from opentelemetry.sdk._logs.export import InMemoryLogExporter, SimpleLogRecordProcessor
+from opentelemetry.trace import SpanKind, StatusCode
 
 MODERN_META = {
     "io.modelcontextprotocol/protocolVersion": "2026-07-28",
     "io.modelcontextprotocol/clientCapabilities": {},
 }
+
+
+@pytest.fixture
+def exported(monkeypatch):
+    spans = InMemorySpanExporter()
+    traces = TracerProvider()
+    traces.add_span_processor(SimpleSpanProcessor(spans))
+    monkeypatch.setattr(mcp_telemetry, "tracer", traces.get_tracer("test.mcp"))
+    monkeypatch.setattr(sdk_otel, "_tracer", traces.get_tracer("test.sdk"))
+    logs = InMemoryLogExporter()
+    provider = LoggerProvider()
+    provider.add_log_record_processor(SimpleLogRecordProcessor(logs))
+    handler = LoggingHandler(logger_provider=provider)
+    # Azure Monitor attaches its handler to this same named parent.
+    parent = logging.getLogger("server.opentelemetry")
+    old_level = parent.level
+    parent.setLevel(logging.INFO)
+    parent.addHandler(handler)
+    try:
+        yield SimpleNamespace(spans=spans, logs=logs, traces=traces)
+    finally:
+        parent.removeHandler(handler)
+        parent.setLevel(old_level)
+        handler.close()
+        provider.shutdown()
+        traces.shutdown()
+
+
+def observations(exported, kind):
+    return [
+        dict(item.log_record.attributes)
+        for item in exported.logs.get_finished_logs()
+        if item.log_record.body == f"mcp_{kind}"
+    ]
+
+
+async def modern_post(http, method, params=None, **kwargs):
+    headers = {
+        "Accept": "application/json, text/event-stream",
+        "MCP-Protocol-Version": "2026-07-28",
+        "Mcp-Method": method,
+    }
+    if method == "tools/call" and isinstance((params or {}).get("name"), str):
+        headers["Mcp-Name"] = params["name"]
+    return await http.post("/mcp", headers=headers, json={
+        "jsonrpc": "2.0", "id": "private-request-id", "method": method,
+        "params": {"_meta": MODERN_META, **(params or {})},
+    }, **kwargs)
 
 
 @pytest.fixture
@@ -138,12 +195,15 @@ async def test_sdk_initialize_discovery_calls_and_flask(app, engine):
     {"sort": "sql"}, {"sql": "drop table"}, {"product_name": "x" * 201},
     {"include_inactive": "false"},
 ])
-async def test_invalid_inputs_never_query_db(app, query):
+async def test_invalid_inputs_never_query_db(app, query, exported):
     async with http_client(app) as http, protocol_client(http) as session:
         with patch("lib.roadmap_mcp.read_release_page") as read:
             result = await session.call_tool("search_releases", {"query": query})
         assert result.is_error
         read.assert_not_called()
+    record, = observations(exported, "tool")
+    assert record["mcp.outcome"] == "validation_error"
+    assert record["mcp.executed"] is False
 
 
 @pytest.mark.anyio
@@ -323,7 +383,7 @@ def test_retry_deadline_redacts_private_error_logs(caplog):
 
 
 @pytest.mark.anyio
-async def test_timeout_keeps_background_work_slots_until_threads_finish(app, monkeypatch):
+async def test_timeout_keeps_background_work_slots_until_threads_finish(app, monkeypatch, exported):
     monkeypatch.setattr("lib.roadmap_mcp.TOOL_TIMEOUT_SECONDS", 0.1)
     release = threading.Event()
     entered = []
@@ -356,6 +416,271 @@ async def test_timeout_keeps_background_work_slots_until_threads_finish(app, mon
                 assert len(entered) == 4
             finally:
                 release.set()
+    tool_records = observations(exported, "tool")
+    request_records = observations(exported, "request")
+    assert len(tool_records) == len(request_records) == 5
+    assert [record["mcp.outcome"] for record in tool_records].count("timeout") == 4
+    assert tool_records[-1]["mcp.outcome"] == "busy"
+    assert tool_records[-1]["mcp.executed"] is False
+    assert all(record["http.response.status_code"] == 200 for record in request_records)
+    assert all(span.status.status_code == StatusCode.ERROR
+               for span in exported.spans.get_finished_spans())
+
+
+@pytest.mark.anyio
+async def test_usage_export_discovery_all_tools_and_trace_correlation(app, exported):
+    with exported.traces.get_tracer("test").start_as_current_span("parent") as parent:
+        async with http_client(app) as http, protocol_client(http) as session:
+            await session.list_tools()
+            for name, arguments in (
+                ("search_releases", {"query": {"q": "private-query-value"}}),
+                ("get_release", {"release_item_id": "r1"}),
+                ("get_release_history", {"release_item_id": "r1"}),
+                ("get_filter_options", {}),
+            ):
+                with patch.object(db, "fetch_history_rows", return_value=[]):
+                    assert not (await session.call_tool(name, arguments)).is_error
+            await http.get("/existing?private-token=value")
+    requests = observations(exported, "request")
+    tools = observations(exported, "tool")
+    assert len(requests) == 7  # initialize, initialized notification, list, four calls
+    assert {record["mcp.method"] for record in requests} == {
+        "initialize", "notifications/initialized", "tools/list", "tools/call",
+    }
+    assert len(tools) == 4
+    assert {record["mcp.tool"] for record in tools} == mcp_telemetry.TOOLS
+    assert all(record["mcp.executed"] and record["mcp.outcome"] == "ok" for record in tools)
+    spans = [span for span in exported.spans.get_finished_spans()
+             if span.name != "parent" and span.kind != SpanKind.CLIENT]
+    assert len(spans) == 11
+    assert all(span.context.trace_id == parent.get_span_context().trace_id for span in spans)
+    request_spans = {span.context.span_id: span for span in spans if span.name == "mcp.request"}
+    assert all(span.parent.span_id in request_spans for span in spans if span.name == "mcp.tool")
+    logs = exported.logs.get_finished_logs()
+    assert len(logs) == 11
+    assert {item.log_record.span_id for item in logs} == {span.context.span_id for span in spans}
+    assert all(item.log_record.trace_id == parent.get_span_context().trace_id for item in logs)
+    assert all(record["mcp.duration_ms"] >= 0 for record in requests + tools)
+    raw = repr([(span.name, dict(span.attributes), span.events, span.status.description) for span in spans])
+    raw += repr([(item.log_record.body, dict(item.log_record.attributes)) for item in logs])
+    assert "private-" not in raw
+    assert "r1" not in raw
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("method,params,expected,executed", [
+    ("tools/call", {"name": "search_releases", "arguments": {"query": {"q": "private-query", "page": 0}}},
+     "validation_error", False),
+    ("tools/call", {"name": "private-tool-name", "arguments": {"secret": "private-argument"}},
+     "validation_error", False),
+    ("tools/call", {"name": "get_release", "arguments": {"release_item_id": "missing"}},
+     "tool_error", True),
+    ("tools/call", {"name": "get_release", "arguments": {"release_item_id": "r1"}},
+     "unavailable", True),
+    ("private-method-name", {"secret": "private-argument"}, "protocol_error", False),
+    ("tools/list", {"cursor": 99}, "validation_error", False),
+    ("server/discover", {}, "ok", False),
+    ("ping", {}, "protocol_error", False),
+    ("resources/list", {}, "ok", False),
+    ("resources/templates/list", {}, "ok", False),
+    ("prompts/list", {}, "ok", False),
+])
+async def test_usage_errors_and_method_allowlist(app, exported, method, params, expected, executed):
+    async with http_client(app) as http:
+        with patch.object(db, "get_release_item_by_id", side_effect=(
+            RuntimeError("private-password SQL parameter") if expected == "unavailable" else None
+        ), return_value=None):
+            await modern_post(http, method, params)
+    requests = observations(exported, "request")
+    tools = observations(exported, "tool")
+    assert len(requests) == 1
+    assert requests[0]["mcp.outcome"] == expected
+    assert requests[0]["mcp.executed"] is executed
+    assert requests[0]["mcp.method"] == (method if method in mcp_telemetry.METHODS else "unknown")
+    assert len(tools) == (1 if method == "tools/call" else 0)
+    spans = exported.spans.get_finished_spans()
+    assert len(spans) == 1 + len(tools)
+    if expected != "ok":
+        assert all(span.status.status_code == StatusCode.ERROR for span in spans)
+    raw = repr([(span.name, dict(span.attributes), span.events, span.status.description) for span in spans])
+    raw += repr([(item.log_record.body, dict(item.log_record.attributes))
+                 for item in exported.logs.get_finished_logs()])
+    assert "private-" not in raw
+    assert all(not span.events for span in spans)
+
+
+@pytest.mark.anyio
+async def test_usage_transport_rejections_are_single_private_records(app, exported, monkeypatch):
+    headers = {"Accept": "application/json, text/event-stream", "Content-Type": "application/json"}
+    async with http_client(app) as http:
+        for extra, status in (({"Host": "private-host"}, 421), ({"Origin": "https://private-origin"}, 403)):
+            response = await http.post("/mcp?private-query=value", content="{}", headers=headers | extra)
+            assert response.status_code == status
+        assert (await http.post("/mcp", content="{private-body", headers=headers)).status_code == 400
+        assert (await http.post("/mcp", content="private-body")).status_code == 400
+        assert (await http.post("/mcp", content="x" * (MAX_BODY + 1))).status_code == 413
+        assert (await http.post("/mcp/private-path")).status_code == 404
+        assert (await http.get("/mcp?private-token=value")).status_code == 405
+        app.inflight = 4
+        assert (await http.post("/mcp")).status_code == 503
+        app.inflight = 0
+        app.requests = app.rate_limit
+        assert (await http.post("/mcp")).status_code == 429
+        app.window_start -= 61
+    monkeypatch.setattr("mcp_app.BODY_TIMEOUT_SECONDS", 0.001)
+
+    async def slow_receive():
+        await asyncio.sleep(1)
+
+    async def disconnect():
+        return {"type": "http.disconnect"}
+
+    async def send(_message):
+        pass
+
+    scope = {"type": "http", "path": "/mcp", "method": "POST"}
+    await app(scope, slow_receive, send)
+    await app(scope, disconnect, send)
+    records = observations(exported, "request")
+    assert [record["mcp.outcome"] for record in records] == [
+        "host_rejected", "origin_rejected", "invalid_request", "invalid_request",
+        "request_too_large", "path_rejected", "method_rejected", "concurrency_limit",
+        "rate_limit", "body_timeout", "disconnected",
+    ]
+    assert len(exported.spans.get_finished_spans()) == len(records) == 11
+    assert not observations(exported, "tool")
+    assert "private-" not in repr(records)
+    assert app.inflight == 0
+
+
+@pytest.mark.anyio
+async def test_usage_cancellation_keeps_slot_and_never_reports_success(app, exported):
+    entered = []
+    lock = threading.Lock()
+    release = threading.Event()
+
+    def blocked(*_args):
+        with lock:
+            entered.append(1)
+        release.wait(timeout=3)
+        return None
+
+    async with http_client(app) as http:
+        with patch.object(db, "get_release_item_by_id", side_effect=blocked):
+            params = {
+                "name": "get_release", "arguments": {"release_item_id": "r1"},
+            }
+            tasks = [
+                asyncio.create_task(modern_post(http, "tools/call", params)) for _ in range(4)
+            ]
+            try:
+                async with asyncio.timeout(2):
+                    while len(entered) != 4:
+                        await asyncio.sleep(0.001)
+                for task in tasks:
+                    task.cancel()
+                for task in tasks:
+                    with pytest.raises(asyncio.CancelledError):
+                        await task
+                assert app.inflight == 0
+                assert "BUSY" in (await modern_post(http, "tools/call", params)).text
+                assert len(entered) == 4
+            finally:
+                release.set()
+    assert len(observations(exported, "tool")) == len(observations(exported, "request")) == 5
+    for kind in ("tool", "request"):
+        records = observations(exported, kind)
+        assert all(record["mcp.outcome"] == "cancelled" for record in records[:4])
+        assert records[-1]["mcp.outcome"] == "busy"
+    assert all(span.status.status_code == StatusCode.ERROR
+               for span in exported.spans.get_finished_spans())
+
+
+@pytest.mark.anyio
+async def test_usage_initialize_notifications_and_sensitive_metadata(app, exported):
+    headers = {"Accept": "application/json, text/event-stream"}
+    initialize = {
+        "jsonrpc": "2.0", "id": "private-id", "method": "initialize",
+        "params": {"protocolVersion": "2025-11-25", "capabilities": {},
+                   "clientInfo": {"name": "private-client-info", "version": "private-version"}},
+    }
+    async with http_client(app) as http:
+        http.headers.update({
+            "Authorization": "Bearer private-authorization", "Cookie": "private-cookie",
+            "X-Forwarded-For": "private-ip", "User-Agent": "private-agent",
+        })
+        assert (await http.post("/mcp", json=initialize, headers=headers)).status_code == 200
+        initialize["params"]["clientInfo"] = "private-invalid-client-info"
+        await http.post("/mcp", json=initialize, headers=headers)
+        for method in (
+            "notifications/initialized", "notifications/cancelled",
+            "notifications/progress", "notifications/roots/list_changed",
+        ):
+            response = await http.post("/mcp", headers=headers, json={
+                "jsonrpc": "2.0", "method": method,
+                "params": {"requestId": "private-cancel-id", "reason": "private-reason",
+                           "progressToken": "private-progress", "progress": 1},
+            })
+            assert response.status_code == 202
+    records = observations(exported, "request")
+    assert len(records) == 6
+    assert records[0]["mcp.outcome"] == "ok"
+    assert records[1]["mcp.outcome"] == "validation_error"
+    assert all(record["mcp.method"].startswith("notifications/") for record in records[2:])
+    assert not observations(exported, "tool")
+    spans = exported.spans.get_finished_spans()
+    assert len(spans) == 6
+    raw = repr([(span.name, dict(span.attributes), span.events, span.status.description) for span in spans])
+    raw += repr([(item.log_record.body, dict(item.log_record.attributes))
+                 for item in exported.logs.get_finished_logs()])
+    assert "private-" not in raw
+    assert all(not span.events for span in spans)
+
+
+@pytest.mark.anyio
+async def test_usage_unexpected_app_error_is_observed_and_propagated(exported):
+    from mcp_app import RoadmapApplication
+
+    error = RuntimeError("private-exception-message")
+
+    async def fail(_scope, _receive, _send):
+        raise error
+
+    app = RoadmapApplication(fail, Flask(__name__))
+
+    async def receive():
+        return {"type": "http.request", "body": b"{}", "more_body": False}
+
+    async def send(_message):
+        pass
+
+    with pytest.raises(RuntimeError) as caught:
+        await app({"type": "http", "path": "/mcp", "method": "POST"}, receive, send)
+    assert caught.value is error
+    assert app.inflight == 0
+    assert mcp_telemetry.request_observation.get() is None
+    records = observations(exported, "request")
+    assert len(records) == 1
+    assert records[0]["mcp.outcome"] == "error"
+    assert records[0]["http.response.status_code"] == 0
+    span, = exported.spans.get_finished_spans()
+    assert span.status.status_code == StatusCode.ERROR
+    assert not span.events
+    assert "private-" not in repr(records)
+
+
+@pytest.mark.parametrize("body", [
+    b"{", b"\xff", b"[]", b"null", b'{"method":[],"params":[]}',
+    b'{"method":"tools/call","params":{"name":["private-name"]}}',
+    b"[" * 1200 + b"]" * 1200,
+    b'{"private-value":' + b"1" * 5000 + b"}",
+])
+def test_usage_identification_never_replaces_sdk_validation(body):
+    observation = mcp_telemetry.Observation()
+    mcp_telemetry.identify_message(body, observation)
+    assert observation.method in mcp_telemetry.METHODS | {"unknown"}
+    assert observation.tool in {"none", "unknown"}
+    assert "private-" not in repr(observation)
 
 
 def test_dispatcher_lifespan_and_wsgi_routes(app):
@@ -388,7 +713,7 @@ async def test_slow_body_timeout_is_no_store_and_releases_http_slot(app, monkeyp
 
 
 @pytest.mark.anyio
-async def test_structured_result_budget_and_page_ceiling(app, monkeypatch):
+async def test_structured_result_budget_and_page_ceiling(app, monkeypatch, exported):
     async with http_client(app) as http, protocol_client(http) as session:
         with patch("lib.roadmap_mcp.read_release_page", return_value=([], 4000)):
             result = await session.call_tool("search_releases", {"query": {"page": 100}})
@@ -398,6 +723,7 @@ async def test_structured_result_budget_and_page_ceiling(app, monkeypatch):
         too_large = await session.call_tool("get_release", {"release_item_id": "r1"})
         assert too_large.is_error
         assert "RESULT_TOO_LARGE" in too_large.content[0].text
+    assert [record["mcp.outcome"] for record in observations(exported, "tool")] == ["ok", "tool_error"]
 
 
 def test_make_engine_options_preserve_defaults(monkeypatch):
