@@ -12,7 +12,9 @@ from starlette.responses import JSONResponse
 
 from db.db_sqlserver import make_engine
 from lib.roadmap_mcp import create_roadmap_server
-from lib.mcp_telemetry import Observation, identify_message, observe, request_observation
+from lib.mcp_telemetry import (
+    Observation, TransportLifecycle, identify_message, observe, request_observation,
+)
 
 MAX_BODY = 16 * 1024
 BODY_TIMEOUT_SECONDS = 5
@@ -36,23 +38,37 @@ class RoadmapApplication:
         ):
             return await self.flask_app(scope, receive, send)
 
-        observation = Observation()
+        transport = TransportLifecycle()
+        observation = Observation(transport=transport)
+
+        async def observed_receive():
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                transport.disconnected = True
+            return message
+
+        async def observed_send(message):
+            await send(message)
+            if message["type"] == "http.response.start":
+                observation.status = message["status"]
+            transport.sent(message)
+
         token = request_observation.set(observation)
         try:
             with observe("request", observation):
-                return await self.handle_mcp(scope, receive, send, observation)
+                return await self.handle_mcp(scope, observed_receive, observed_send, observation)
         finally:
             request_observation.reset(token)
 
     async def handle_mcp(self, scope, receive, send, observation):
         async def no_cache(message):
             if message["type"] == "http.response.start":
-                observation.status = message["status"]
-                if observation.status >= 400 and observation.outcome == "ok":
+                status = message["status"]
+                if status >= 400 and observation.outcome == "ok":
                     observation.outcome = {
                         400: "invalid_request", 403: "origin_rejected",
                         421: "host_rejected",
-                    }.get(observation.status, "transport_error")
+                    }.get(status, "transport_error")
                 message["headers"] = [
                     (k, v) for k, v in message.get("headers", [])
                     if k.lower() not in (b"cache-control", b"x-content-type-options")

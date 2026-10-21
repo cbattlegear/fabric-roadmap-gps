@@ -13,6 +13,11 @@ owns JSON-RPC parsing, initialization, capability/tool discovery, validation,
 tool calls, errors and transport lifecycle. The endpoint uses **Streamable HTTP**
 at exactly `/mcp`, JSON responses, and stateless legacy sessions. No SSE endpoint,
 push notifications, resumability, sampling, or sticky sessions are needed.
+SDK subscriptions are explicitly disabled (`subscriptions=False`):
+modern `subscriptions/listen` requests receive the SDK's HTTP 404 JSON
+`METHOD_NOT_FOUND` error rather than opening a notification stream. Normal
+initialization/discovery does not advertise tool-list changes or resource
+subscriptions.
 Pytest exercises the real SDK `ClientSession` + `streamable_http_client`
 initialize/discover/call sequence on negotiated **2025-11-25**, and the SDK's
 **2026-07-28** sessionless request path. Other versions remain SDK-negotiated;
@@ -162,15 +167,37 @@ Logs and spans carry these fixed fields:
 | Field | Meaning |
 | --- | --- |
 | `mcp.kind` | `request` or `tool` |
-| `mcp.method` | Allowlisted MCP operation, otherwise `unknown` |
+| `mcp.method` | Allowlisted MCP operation (including rejected `subscriptions/listen`), otherwise `unknown` |
 | `mcp.tool` | One of the four public tools, `unknown`, or `none` |
-| `mcp.outcome` | `ok`, `validation_error`, `protocol_error`, `tool_error`, `unavailable`, `busy`, `timeout`, `cancelled`, `error`, or a fixed transport rejection outcome |
+| `mcp.outcome` | `ok`, `validation_error`, `protocol_error`, `tool_error`, `unavailable`, `busy`, `timeout`, `cancelled`, `error`, `disconnected`, `incomplete`, or a fixed transport rejection outcome |
 | `mcp.executed` | Whether the call entered bounded tool execution; false for validation failures/BUSY and non-tool requests |
-| `mcp.duration_ms` | Elapsed milliseconds through completion, rejection or cancellation, not background SQL lifetime |
+| `mcp.duration_ms` | Total handler elapsed milliseconds, including post-response cleanup; not background SQL lifetime |
 | `http.response.status_code` | Request logs/spans only; zero if no response was started |
+| `mcp.response_started` / `mcp.response_completed` | Request-only booleans: response-start / final body accepted by ASGI send |
+| `mcp.response_format` | Request-only fixed class: `json`, `eventstream`, `other` (including absent Content-Type), or `none` (no accepted response-start) |
+| `mcp.disconnected` | Request-only boolean: receive actually returned `http.disconnect`; not inferred from cancellation or a send error |
+| `mcp.cleanup_outcome` | Request-only `ok`, `cancelled`, or `error`; escaped cancellation/error after final body, separate from response outcome |
+| `mcp.response_start_ms` | Request elapsed milliseconds to accepted response-start; omitted if not reached |
+| `mcp.response_complete_ms` | Request elapsed milliseconds to accepted final body; omitted if not reached |
+| `mcp.cleanup_duration_ms` | Elapsed milliseconds after final body until handler exit; omitted without a final body |
 
 HTTP 200 with SDK `isError=true` has a failure outcome and error span status,
-not `ok`. Notification success means acknowledgment, not tool execution or a
+not `ok`. HTTP status alone is not proof of completion: final body means
+`http.response.body` with `more_body=False` (including when omitted), after
+response-start, and only after the underlying send returns successfully.
+This measures handoff to the ASGI server, not delivery to the remote client.
+An otherwise successful request without a final body is `disconnected` if
+receive observed a disconnect, otherwise `incomplete`, even when the SDK
+suppresses its own task-group cancellation. Existing specific protocol, tool,
+transport and escaped cancellation/error outcomes take precedence over this
+incomplete-response fallback; the lifecycle booleans remain available.
+A completed response retains its response outcome and span status even if a
+subsequent disconnect or cleanup cancellation/error occurs: consult
+`mcp.disconnected` and `mcp.cleanup_outcome` separately. Escaped exceptions and
+cancellations still propagate; instrumentation does not wait for cleanup.
+`mcp.cleanup_outcome=ok` means no escaped cleanup failure was observed, not
+that cancellation handled internally by the SDK was absent.
+Notification success means acknowledgment, not tool execution or a
 promise that background notification handling completed. Body identification
 only labels the already-bounded body with allowlisted names; it does not validate
 or replace SDK parsing. Rejections before body reading have `unknown` method.
@@ -196,8 +223,34 @@ traces
     p95_ms = percentile(todouble(customDimensions["mcp.duration_ms"]), 95)
     by method = tostring(customDimensions["mcp.method"]),
        outcome = tostring(customDimensions["mcp.outcome"]),
-       status = toint(customDimensions["http.response.status_code"])
+       status = toint(customDimensions["http.response.status_code"]),
+       completed = tobool(customDimensions["mcp.response_completed"]),
+       disconnected = tobool(customDimensions["mcp.disconnected"]),
+       format = tostring(customDimensions["mcp.response_format"])
 ```
+
+For long handlers, separate response time from cleanup (completion/cleanup
+durations are absent on unfinished responses):
+
+```kusto
+traces
+| where timestamp > ago(24h) and cloud_RoleName == "fabric-gps-web-frontend"
+| where message == "mcp_request"
+| project timestamp, operation_Id,
+    method = tostring(customDimensions["mcp.method"]),
+    outcome = tostring(customDimensions["mcp.outcome"]),
+    total_ms = todouble(customDimensions["mcp.duration_ms"]),
+    response_ms = todouble(customDimensions["mcp.response_complete_ms"]),
+    cleanup_ms = todouble(customDimensions["mcp.cleanup_duration_ms"]),
+    completed = tobool(customDimensions["mcp.response_completed"]),
+    disconnected = tobool(customDimensions["mcp.disconnected"]),
+    cleanup = tostring(customDimensions["mcp.cleanup_outcome"])
+```
+
+The previously observed roughly 1,800-second request does not establish which
+component ended it. These fields distinguish unfinished streams from completed
+responses with long cleanup; they do not identify a proxy timeout or justify
+applying the SDK's stateful-session idle timeout to a modern stateless request.
 
 ```kusto
 traces
