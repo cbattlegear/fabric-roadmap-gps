@@ -477,3 +477,8 @@ No feature flag or new required environment setting is needed: Host/Origin
 allowlists derive from the existing `CANONICAL_HOST` or `BASE_URL`. Normal
 `gunicorn -c gunicorn.conf.py` startup uses the supported ASGI worker; refresh
 mode keeps its existing sequential pipeline.
+
+MCP request/tool usage, latency, failures and throttling use the existing Azure
+Monitor web instrumentation, with bounded names and no request content or user
+identifiers. See [MCP telemetry and queries](MCP.md#usage-and-diagnostic-telemetry)
+for exported fields, Application Insights queries, and local/deployment limits.

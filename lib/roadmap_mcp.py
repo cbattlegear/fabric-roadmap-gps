@@ -2,14 +2,13 @@
 
 import asyncio
 import json
-import logging
 import threading
-import time
 from typing import Annotated, Any, Literal
 from urllib.parse import quote, urlsplit
 
 import anyio
 from mcp.server import MCPServer
+from mcp.server._otel import OpenTelemetryMiddleware
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, ConfigDict, Field
@@ -17,9 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from db import db_sqlserver as db
 from lib.db_retry import retry_deadline
 from lib.release_reads import read_release_page
+from lib.mcp_telemetry import UsageMiddleware, tool_observation
 from lib.releases_api import ReleasesQuery, _build_pagination_meta, _format_release_row
 
-logger = logging.getLogger(__name__)
 Identifier = Annotated[str, Field(min_length=1, max_length=36, pattern=r"^[A-Za-z0-9-]+$", strict=True)]
 Filter = Annotated[str, Field(min_length=1, max_length=200, strict=True)]
 MAX_RESULT_BYTES = 256 * 1024
@@ -75,15 +74,25 @@ def create_roadmap_server(engine_provider, base_url: str) -> MCPServer:
             "Dates are UTC; release dates are quarters. Follow canonical URLs for full text."
         ),
     )
+    # Pinned SDK 2.3: its default spans expose IDs, raw names and exceptions.
+    # Preserve request-state security and all protocol middleware.
+    mcp._lowlevel_server.middleware[:] = [
+        UsageMiddleware() if isinstance(item, OpenTelemetryMiddleware) else item
+        for item in mcp._lowlevel_server.middleware
+    ]
     slots = threading.BoundedSemaphore(4)
     annotations = ToolAnnotations(
         read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False,
     )
 
-    async def execute(operation, work):
+    async def execute(work):
+        observation = tool_observation.get()
         if not slots.acquire(blocking=False):
+            if observation is not None:
+                observation.outcome = "busy"
             raise ToolError("BUSY: read concurrency limit reached; retry later")
-        started = time.monotonic()
+        if observation is not None:
+            observation.executed = True
 
         def run():
             try:
@@ -95,7 +104,6 @@ def create_roadmap_server(engine_provider, base_url: str) -> MCPServer:
             finally:
                 slots.release()
 
-        outcome = "ok"
         task = asyncio.create_task(anyio.to_thread.run_sync(run))
         # A disconnected/timed-out caller must not release a still-running SQL slot.
         task.add_done_callback(lambda done: None if done.cancelled() else done.exception())
@@ -103,18 +111,22 @@ def create_roadmap_server(engine_provider, base_url: str) -> MCPServer:
             async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
                 return await asyncio.shield(task)
         except TimeoutError:
-            outcome = "timeout"
+            if observation is not None:
+                observation.outcome = "timeout"
             raise ToolError("TIMEOUT: public read deadline exceeded; retry later") from None
+        except asyncio.CancelledError:
+            if observation is not None:
+                observation.outcome = "cancelled"
+            raise
         except ToolError:
-            outcome = "tool_error"
+            if observation is not None:
+                observation.outcome = "tool_error"
             raise
         except Exception:
-            outcome = "unavailable"
+            if observation is not None:
+                observation.outcome = "unavailable"
             # Driver errors can include SQL/credentials: do not log exception text.
             raise ToolError("UNAVAILABLE: public roadmap read failed; retry later") from None
-        finally:
-            logger.info("mcp_read operation=%s outcome=%s duration_ms=%d",
-                        operation, outcome, (time.monotonic() - started) * 1000)
 
     @mcp.tool(annotations=annotations, structured_output=True)
     async def search_releases(query: SearchQuery) -> dict[str, Any]:
@@ -137,7 +149,7 @@ def create_roadmap_server(engine_provider, base_url: str) -> MCPServer:
                 "pagination": pagination, "search_mode": "substring",
                 "page_limit": 100,
             }
-        return await execute("search_releases", work)
+        return await execute(work)
 
     @mcp.tool(annotations=annotations, structured_output=True)
     async def get_release(release_item_id: Identifier) -> dict[str, Any]:
@@ -147,7 +159,7 @@ def create_roadmap_server(engine_provider, base_url: str) -> MCPServer:
             if row is None:
                 raise ToolError("NOT_FOUND: release does not exist")
             return public_release(_format_release_row(row, include_description_html=False), base_url)
-        return await execute("get_release", work)
+        return await execute(work)
 
     @mcp.tool(annotations=annotations, structured_output=True)
     async def get_release_history(
@@ -176,7 +188,7 @@ def create_roadmap_server(engine_provider, base_url: str) -> MCPServer:
                 "has_more": len(rows) > limit,
                 "url": f"{base_url}/release/{quote(release_item_id, safe='')}",
             }
-        return await execute("get_release_history", work)
+        return await execute(work)
 
     @mcp.tool(annotations=annotations, structured_output=True)
     async def get_filter_options() -> dict[str, Any]:
@@ -194,6 +206,6 @@ def create_roadmap_server(engine_provider, base_url: str) -> MCPServer:
                     truncated.append(label)
             return {"filters": result, "truncated_filters": truncated,
                     "url": f"{base_url}/"}
-        return await execute("get_filter_options", work)
+        return await execute(work)
 
     return mcp
