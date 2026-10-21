@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import httpx2
+import anyio
 import pytest
 from starlette.testclient import TestClient
 from flask import Flask
@@ -26,7 +27,7 @@ from db import db_sqlserver as db
 from lib.db_retry import retry_deadline, retry_on_transient_errors
 from lib.release_reads import read_release_page
 from lib.releases_api import ReleasesQuery, _format_release_row
-from mcp_app import MAX_BODY, create_app
+from mcp_app import MAX_BODY, RoadmapApplication, create_app
 from lib import mcp_telemetry
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
@@ -495,6 +496,8 @@ async def test_usage_errors_and_method_allowlist(app, exported, method, params, 
     tools = observations(exported, "tool")
     assert len(requests) == 1
     assert requests[0]["mcp.outcome"] == expected
+    assert requests[0]["mcp.response_completed"] is True
+    assert requests[0]["mcp.response_format"] == "json"
     assert requests[0]["mcp.executed"] is executed
     assert requests[0]["mcp.method"] == (method if method in mcp_telemetry.METHODS else "unknown")
     assert len(tools) == (1 if method == "tools/call" else 0)
@@ -592,6 +595,9 @@ async def test_usage_cancellation_keeps_slot_and_never_reports_success(app, expo
         records = observations(exported, kind)
         assert all(record["mcp.outcome"] == "cancelled" for record in records[:4])
         assert records[-1]["mcp.outcome"] == "busy"
+        if kind == "request":
+            assert all(not record["mcp.response_completed"] for record in records[:4])
+            assert records[-1]["mcp.response_completed"] is True
     assert all(span.status.status_code == StatusCode.ERROR
                for span in exported.spans.get_finished_spans())
 
@@ -667,6 +673,283 @@ async def test_usage_unexpected_app_error_is_observed_and_propagated(exported):
     assert span.status.status_code == StatusCode.ERROR
     assert not span.events
     assert "private-" not in repr(records)
+
+
+@pytest.mark.anyio
+async def test_sdk_subscriptions_rejected_without_stream_or_db_and_client_still_usable(exported):
+    engine_provider = Mock(side_effect=AssertionError("must not access a live database"))
+    app = create_app(Flask(__name__), engine_provider, base_url="https://gps.example")
+    body = json.dumps({
+        "jsonrpc": "2.0", "id": "private-listen-id", "method": "subscriptions/listen",
+        "params": {
+            "_meta": MODERN_META, "notifications": {"toolsListChanged": True},
+        },
+    }).encode()
+    scope = {
+        "type": "http", "asgi": {"version": "3.0"}, "http_version": "1.1",
+        "scheme": "https", "server": ("gps.example", 443), "client": ("private-ip", 1),
+        "path": "/mcp", "raw_path": b"/mcp", "root_path": "", "query_string": b"",
+        "method": "POST", "headers": [
+            (b"host", b"gps.example"), (b"content-type", b"application/json"),
+            (b"accept", b"application/json, text/event-stream"),
+            (b"mcp-protocol-version", b"2026-07-28"),
+            (b"mcp-method", b"subscriptions/listen"),
+        ],
+    }
+    delivered = False
+    sent = []
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": body}
+        # Before the fix the SDK acknowledges an SSE stream and waits here.
+        await asyncio.sleep(0.08)
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        sent.append(message)
+
+    with exported.traces.get_tracer("test").start_as_current_span("parent") as parent:
+        async with http_client(app) as http:
+            async with asyncio.timeout(1):
+                await app(scope, receive, send)
+            assert sent[0]["status"] == 404
+            assert (b"content-type", b"application/json") in sent[0]["headers"]
+            assert (b"cache-control", b"no-store") in sent[0]["headers"]
+            bodies = [message for message in sent if message["type"] == "http.response.body"]
+            assert bodies and not bodies[-1].get("more_body", False)
+            assert not any(message.get("more_body", False) for message in bodies)
+            error = json.loads(b"".join(message.get("body", b"") for message in bodies))
+            assert error["error"]["code"] == -32601  # SDK METHOD_NOT_FOUND
+            assert "result" not in error
+            engine_provider.assert_not_called()
+            assert app.inflight == 0
+            discovery = await modern_post(http, "server/discover")
+            assert discovery.status_code == 200
+            capabilities = discovery.json()["result"]["capabilities"]
+            for category in ("tools", "resources", "prompts"):
+                assert not capabilities[category].get("listChanged", False)
+            assert not capabilities["resources"].get("subscribe", False)
+            engine_provider.assert_not_called()
+            async with streamable_http_client(
+                "https://gps.example/mcp", http_client=http,
+            ) as streams, ClientSession(*streams) as session:
+                initialized = await session.initialize()
+                assert not initialized.capabilities.tools.list_changed
+                assert not initialized.capabilities.resources.subscribe
+                assert len((await session.list_tools()).tools) == 4
+                with patch.object(db, "get_distinct_values", return_value=["private-filter"]):
+                    engine_provider.side_effect = None
+                    result = await session.call_tool("get_filter_options", {})
+                assert not result.is_error
+                assert result.structured_content["filters"]["product_names"] == ["private-filter"]
+    request, *controls = observations(exported, "request")
+    assert request["mcp.method"] == "subscriptions/listen"
+    assert request["mcp.tool"] == "none"
+    assert request["mcp.outcome"] == "protocol_error"
+    assert request["mcp.executed"] is False
+    assert request["mcp.response_started"] and request["mcp.response_completed"]
+    assert request["mcp.response_format"] == "json"
+    assert request["mcp.disconnected"] is False
+    assert all(record["mcp.outcome"] == "ok" for record in controls)
+    assert all(record["mcp.response_completed"] for record in controls)
+    assert {record["http.response.status_code"] for record in controls} == {200, 202}
+    tool, = observations(exported, "tool")
+    assert tool["mcp.outcome"] == "ok"
+    spans = [span for span in exported.spans.get_finished_spans()
+             if span.name in ("mcp.request", "mcp.tool")]
+    assert len(spans) == len(controls) + 2
+    assert all(span.context.trace_id == parent.get_span_context().trace_id for span in spans)
+    assert all(not span.events for span in spans)
+    assert "private-" not in repr([dict(span.attributes) for span in spans])
+    assert mcp_telemetry.request_observation.get() is None
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("phase,expected,completed,disconnected,cleanup", [
+    ("no_response", "incomplete", False, False, "ok"),
+    ("body_only", "incomplete", False, False, "ok"),
+    ("start_only", "incomplete", False, False, "ok"),
+    ("stream_disconnect", "disconnected", False, True, "ok"),
+    ("cancel_before_body", "cancelled", False, False, "ok"),
+    ("final_body", "ok", True, False, "ok"),
+    ("explicit_final_body", "ok", True, False, "ok"),
+    ("cleanup_disconnect", "ok", True, True, "ok"),
+    ("cleanup_cancel", "ok", True, False, "cancelled"),
+    ("cleanup_error", "ok", True, False, "error"),
+])
+async def test_response_lifecycle_boundaries_and_context(
+    exported, monkeypatch, phase, expected, completed, disconnected, cleanup,
+):
+    clock = [100.0]
+    monkeypatch.setattr(mcp_telemetry, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+    error = RuntimeError("private-cleanup-error")
+
+    async def handler(_scope, receive, send):
+        await receive()  # Consume the buffered request, not a disconnect.
+        if phase == "no_response":
+            return
+        if phase == "body_only":
+            await send({"type": "http.response.body", "body": b"private-body"})
+            return
+        clock[0] = 101.0
+        await send({
+            "type": "http.response.start", "status": 200,
+            "headers": [(b"content-type", (
+                b"text/event-stream; private-param=secret" if phase == "stream_disconnect"
+                else b"application/json; private-param=secret"
+            ))],
+        })
+        if phase == "start_only":
+            return
+        if phase == "cancel_before_body":
+            raise asyncio.CancelledError
+        if phase == "stream_disconnect":
+            await send({"type": "http.response.body", "body": b"private-ack", "more_body": True})
+
+            async def watch_disconnect(cancel_scope):
+                assert (await receive())["type"] == "http.disconnect"
+                cancel_scope.cancel()
+
+            # Match SDK-owned cancellation: no CancelledError escapes this group.
+            async with anyio.create_task_group() as group:
+                group.start_soon(watch_disconnect, group.cancel_scope)
+                await anyio.sleep_forever()
+            return
+        clock[0] = 103.0
+        body = {"type": "http.response.body", "body": b"private-result"}
+        if phase == "explicit_final_body":
+            body["more_body"] = False
+        await send(body)
+        clock[0] = 107.0
+        if phase == "cleanup_disconnect":
+            await receive()
+        elif phase == "cleanup_cancel":
+            async with anyio.create_task_group():
+                raise asyncio.CancelledError
+        elif phase == "cleanup_error":
+            raise error
+
+    app = RoadmapApplication(handler, Flask(__name__))
+
+    async def receive():
+        # The host consumes this once, then replays its bounded copy to the SDK.
+        return {"type": "http.request", "body": b'{"method":"subscriptions/listen"}'}
+
+    delivered = False
+
+    async def transport_receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return await receive()
+        return {"type": "http.disconnect"}
+
+    async def send(_message):
+        assert mcp_telemetry.request_observation.get() is not None
+
+    with exported.traces.get_tracer("test").start_as_current_span("parent") as parent:
+        if phase in ("cleanup_cancel", "cancel_before_body"):
+            with pytest.raises(asyncio.CancelledError):
+                await app({"type": "http", "path": "/mcp", "method": "POST"}, transport_receive, send)
+        elif phase == "cleanup_error":
+            with pytest.raises(RuntimeError) as caught:
+                await app({"type": "http", "path": "/mcp", "method": "POST"}, transport_receive, send)
+            assert caught.value is error
+        else:
+            await app({"type": "http", "path": "/mcp", "method": "POST"}, transport_receive, send)
+    record, = observations(exported, "request")
+    assert record["mcp.outcome"] == expected
+    assert record["mcp.response_started"] is (phase not in ("no_response", "body_only"))
+    assert record["mcp.response_completed"] is completed
+    assert record["mcp.disconnected"] is disconnected
+    assert record["mcp.cleanup_outcome"] == cleanup
+    assert record["mcp.response_format"] == (
+        "none" if phase in ("no_response", "body_only") else
+        "eventstream" if phase == "stream_disconnect" else "json"
+    )
+    if completed:
+        assert record["mcp.response_start_ms"] == 1000
+        assert record["mcp.response_complete_ms"] == 3000
+        assert record["mcp.cleanup_duration_ms"] == 4000
+        assert record["mcp.duration_ms"] == 7000
+    else:
+        assert "mcp.response_complete_ms" not in record
+        assert "mcp.cleanup_duration_ms" not in record
+    span, = [span for span in exported.spans.get_finished_spans() if span.name == "mcp.request"]
+    assert span.parent.span_id == parent.get_span_context().span_id
+    assert span.status.status_code == (StatusCode.UNSET if expected == "ok" else StatusCode.ERROR)
+    log, = exported.logs.get_finished_logs()
+    assert log.log_record.span_id == span.context.span_id
+    assert dict(span.attributes) == {
+        key: value for key, value in record.items() if not key.startswith("code.")
+    }
+    assert "private-" not in repr(record)
+    assert not span.events
+    assert app.inflight == 0
+    assert mcp_telemetry.request_observation.get() is None
+    assert not observations(exported, "tool")
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("failed_send", ["http.response.start", "http.response.body"])
+async def test_failed_send_never_marks_response_completed(exported, failed_send):
+    error = OSError("private-send-error")
+
+    async def handler(_scope, receive, send):
+        await receive()
+        await send({"type": "http.response.start", "status": 200})
+        await send({"type": "http.response.body", "body": b"private-result"})
+
+    async def receive():
+        return {"type": "http.request", "body": b"{}"}
+
+    async def send(message):
+        if message["type"] == failed_send:
+            raise error
+
+    app = RoadmapApplication(handler, Flask(__name__))
+    with pytest.raises(OSError) as caught:
+        await app({"type": "http", "path": "/mcp", "method": "POST"}, receive, send)
+    assert caught.value is error
+    record, = observations(exported, "request")
+    assert record["mcp.outcome"] == "error"
+    assert record["mcp.response_completed"] is False
+    assert record["mcp.response_started"] is (failed_send != "http.response.start")
+    assert record["http.response.status_code"] == (0 if failed_send == "http.response.start" else 200)
+    assert app.inflight == 0
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("outcome", ["validation_error", "tool_error", "busy", "timeout", "unavailable"])
+async def test_disconnect_does_not_overwrite_specific_failure(exported, outcome):
+    async def handler(_scope, receive, send):
+        await receive()
+        mcp_telemetry.request_observation.get().outcome = outcome
+        await send({"type": "http.response.start", "status": 200})
+        await receive()
+
+    delivered = False
+
+    async def receive():
+        nonlocal delivered
+        if not delivered:
+            delivered = True
+            return {"type": "http.request", "body": b"{}"}
+        return {"type": "http.disconnect"}
+
+    async def send(_message):
+        pass
+
+    app = RoadmapApplication(handler, Flask(__name__))
+    await app({"type": "http", "path": "/mcp", "method": "POST"}, receive, send)
+    record, = observations(exported, "request")
+    assert record["mcp.outcome"] == outcome
+    assert record["mcp.disconnected"] is True
+    assert record["mcp.response_completed"] is False
+    assert record["mcp.response_format"] == "other"
 
 
 @pytest.mark.parametrize("body", [

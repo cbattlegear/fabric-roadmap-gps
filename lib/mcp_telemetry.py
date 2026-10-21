@@ -22,10 +22,55 @@ METHODS = frozenset({
     "resources/list", "resources/templates/list", "prompts/list",
     "notifications/initialized", "notifications/cancelled",
     "notifications/progress", "notifications/roots/list_changed",
+    "subscriptions/listen",
 })
 TOOLS = frozenset({
     "search_releases", "get_release", "get_release_history", "get_filter_options",
 })
+
+
+@dataclass
+class TransportLifecycle:
+    started: float = 0
+    response_start: float | None = None
+    response_complete: float | None = None
+    response_format: str = "none"
+    disconnected: bool = False
+    cleanup_outcome: str = "ok"
+
+    def sent(self, message):
+        if message["type"] == "http.response.start":
+            self.response_start = time.monotonic()
+            self.response_format = "other"
+            for name, value in message.get("headers", []):
+                if name.lower() == b"content-type":
+                    media_type = value.split(b";", 1)[0].strip().lower()
+                    self.response_format = {
+                        b"application/json": "json", b"text/event-stream": "eventstream",
+                    }.get(media_type, "other")
+                    break
+        elif (
+            message["type"] == "http.response.body"
+            and not message.get("more_body", False)
+            and self.response_start is not None
+            and self.response_complete is None
+        ):
+            self.response_complete = time.monotonic()
+
+    def attributes(self, finished):
+        attributes = {
+            "mcp.response_started": self.response_start is not None,
+            "mcp.response_completed": self.response_complete is not None,
+            "mcp.response_format": self.response_format,
+            "mcp.disconnected": self.disconnected,
+            "mcp.cleanup_outcome": self.cleanup_outcome,
+        }
+        if self.response_start is not None:
+            attributes["mcp.response_start_ms"] = (self.response_start - self.started) * 1000
+        if self.response_complete is not None:
+            attributes["mcp.response_complete_ms"] = (self.response_complete - self.started) * 1000
+            attributes["mcp.cleanup_duration_ms"] = (finished - self.response_complete) * 1000
+        return attributes
 
 
 @dataclass
@@ -35,6 +80,7 @@ class Observation:
     outcome: str = "ok"
     executed: bool = False
     status: int = 0
+    transport: TransportLifecycle | None = None
 
 
 request_observation: ContextVar[Observation | None] = ContextVar("mcp_request", default=None)
@@ -61,6 +107,9 @@ def identify_message(body, observation):
 @contextmanager
 def observe(kind, observation):
     started = time.monotonic()
+    transport = observation.transport
+    if transport is not None:
+        transport.started = started
     with tracer.start_as_current_span(
         f"mcp.{kind}", kind=SpanKind.SERVER if kind == "request" else SpanKind.INTERNAL,
         record_exception=False, set_status_on_exception=False,
@@ -68,23 +117,33 @@ def observe(kind, observation):
         try:
             yield observation
         except asyncio.CancelledError:
-            observation.outcome = "cancelled"
+            if transport is not None and transport.response_complete is not None:
+                transport.cleanup_outcome = "cancelled"
+            else:
+                observation.outcome = "cancelled"
             raise
         except BaseException:
-            if observation.outcome == "ok":
+            if transport is not None and transport.response_complete is not None:
+                transport.cleanup_outcome = "error"
+            elif observation.outcome == "ok":
                 observation.outcome = "error"
             raise
         finally:
+            finished = time.monotonic()
+            if transport is not None and observation.outcome == "ok":
+                if transport.response_complete is None:
+                    observation.outcome = "disconnected" if transport.disconnected else "incomplete"
             attributes = {
                 "mcp.kind": kind,
                 "mcp.method": observation.method,
                 "mcp.tool": observation.tool,
                 "mcp.outcome": observation.outcome,
                 "mcp.executed": observation.executed,
-                "mcp.duration_ms": (time.monotonic() - started) * 1000,
+                "mcp.duration_ms": (finished - started) * 1000,
             }
             if kind == "request":
                 attributes["http.response.status_code"] = observation.status
+                attributes.update(transport.attributes(finished) if transport is not None else {})
             span.set_attributes(attributes)
             if observation.outcome != "ok":
                 span.set_status(StatusCode.ERROR)
